@@ -609,42 +609,37 @@ export async function agenticResearchStream(
     if (!more) break;
   }
 
-  /* ── If the agent gave a direct answer during tool calling, keep it as fallback ── */
+  /* ── If the model gave a direct answer (no tool calls), send it directly ── */
   const lastAssistantMsg = messages.filter(m => m.role === 'assistant' && m.content && !parseInlineToolCall(m.content)).pop();
-  const toolAnswerFallback = lastAssistantMsg?.content || '';
+  if (lastAssistantMsg?.content) {
+    const elapsed = Math.round(performance.now() - start);
+    onEvent({ type: 'done', response: { query, answer: lastAssistantMsg.content, sources: Array.from(allSources.values()).map(({ source_index, ...s }) => s as Source), steps, results_count: allSources.size, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted } } });
+    return;
+  }
 
-  /* ── Chat mode: no tools used → use model's direct response, skip synthesis ── */
+  /* ── Chat mode: no tools used, no answer → use direct model response ── */
   if (!usedTools && allSources.size === 0) {
-    if (toolAnswerFallback) {
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg?.role === 'assistant' && lastMsg.content && !parseInlineToolCall(lastMsg.content)) {
       const elapsed = Math.round(performance.now() - start);
-      onEvent({ type: 'done', response: { query, answer: toolAnswerFallback, sources: [], steps, results_count: 0, elapsed_ms: elapsed } });
+      onEvent({ type: 'done', response: { query, answer: lastMsg.content, sources: [], steps, results_count: 0, elapsed_ms: elapsed } });
       return;
     }
   }
 
-
-
-  /* ── Phase 3: Synthesize final answer with streaming ── */
+  /* ── Phase 3: Synthesis (fallback — rarely reached now) ── */
   {
     const synthStart = performance.now();
     const synthStep: AgentStep = { type: 'synthesize', note: mode === 'deep' ? 'Synthesizing comprehensive answer...' : 'Answer generated' };
     steps.push(synthStep);
     onEvent({ type: 'step', data: synthStep });
 
-    // Build synthesis messages list:
-    // 1. System Prompt (with SYNTHESIS_PROMPT)
-    // 2. Chat history (sanitized, actual conversational messages ONLY; excluding raw tool outputs)
-    // 3. Current User Query
-    // 4. Current execution loop messages (tool calls & tool responses from the CURRENT loop/turn)
-    const currentLoopStartIndex = sanitizedHistory.length + 2; // [system, ...sanitizedHistory, userQuery]
-    // Filter out assistant messages that contain raw XML tool calls — these are
-    // inline tool calls that were already executed and must not be forwarded to
-    // the synthesis model as if they were conversational turns.
+    const currentLoopStartIndex = sanitizedHistory.length + 2;
     const currentLoopMessages = messages
       .slice(currentLoopStartIndex)
       .filter((m: any) => {
         if (m.role === 'assistant' && m.content && parseInlineToolCall(m.content)) {
-          return false; // drop raw XML tool call messages
+          return false;
         }
         return true;
       });
@@ -679,16 +674,11 @@ export async function agenticResearchStream(
       return;
     }
 
-    // Guard: if the synthesis model produced a raw XML tool call instead of an
-    // answer (can happen when the model also emits XML-style tool calls), strip it.
     if (parseInlineToolCall(fullContent)) {
       fullContent = fullContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
     }
 
-    // Reasoning models sometimes put the entire answer inside <think> blocks,
-    // leaving the streaming result empty. Retry with non-streaming fallback.
     if (!fullContent) {
-      console.log(`[Synthesis] streaming returned empty, retrying with non-streaming fallback`);
       try {
         const fallback = await callLLM({
           messages: synthMessages,
@@ -699,24 +689,14 @@ export async function agenticResearchStream(
         });
         fullContent = stripThinkingTags(fallback.fullContent || '');
       } catch (err: any) {
-        if (toolAnswerFallback) {
-          console.log(`[Synthesis] non-streaming fallback failed (${err.message}), using tool-call answer fallback`);
-          fullContent = toolAnswerFallback;
-        } else {
-          onEvent({ type: 'error', message: err.message || 'Synthesis failed' });
-          return;
-        }
+        onEvent({ type: 'error', message: err.message || 'Synthesis failed' });
+        return;
       }
     }
 
     if (!fullContent) {
-      if (toolAnswerFallback) {
-        console.log(`[Synthesis] returning tool-call answer fallback (${toolAnswerFallback.length} chars)`);
-        fullContent = toolAnswerFallback;
-      } else {
-        onEvent({ type: 'error', message: 'Synthesis returned empty response.' });
-        return;
-      }
+      onEvent({ type: 'error', message: 'Synthesis returned empty response.' });
+      return;
     }
 
     synthStep.duration_ms = Math.round(performance.now() - synthStart);
