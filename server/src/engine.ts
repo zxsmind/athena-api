@@ -609,13 +609,15 @@ export async function agenticResearchStream(
     if (!more) break;
   }
 
+  /* ── If the agent gave a direct answer during tool calling, keep it as fallback ── */
+  const lastAssistantMsg = messages.filter(m => m.role === 'assistant' && m.content && !parseInlineToolCall(m.content)).pop();
+  const toolAnswerFallback = lastAssistantMsg?.content || '';
+
   /* ── Chat mode: no tools used → use model's direct response, skip synthesis ── */
   if (!usedTools && allSources.size === 0) {
-    const lastMsg = messages[messages.length - 1];
-    // Guard: don't treat a raw XML tool call as a direct answer
-    if (lastMsg?.role === 'assistant' && lastMsg.content && !parseInlineToolCall(lastMsg.content)) {
+    if (toolAnswerFallback) {
       const elapsed = Math.round(performance.now() - start);
-      onEvent({ type: 'done', response: { query, answer: lastMsg.content, sources: [], steps, results_count: 0, elapsed_ms: elapsed } });
+      onEvent({ type: 'done', response: { query, answer: toolAnswerFallback, sources: [], steps, results_count: 0, elapsed_ms: elapsed } });
       return;
     }
   }
@@ -697,14 +699,24 @@ export async function agenticResearchStream(
         });
         fullContent = stripThinkingTags(fallback.fullContent || '');
       } catch (err: any) {
-        onEvent({ type: 'error', message: err.message || 'Synthesis failed' });
-        return;
+        if (toolAnswerFallback) {
+          console.log(`[Synthesis] non-streaming fallback failed (${err.message}), using tool-call answer fallback`);
+          fullContent = toolAnswerFallback;
+        } else {
+          onEvent({ type: 'error', message: err.message || 'Synthesis failed' });
+          return;
+        }
       }
     }
 
     if (!fullContent) {
-      onEvent({ type: 'error', message: 'Synthesis returned empty response.' });
-      return;
+      if (toolAnswerFallback) {
+        console.log(`[Synthesis] returning tool-call answer fallback (${toolAnswerFallback.length} chars)`);
+        fullContent = toolAnswerFallback;
+      } else {
+        onEvent({ type: 'error', message: 'Synthesis returned empty response.' });
+        return;
+      }
     }
 
     synthStep.duration_ms = Math.round(performance.now() - synthStart);
