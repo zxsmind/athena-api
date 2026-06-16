@@ -1,4 +1,4 @@
-import { initLLM, callLLM, callLLMStream, type LLMRole } from './llm.js';
+import { initLLM, callLLM, callLLMStream, stripThinkingTags, type LLMRole } from './llm.js';
 import { fetchResults, fetchPageContent } from './search.js';
 import type { SearchResponse, Source, AgentStep } from './schemas.js';
 import { SYSTEM_PROMPT, SYNTHESIS_PROMPT, DEEP_SYSTEM_PROMPT } from './agent/prompts.js';
@@ -681,6 +681,25 @@ export async function agenticResearchStream(
     // answer (can happen when the model also emits XML-style tool calls), strip it.
     if (parseInlineToolCall(fullContent)) {
       fullContent = fullContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+    }
+
+    // Reasoning models sometimes put the entire answer inside <think> blocks,
+    // leaving the streaming result empty. Retry with non-streaming fallback.
+    if (!fullContent) {
+      console.log(`[Synthesis] streaming returned empty, retrying with non-streaming fallback`);
+      try {
+        const fallback = await callLLM({
+          messages: synthMessages,
+          temperature: 0,
+          role: activeRole,
+          signal: options.signal,
+          label: 'synthesis-fallback',
+        });
+        fullContent = stripThinkingTags(fallback.fullContent || '');
+      } catch (err: any) {
+        onEvent({ type: 'error', message: err.message || 'Synthesis failed' });
+        return;
+      }
     }
 
     if (!fullContent) {
