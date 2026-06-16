@@ -138,13 +138,13 @@ function MermaidBlock({ chart, onExpand }: { chart: string; onExpand?: (svg: str
 function inlineMD(t: string, sources?: Source[]) {
   let html = t
     .replace(/\\\((.+?)\\\)/g, (_, m: string) => {
-      try { return katex.renderToString(m, { throwOnError: false, strict: false }); }
+      try { const clean = m.replace(/[\u00A0\u202F\u2000-\u200F]/g, ' '); return katex.renderToString(clean, { throwOnError: false, strict: false }); }
       catch { return `\\(${m}\\)`; }
     })
     .replace(/\$([^$\s][^$]*[^$\s]|\S)\$/g, (full, m: string) => {
       // Skip if it looks like a price ($5.99) or plain number
       if (/^\d/.test(m)) return full;
-      try { return katex.renderToString(m, { throwOnError: false, strict: false }); }
+      try { const clean = m.replace(/[\u00A0\u202F\u2000-\u200F]/g, ' '); return katex.renderToString(clean, { throwOnError: false, strict: false }); }
       catch { return full; }
     })
     .replace(/`([^`]+)`/g, '<code>$1</code>')
