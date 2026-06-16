@@ -113,6 +113,14 @@ export interface ResearchBatchRecord {
 
 const BASE = '/api';
 
+async function checkResponse<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export type ResearchJobEvent =
   | { type: 'status'; status: ResearchJobStatus; detail?: string; timestamp: string }
   | { type: 'step'; data: AgentStep; timestamp: string }
@@ -121,7 +129,6 @@ export type ResearchJobEvent =
   | { type: 'done'; response: SearchResponse; timestamp: string }
   | { type: 'error'; message: string; timestamp: string };
 
-/* ── Search: creates a job, returns ID — frontend streams events via /research-jobs/:id/events ── */
 export interface SearchResult {
   id: string;
 }
@@ -138,16 +145,9 @@ export async function search(
     body: JSON.stringify({ query, history, mode }),
     signal,
   });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
-  }
-
-  return res.json();
+  return checkResponse<SearchResult>(res);
 }
 
-/* ── Subscribe to research job events via SSE ── */
 export interface JobEventCallbacks {
   onToken?: (text: string) => void;
   onStep?: (step: AgentStep) => void;
@@ -184,7 +184,7 @@ export function subscribeToJobEvents(
   }
 
   source.onerror = () => {
-    source.close();
+    callbacks.onError?.('Connection lost. Reconnecting...');
   };
 
   if (signal) {
@@ -194,7 +194,6 @@ export function subscribeToJobEvents(
   return () => source.close();
 }
 
-/* ── REST endpoints ── */
 export async function fetchConversations(): Promise<ConversationMeta[]> {
   const res = await fetch(`${BASE}/conversations`);
   if (!res.ok) return [];
@@ -207,7 +206,7 @@ export async function createConversation(id: string, query: string): Promise<Con
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id, query }),
   });
-  return res.json();
+  return checkResponse<ConversationMeta[]>(res);
 }
 
 export async function fetchMessages(conversationId: string): Promise<Message[]> {
@@ -217,25 +216,28 @@ export async function fetchMessages(conversationId: string): Promise<Message[]> 
 }
 
 export async function saveMessages(conversationId: string, messages: Message[]): Promise<void> {
-  await fetch(`${BASE}/conversations/${conversationId}/messages`, {
+  const res = await fetch(`${BASE}/conversations/${conversationId}/messages`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages }),
   });
+  if (!res.ok) throw new Error(`Failed to save messages: HTTP ${res.status}`);
 }
 
 export async function renameConversation(id: string, title: string): Promise<void> {
-  await fetch(`${BASE}/conversations/${id}/rename`, {
+  const res = await fetch(`${BASE}/conversations/${id}/rename`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title }),
   });
+  if (!res.ok) throw new Error(`Failed to rename conversation: HTTP ${res.status}`);
 }
 
 export async function deleteConversation(id: string): Promise<void> {
-  await fetch(`${BASE}/conversations/${id}`, {
+  const res = await fetch(`${BASE}/conversations/${id}`, {
     method: 'DELETE',
   });
+  if (!res.ok) throw new Error(`Failed to delete conversation: HTTP ${res.status}`);
 }
 
 export async function createResearchJob(payload: ResearchJobRequest): Promise<ResearchJobRecord> {
@@ -244,7 +246,7 @@ export async function createResearchJob(payload: ResearchJobRequest): Promise<Re
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  return res.json();
+  return checkResponse<ResearchJobRecord>(res);
 }
 
 export async function fetchResearchJob(id: string): Promise<ResearchJobRecord | null> {
@@ -267,7 +269,7 @@ export async function createResearchBatch(payload: ResearchBatchRequest): Promis
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  return res.json();
+  return checkResponse<ResearchBatchRecord>(res);
 }
 
 export async function fetchResearchBatch(id: string): Promise<ResearchBatchRecord | null> {

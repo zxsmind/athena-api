@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
-import theme from './theme';
+import useTheme from './theme';
 import { ColorModeProvider } from './context/ColorMode';
 import { SettingsModalProvider, useSettingsModal } from './context/SettingsModal';
 import LiquidBackground from './components/LiquidBackground';
@@ -114,6 +114,7 @@ function Layout() {
 }
 
 export default function App() {
+  const theme = useTheme();
   return (
     <ColorModeProvider>
       <ThemeProvider theme={theme}>

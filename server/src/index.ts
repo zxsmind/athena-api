@@ -108,7 +108,7 @@ app.post('/research-jobs', async (req, res) => {
     history,
     mode: mode || settings.api?.defaultMode || 'quick',
   });
-  void runResearchJob(job.id);
+  runResearchJob(job.id).catch(err => console.error('[research-job]', err));
   res.status(202).json(job);
 });
 
@@ -121,49 +121,54 @@ app.get('/research-jobs/:id', (req, res) => {
   res.json(job);
 });
 
-app.get('/research-jobs/:id/events', (req, res) => {
-  const jobId = req.params.id;
-  const job = getResearchJob(jobId);
-  if (!job) {
-    res.status(404).json({ detail: 'Job not found' });
-    return;
-  }
-
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
-
-  const sentEvents = new Set<any>();
-  const send = (event: string, data: object) => {
-    try {
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    } catch {
-      // Client disconnected.
+function createSSEEndpoint<T extends { events: any[]; status: string }>(
+  getRecord: (id: string) => T | undefined,
+  subscribe: (id: string, cb: (record: T) => void) => () => void,
+) {
+  return (req: express.Request, res: express.Response) => {
+    const id = String(req.params.id);
+    const record = getRecord(id);
+    if (!record) {
+      res.status(404).json({ detail: 'Not found' });
+      return;
     }
-  };
 
-  const flush = (current: ResearchJobRecord) => {
-    for (const ev of current.events) {
-      if (!sentEvents.has(ev)) {
-        send(ev.type, ev);
-        sentEvents.add(ev);
-      }
-    }
-    if (current.status === 'completed' || current.status === 'failed' || current.status === 'cancelled') {
-      res.end();
-    }
-  };
-
-  flush(job);
-  if (job.status !== 'completed' && job.status !== 'failed' && job.status !== 'cancelled') {
-    const unsubscribe = subscribeResearchJob(jobId, flush);
-    req.on('close', () => {
-      unsubscribe();
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
     });
-  }
-});
+
+    const sentEvents = new Set<any>();
+    const send = (event: string, data: object) => {
+      try {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+      } catch {
+        // Client disconnected.
+      }
+    };
+
+    const flush = (current: T) => {
+      for (const ev of current.events) {
+        if (!sentEvents.has(ev)) {
+          send(ev.type, ev);
+          sentEvents.add(ev);
+        }
+      }
+      if (current.status === 'completed' || current.status === 'failed' || current.status === 'cancelled') {
+        res.end();
+      }
+    };
+
+    flush(record);
+    if (record.status !== 'completed' && record.status !== 'failed' && record.status !== 'cancelled') {
+      const unsubscribe = subscribe(id, flush);
+      req.on('close', unsubscribe);
+    }
+  };
+}
+
+app.get('/research-jobs/:id/events', createSSEEndpoint(getResearchJob, subscribeResearchJob));
 
 app.post('/research-jobs/:id/cancel', (req, res) => {
   const job = cancelResearchJob(req.params.id);
@@ -216,7 +221,7 @@ app.post('/research-batches', async (req, res) => {
     sharedCredits,
     perItemCredits,
   });
-  void runResearchBatch(batch.id);
+  runResearchBatch(batch.id).catch(err => console.error('[research-batch]', err));
   res.status(202).json(batch);
 });
 
@@ -229,49 +234,7 @@ app.get('/research-batches/:id', (req, res) => {
   res.json(batch);
 });
 
-app.get('/research-batches/:id/events', (req, res) => {
-  const batchId = req.params.id;
-  const batch = getResearchBatch(batchId);
-  if (!batch) {
-    res.status(404).json({ detail: 'Batch not found' });
-    return;
-  }
-
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
-
-  const sentEvents = new Set<any>();
-  const send = (event: string, data: object) => {
-    try {
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    } catch {
-      // Client disconnected.
-    }
-  };
-
-  const flush = (current: ResearchBatchRecord) => {
-    for (const ev of current.events) {
-      if (!sentEvents.has(ev)) {
-        send(ev.type, ev);
-        sentEvents.add(ev);
-      }
-    }
-    if (current.status === 'completed' || current.status === 'failed' || current.status === 'cancelled') {
-      res.end();
-    }
-  };
-
-  flush(batch);
-  if (batch.status !== 'completed' && batch.status !== 'failed' && batch.status !== 'cancelled') {
-    const unsubscribe = subscribeResearchBatch(batchId, flush);
-    req.on('close', () => {
-      unsubscribe();
-    });
-  }
-});
+app.get('/research-batches/:id/events', createSSEEndpoint(getResearchBatch, subscribeResearchBatch));
 
 app.post('/research-batches/:id/cancel', (req, res) => {
   const batch = cancelResearchBatch(req.params.id);
@@ -543,7 +506,7 @@ app.post('/search', async (req, res) => {
     history,
     mode: (mode || settings.api?.defaultMode || 'quick') as 'quick' | 'deep',
   });
-  void runResearchJob(job.id);
+  runResearchJob(job.id).catch(err => console.error('[research-job]', err));
   res.status(202).json({ id: job.id });
 });
 
