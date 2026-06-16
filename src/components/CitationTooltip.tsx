@@ -58,7 +58,7 @@ export default function CitationTooltip({
             {idx > 0 && <div style={{ height: 1, background: 'var(--athena-border)', margin: '1px 0' }} />}
             <span className="tip-row">
               <img
-                src={`https://www.google.com/s2/favicons?domain=${item.domain}&sz=16`}
+                src={`https://icons.duckduckgo.com/ip3/${item.domain}.ico`}
                 width={14}
                 height={14}
                 loading="lazy"

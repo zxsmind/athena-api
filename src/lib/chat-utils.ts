@@ -109,5 +109,5 @@ export function computeCitationTooltipPosition(
   return { left, top };
 }
 
-export const FAVICON_URL = 'https://www.google.com/s2/favicons?domain=${domain}&sz=16';
+export const FAVICON_URL = 'https://icons.duckduckgo.com/ip3/${domain}.ico';
 export const ABORT_TIMEOUT_MS = 120000;

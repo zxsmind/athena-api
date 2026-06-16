@@ -17,7 +17,7 @@ function SourcesBadge({ sources, onCopy, copied }: { sources: Source[]; onCopy: 
       <div style={{ display: 'flex', alignItems: 'center' }}>
         {sources.slice(0, 4).map((src, i) => (
           <img key={i}
-            src={`https://www.google.com/s2/favicons?domain=${src.domain}&sz=16`}
+            src={`https://icons.duckduckgo.com/ip3/${src.domain}.ico`}
             width={12} height={12} loading="lazy"
             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
             style={{
