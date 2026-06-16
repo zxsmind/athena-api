@@ -1,4 +1,5 @@
-import { createTheme, useMediaQuery } from '@mui/material/styles';
+import { createTheme } from '@mui/material/styles';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import { useMemo } from 'react';
 
 function useDetectMode(): 'light' | 'dark' {
