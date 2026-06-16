@@ -203,6 +203,7 @@ export default function ActivityModal({ open, onClose, steps, sources }: Activit
           </h2>
           <button
             onClick={onClose}
+            aria-label="Close activity panel"
             style={{
               background: 'none',
               border: 'none',

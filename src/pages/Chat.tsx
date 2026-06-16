@@ -165,8 +165,8 @@ function inlineMD(t: string, sources?: Source[]) {
         const label = src.title || src.domain;
         const domain = src.domain;
         const snippet = (src.snippet || '').replace(/"/g, '&quot;').slice(0, 120);
-        return `<a href="${src.url}" target="_blank" rel="noopener noreferrer" class="citation-badge" data-indices="${i}" data-domain="${domain}" data-title="${label.replace(/"/g, '&quot;')}" data-snippet="${snippet}">
-          <img src="https://www.google.com/s2/favicons?domain=${domain}&sz=16" width="12" height="12" loading="lazy" onerror="this.remove()" />
+        return `<a href="${sanitizeUrl(src.url)}" target="_blank" rel="noopener noreferrer" class="citation-badge" data-indices="${i}" data-domain="${domain}" data-title="${label.replace(/"/g, '&quot;')}" data-snippet="${snippet}">
+          <img src="https://www.google.com/s2/favicons?domain=${domain}&sz=16" width="12" height="12" loading="lazy" onerror="this.remove()" alt="" />
           <span class="citation-label">${label}</span>
         </a>`;
       }
@@ -176,11 +176,11 @@ function inlineMD(t: string, sources?: Source[]) {
       const allDomains = valid.map((i: number) => sources[i]?.domain || '').join(',');
       const allTitles = valid.map((i: number) => (sources[i]?.title || sources[i]?.domain || '').replace(/"/g, '&quot;')).join(' || ');
       const allSnippets = valid.map((i: number) => (sources[i]?.snippet || '').replace(/"/g, '&quot;').slice(0, 120)).join(' ||| ');
-      const allUrls = valid.map((i: number) => sources[i]?.url || '').join(',');
+      const allUrls = valid.map((i: number) => sanitizeUrl(sources[i]?.url || '')).join(',');
       const label = src.title || src.domain;
       const domain = src.domain;
-      return `<a href="${src.url}" target="_blank" rel="noopener noreferrer" class="citation-badge multi" data-index="${valid[0]}" data-indices="${valid.join(',')}" data-domain="${allDomains}" data-title="${allTitles}" data-snippet="${allSnippets}" data-url="${allUrls}">
-        <img src="https://www.google.com/s2/favicons?domain=${domain}&sz=16" width="12" height="12" loading="lazy" onerror="this.remove()" />
+      return `<a href="${sanitizeUrl(src.url)}" target="_blank" rel="noopener noreferrer" class="citation-badge multi" data-index="${valid[0]}" data-indices="${valid.join(',')}" data-domain="${allDomains}" data-title="${allTitles}" data-snippet="${allSnippets}" data-url="${allUrls}">
+        <img src="https://www.google.com/s2/favicons?domain=${domain}&sz=16" width="12" height="12" loading="lazy" onerror="this.remove()" alt="" />
         <span class="citation-label">${label}</span>
         <span class="citation-multi-count">+${multiCount}</span>
       </a>`;
@@ -625,6 +625,14 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
       startTimeRef.current = 0;
     }
   }, [messages]);
+
+  /* Abort search on unmount */
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      searchingRef.current = false;
+    };
+  }, []);
 
   /* Load messages on mount */
   useEffect(() => {
@@ -1298,7 +1306,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
                             {msg.data.sources.slice(0, 4).map((src, i) => (
                               <img key={i}
                                 src={`https://www.google.com/s2/favicons?domain=${src.domain}&sz=16`}
-                                width={12} height={12} loading="lazy"
+                                width={12} height={12} loading="lazy" alt=""
                                 onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                                 style={{
                                   borderRadius: 2, marginLeft: i === 0 ? 0 : -4,
@@ -1412,7 +1420,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
                     {panelSources.slice(0, 4).map((s, i) => (
                       <img key={i}
                         src={`https://www.google.com/s2/favicons?domain=${s.domain}&sz=16`}
-                        width={14} height={14} loading="lazy"
+                        width={14} height={14} loading="lazy" alt=""
                         onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                         style={{
                           borderRadius: 2, marginLeft: i === 0 ? 0 : -4,
@@ -1439,7 +1447,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
                 {items.map((src, i) => (
                   <div key={i}>
                     {i > 0 && <div style={{ height: '0.5px', background: 'var(--athena-border)', margin: '0 12px' }} />}
-                    <a href={src.url} target="_blank" rel="noopener noreferrer" style={{
+                    <a href={sanitizeUrl(src.url)} target="_blank" rel="noopener noreferrer" style={{
                       display: 'flex', gap: 8,
                       padding: '10px 12px 10px 14px',
                       textDecoration: 'none',
@@ -1464,7 +1472,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
                       )}
                       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <img src={`https://www.google.com/s2/favicons?domain=${src.domain}&sz=32`} width={14} height={14} loading="lazy"
+                          <img src={`https://www.google.com/s2/favicons?domain=${src.domain}&sz=32`} width={14} height={14} loading="lazy" alt=""
                             onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                             style={{ borderRadius: 2, flexShrink: 0 }} />
                           <span style={{ fontSize: 10, color: 'var(--athena-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1588,7 +1596,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
                       src={`https://www.google.com/s2/favicons?domain=${item.domain}&sz=16`}
                       width={14}
                       height={14}
-                      loading="lazy"
+                      loading="lazy" alt=""
                       onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
                     />
                     <span className="tip-domain">{item.domain}</span>

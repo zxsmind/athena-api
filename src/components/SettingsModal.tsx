@@ -812,7 +812,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               </span>
             )}
           </div>
-          <button onClick={onClose} style={{
+          <button onClick={onClose} aria-label="Close settings" style={{
             background: 'none', border: 'none', cursor: 'pointer',
             color: 'var(--athena-text-3)', padding: 4, borderRadius: 6, display: 'flex',
           }}>
@@ -1013,7 +1013,7 @@ function ListSection({
                 }}>
                   {display.length > 44 ? display.slice(0, 42) + '...' : display}
                 </span>
-                <button onClick={() => onRemove(originalIndex)} style={{
+                <button onClick={() => onRemove(originalIndex)} aria-label={`Remove ${label}`} style={{
                   background: 'none', border: 'none', cursor: 'pointer',
                   color: 'var(--athena-text-3)', padding: 2, borderRadius: 3, display: 'flex',
                   flexShrink: 0,
