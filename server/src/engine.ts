@@ -572,14 +572,15 @@ export async function agenticResearchStream(
   const start = performance.now();
   const steps: AgentStep[] = [];
   const allSources = new Map<string, SourceWithIndex>();
+  const maxRounds = mode === 'deep' ? 50 : 3;
   const budget: ResearchBudgetState = {
-    remainingCredits: Math.max(0, options.budget?.remainingCredits ?? settings.research.maxCreditsPerQuery),
+    remainingCredits: Math.max(0, Math.min(
+      options.budget?.remainingCredits ?? settings.research.maxCreditsPerQuery,
+      mode === 'quick' ? 6 : settings.research.maxCreditsPerQuery,
+    )),
     usedCredits: options.budget?.usedCredits ?? 0,
     exhausted: options.budget?.exhausted ?? false,
   };
-  const maxRounds = mode === 'deep'
-    ? 50
-    : 4;
 
   const systemPrompt = mode === 'deep' ? DEEP_SYSTEM_PROMPT : SYSTEM_PROMPT;
   const messages: any[] = [
