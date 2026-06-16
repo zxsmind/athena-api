@@ -1,0 +1,921 @@
+/* ============================================================
+   ATHENA-001 — Liquid Glass Design System v2
+   Real specular refraction, caustics, edge lighting
+   ============================================================ */
+
+/* === DESIGN TOKENS (Light Mode) === */
+:root {
+  /* Core surfaces */
+  --athena-bg: #ededf2;
+  --athena-text: rgba(6, 6, 14, 0.92);
+  --athena-text-2: rgba(6, 6, 14, 0.52);
+  --athena-text-3: rgba(6, 6, 14, 0.28);
+  --athena-border: rgba(6, 6, 14, 0.06);
+  --athena-accent: #0a0a12;
+  --athena-accent-rgb: 10, 10, 18;
+
+  /* Glass material — multi-layer optical */
+  --glass-bg: rgba(255, 255, 255, 0.48);
+  --glass-bg-strong: rgba(255, 255, 255, 0.68);
+  --glass-border: rgba(255, 255, 255, 0.65);
+  --glass-border-edge: rgba(255, 255, 255, 0.35);
+  --glass-shadow: 0 0.5px 0.5px rgba(255,255,255,0.95) inset, 0 0 0 0.5px rgba(255,255,255,0.35), 0 12px 48px -4px rgba(0,0,0,0.08), 0 4px 12px -2px rgba(0,0,0,0.04);
+  --glass-shadow-elevated: 0 0.5px 0.5px rgba(255,255,255,0.95) inset, 0 0 0 0.5px rgba(255,255,255,0.35), 0 24px 64px -6px rgba(0,0,0,0.12), 0 8px 20px -4px rgba(0,0,0,0.06);
+
+  /* Specular highlights — real glass has sharp concentrated reflections */
+  --spec-primary: rgba(255, 255, 255, 0.72);
+  --spec-secondary: rgba(255, 255, 255, 0.25);
+  --spec-edge: rgba(255, 255, 255, 0.90);
+  --spec-internal: rgba(255, 255, 255, 0.12);
+
+  /* Caustic light — spectral iridescence from refraction */
+  --caustic-a: rgba(180, 210, 255, 0.08);
+  --caustic-b: rgba(200, 255, 220, 0.06);
+  --caustic-c: rgba(255, 220, 200, 0.05);
+
+  /* Blur pipeline */
+  --blur-glass: blur(40px) saturate(200%) brightness(1.04);
+  --blur-glass-strong: blur(56px) saturate(220%) brightness(1.06);
+  --blur-glass-subtle: blur(24px) saturate(160%);
+
+  /* Motion — organic, not mechanical */
+  --ease-glass: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out: cubic-bezier(0.0, 0, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-bounce: cubic-bezier(0.68, -0.6, 0.32, 1.6);
+  --duration-instant: 80ms;
+  --duration-fast: 160ms;
+  --duration-normal: 280ms;
+  --duration-slow: 440ms;
+  --duration-slower: 640ms;
+  --duration-sidebar: 360ms;
+}
+
+/* === DESIGN TOKENS (Dark Mode) === */
+.dark {
+  --athena-bg: #06060c;
+  --athena-text: rgba(245, 245, 255, 0.93);
+  --athena-text-2: rgba(245, 245, 255, 0.50);
+  --athena-text-3: rgba(245, 245, 255, 0.28);
+  --athena-border: rgba(245, 245, 255, 0.07);
+  --athena-accent: #f5f5ff;
+  --athena-accent-rgb: 245, 245, 255;
+
+  --glass-bg: rgba(255, 255, 255, 0.028);
+  --glass-bg-strong: rgba(255, 255, 255, 0.055);
+  --glass-border: rgba(255, 255, 255, 0.10);
+  --glass-border-edge: rgba(255, 255, 255, 0.05);
+  --glass-shadow: 0 0.5px 0.5px rgba(255,255,255,0.04) inset, 0 0 0 0.5px rgba(255,255,255,0.06), 0 16px 56px -6px rgba(0,0,0,0.56), 0 4px 16px -2px rgba(0,0,0,0.32);
+  --glass-shadow-elevated: 0 0.5px 0.5px rgba(255,255,255,0.04) inset, 0 0 0 0.5px rgba(255,255,255,0.06), 0 32px 80px -8px rgba(0,0,0,0.64), 0 8px 24px -4px rgba(0,0,0,0.40);
+
+  --spec-primary: rgba(255, 255, 255, 0.09);
+  --spec-secondary: rgba(255, 255, 255, 0.03);
+  --spec-edge: rgba(255, 255, 255, 0.14);
+  --spec-internal: rgba(255, 255, 255, 0.015);
+
+  --caustic-a: rgba(60, 180, 160, 0.04);
+  --caustic-b: rgba(80, 140, 200, 0.03);
+  --caustic-c: rgba(140, 100, 200, 0.025);
+
+  --blur-glass: blur(40px) saturate(160%);
+  --blur-glass-strong: blur(56px) saturate(180%);
+  --blur-glass-subtle: blur(24px) saturate(140%);
+}
+
+/* === GLOBAL RESET === */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  height: 100%;
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: 'Manrope', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-feature-settings: 'ss01', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--athena-text);
+  background-color: var(--athena-bg);
+  overflow-x: hidden;
+  transition: background-color var(--duration-slow) var(--ease-out),
+              color var(--duration-slow) var(--ease-out);
+}
+
+#root { height: 100vh; overflow: hidden; }
+
+::selection {
+  background: rgba(var(--athena-accent-rgb), 0.12);
+  color: var(--athena-text);
+}
+
+/* === TYPOGRAPHY === */
+.font-outfit { font-family: 'Outfit', sans-serif; }
+.font-mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+/* === LIQUID GLASS COMPONENTS === */
+
+/*
+  Base glass panel — the primary surface material.
+  Structure:
+    Element   → backdrop blur + tint background
+    ::before  → specular highlights (distorted via SVG filter for refraction)
+    ::after   → animated caustic light pass-through
+*/
+.glass-panel {
+  position: relative;
+  isolation: isolate;
+  -webkit-backdrop-filter: var(--blur-glass);
+  backdrop-filter: var(--blur-glass);
+  background: var(--glass-bg);
+  border: 0.5px solid var(--glass-border);
+  border-radius: 20px;
+  box-shadow: var(--glass-shadow);
+  overflow: hidden;
+  transition:
+    box-shadow var(--duration-normal) var(--ease-out),
+    border-color var(--duration-normal) var(--ease-out),
+    background var(--duration-slow) var(--ease-out);
+}
+
+/* Specular highlight layer — real glass catches light in sharp, concentrated spots */
+.glass-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  filter: url(#glass-refract);
+  background:
+    radial-gradient(ellipse 55% 35% at 12% 6%, var(--spec-primary) 0%, transparent 50%),
+    radial-gradient(ellipse 30% 20% at 88% 10%, var(--spec-secondary) 0%, transparent 45%),
+    radial-gradient(ellipse 20% 15% at 5% 90%, var(--spec-internal) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Caustic light — spectral dispersion from light passing through the glass body */
+.glass-panel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse 50% 35% at 72% 108%, var(--caustic-a) 0%, transparent 50%),
+    radial-gradient(ellipse 40% 25% at 28% 108%, var(--caustic-b) 0%, transparent 45%),
+    radial-gradient(ellipse 35% 20% at 55% 108%, var(--caustic-c) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 1;
+  animation: caustic-breathe 14s ease-in-out infinite alternate;
+  opacity: 0.85;
+}
+
+/* Glass input — rectangular search bar with sharp specular edge */
+.glass-input {
+  position: relative;
+  isolation: isolate;
+  -webkit-backdrop-filter: var(--blur-glass-strong);
+  backdrop-filter: var(--blur-glass-strong);
+  background: var(--glass-bg-strong);
+  border: 0.5px solid var(--glass-border);
+  border-radius: 16px;
+  overflow: hidden;
+  transition:
+    border-color var(--duration-normal) var(--ease-out),
+    background var(--duration-slow) var(--ease-out);
+}
+
+/* Top-edge specular streak — like light hitting the rim of real glass */
+.glass-input::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  filter: url(#glass-refract);
+  background:
+    linear-gradient(175deg, var(--spec-edge) 0%, transparent 0.8%),
+    radial-gradient(ellipse 40% 30% at 10% 5%, var(--spec-primary) 0%, transparent 45%),
+    radial-gradient(ellipse 25% 15% at 90% 8%, var(--spec-secondary) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Caustic underneath for search bar */
+.glass-input::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse 45% 25% at 65% 108%, var(--caustic-a) 0%, transparent 45%),
+    radial-gradient(ellipse 35% 20% at 30% 108%, var(--caustic-b) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 1;
+  animation: caustic-breathe 18s ease-in-out infinite alternate;
+  opacity: 0.7;
+}
+
+.glass-input:focus-within {
+  box-shadow: var(--glass-shadow-elevated), 0 0 0 1.5px rgba(var(--athena-accent-rgb), 0.10);
+  border-color: rgba(var(--athena-accent-rgb), 0.14);
+}
+
+/* Pill badge — small mode toggle pills */
+.glass-pill {
+  position: relative;
+  isolation: isolate;
+  -webkit-backdrop-filter: var(--blur-glass-subtle);
+  backdrop-filter: var(--blur-glass-subtle);
+  background: var(--glass-bg);
+  border: 0.5px solid var(--glass-border-edge);
+  border-radius: 8px;
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.glass-pill::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(175deg, rgba(255,255,255,0.30) 0%, transparent 30%);
+  pointer-events: none;
+}
+
+.glass-pill:hover {
+  background: var(--glass-bg-strong);
+  border-color: var(--glass-border);
+}
+
+/* Source card — citation cards */
+.glass-card {
+  position: relative;
+  isolation: isolate;
+  -webkit-backdrop-filter: blur(28px) saturate(180%) brightness(1.03);
+  backdrop-filter: blur(28px) saturate(180%) brightness(1.03);
+  background: var(--glass-bg);
+  border: 0.5px solid var(--glass-border);
+  border-radius: 14px;
+  box-shadow: var(--glass-shadow);
+  overflow: hidden;
+  transition:
+    transform var(--duration-fast) var(--ease-spring),
+    box-shadow var(--duration-normal) var(--ease-out),
+    border-color var(--duration-normal) var(--ease-out);
+}
+
+.glass-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  filter: url(#glass-refract);
+  background:
+    radial-gradient(ellipse 50% 30% at 15% 8%, var(--spec-primary) 0%, transparent 45%),
+    radial-gradient(ellipse 25% 15% at 85% 12%, var(--spec-secondary) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.glass-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse 40% 25% at 70% 108%, var(--caustic-a) 0%, transparent 40%),
+    radial-gradient(ellipse 30% 18% at 25% 108%, var(--caustic-b) 0%, transparent 35%);
+  pointer-events: none;
+  z-index: 1;
+  animation: caustic-breathe 16s ease-in-out infinite alternate;
+  opacity: 0.6;
+}
+
+.glass-card:hover {
+  transform: translateY(-2px) scale(1.01);
+  box-shadow: var(--glass-shadow-elevated);
+  border-color: var(--glass-border);
+}
+
+/* === SIDEBAR GLASS — deeper refraction, stronger specular === */
+.glass-sidebar {
+  position: relative;
+  isolation: isolate;
+  -webkit-backdrop-filter: blur(52px) saturate(220%) brightness(1.04);
+  backdrop-filter: blur(52px) saturate(220%) brightness(1.04);
+  background: var(--glass-bg-strong);
+  border: 0.5px solid var(--glass-border);
+  border-radius: 20px;
+  box-shadow:
+    0 0.5px 0 rgba(255,255,255,0.95) inset,
+    0 0 0 0.5px rgba(255,255,255,0.30),
+    6px 0 40px -4px rgba(0,0,0,0.06),
+    0 16px 56px -8px rgba(0,0,0,0.05);
+  overflow: hidden;
+  transition: background var(--duration-slow) var(--ease-out);
+}
+
+/* Sidebar specular — strong left-edge catch light simulating side-lit glass */
+.glass-sidebar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  filter: url(#glass-refract-strong);
+  background:
+    linear-gradient(90deg, var(--spec-edge) 0%, transparent 0.5%),
+    radial-gradient(ellipse 20% 50% at 0% 30%, var(--spec-primary) 0%, transparent 35%),
+    radial-gradient(ellipse 15% 40% at 100% 70%, var(--spec-secondary) 0%, transparent 30%),
+    radial-gradient(ellipse 50% 25% at 30% 4%, var(--spec-primary) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Sidebar caustic — light dispersing through the glass body */
+.glass-sidebar::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse 30% 40% at 20% 108%, var(--caustic-a) 0%, transparent 35%),
+    radial-gradient(ellipse 25% 30% at 60% 108%, var(--caustic-b) 0%, transparent 30%),
+    radial-gradient(ellipse 20% 25% at 85% 108%, var(--caustic-c) 0%, transparent 28%);
+  pointer-events: none;
+  z-index: 1;
+  animation: caustic-breathe 20s ease-in-out infinite alternate;
+  opacity: 0.75;
+}
+
+.dark .glass-sidebar {
+  -webkit-backdrop-filter: blur(52px) saturate(180%);
+  backdrop-filter: blur(52px) saturate(180%);
+  background: var(--glass-bg-strong);
+  border: 0.5px solid rgba(255,255,255,0.08);
+  box-shadow:
+    0 0.5px 0 rgba(255,255,255,0.04) inset,
+    0 0 0 0.5px rgba(255,255,255,0.05),
+    6px 0 40px -4px rgba(0,0,0,0.48),
+    0 16px 56px -8px rgba(0,0,0,0.36);
+}
+
+.dark .glass-sidebar::before {
+  filter: url(#glass-refract-strong);
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.06) 0%, transparent 0.6%),
+    radial-gradient(ellipse 20% 50% at 0% 30%, rgba(255,255,255,0.05) 0%, transparent 30%),
+    radial-gradient(ellipse 15% 40% at 100% 70%, rgba(255,255,255,0.02) 0%, transparent 25%),
+    radial-gradient(ellipse 50% 25% at 30% 4%, rgba(255,255,255,0.06) 0%, transparent 35%);
+}
+
+.dark .glass-sidebar::after {
+  background:
+    radial-gradient(ellipse 30% 40% at 20% 108%, rgba(60,180,160,0.03) 0%, transparent 30%),
+    radial-gradient(ellipse 25% 30% at 60% 108%, rgba(80,140,200,0.02) 0%, transparent 25%),
+    radial-gradient(ellipse 20% 25% at 85% 108%, rgba(140,100,200,0.018) 0%, transparent 22%);
+  opacity: 0.8;
+}
+
+/* === ACTIVITY TIMELINE — for agent steps === */
+.glass-activity {
+  position: relative;
+  isolation: isolate;
+  -webkit-backdrop-filter: var(--blur-glass-subtle);
+  backdrop-filter: var(--blur-glass-subtle);
+  background: var(--glass-bg);
+  border: 0.5px solid var(--glass-border-edge);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.glass-activity::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse 40% 25% at 15% 8%, var(--spec-primary) 0%, transparent 40%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* === ANIMATIONS === */
+
+@keyframes caustic-breathe {
+  0%   { opacity: 0.85; transform: scale(1) translateY(0); }
+  50%  { opacity: 1; transform: scale(1.02) translateY(-1px); }
+  100% { opacity: 0.7; transform: scale(1.04) translateY(1px); }
+}
+
+@keyframes spec-shift {
+  0%, 100% { opacity: 0.9; }
+  50%      { opacity: 1; }
+}
+
+@keyframes blob-drift-1 {
+  0%, 100% { transform: translate(0%, 0%) scale(1) rotate(0deg); }
+  25%  { transform: translate(4%, -3%) scale(1.06) rotate(1deg); }
+  50%  { transform: translate(6%, 5%) scale(0.96) rotate(-1deg); }
+  75%  { transform: translate(-3%, 7%) scale(1.03) rotate(0.5deg); }
+}
+
+@keyframes blob-drift-2 {
+  0%, 100% { transform: translate(0%, 0%) scale(1) rotate(0deg); }
+  33%  { transform: translate(-5%, 5%) scale(1.08) rotate(-1deg); }
+  66%  { transform: translate(4%, -6%) scale(0.94) rotate(1deg); }
+}
+
+@keyframes blob-drift-3 {
+  0%, 100% { transform: translate(0%, 0%) scale(1) rotate(0deg); }
+  40%  { transform: translate(6%, -5%) scale(1.04) rotate(2deg); }
+  80%  { transform: translate(-5%, 4%) scale(0.96) rotate(-1.5deg); }
+}
+
+@keyframes blob-drift-4 {
+  0%, 100% { transform: translate(0%, 0%) scale(1); }
+  20%  { transform: translate(-4%, -7%) scale(1.06); }
+  60%  { transform: translate(7%, 4%) scale(0.93); }
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes landing-exit {
+  0% {
+    opacity: 1;
+    filter: blur(0px) brightness(1);
+  }
+  50% {
+    opacity: 0.7;
+    filter: blur(4px) brightness(1.2);
+  }
+  100% {
+    opacity: 0;
+    filter: blur(14px) brightness(1.4);
+  }
+}
+
+.landing-exit {
+  animation: landing-exit 0.5s ease-in both;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95) translateY(4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes scale-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to   { opacity: 0; transform: scale(0.95) translateY(4px); }
+}
+
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes shimmer-text {
+  0%, 100% { opacity: 0.5; }
+  50%      { opacity: 1; }
+}
+
+@keyframes progress-bar {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { opacity: 0.4; transform: scale(1); }
+  50%      { opacity: 1; transform: scale(1.3); }
+}
+
+@keyframes typing-cursor {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+@keyframes dot-pulse {
+  0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes bg-drift-1 {
+  0%   { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(6%, 4%) scale(1.08); }
+}
+
+@keyframes bg-drift-2 {
+  0%   { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(-4%, 6%) scale(1.06); }
+}
+
+@keyframes bg-drift-3 {
+  0%   { transform: translate(0, 0) scale(1); }
+  100% { transform: translate(3%, -5%) scale(1.05); }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes progress-shimmer {
+  0%   { transform: translateX(-120%); }
+  100% { transform: translateX(300%); }
+}
+
+@keyframes bgs-spin {
+  from { transform: rotate(0deg) scale(1); }
+  to   { transform: rotate(360deg) scale(1); }
+}
+
+@keyframes bgs-spin-rev {
+  from { transform: rotate(360deg) scale(1); }
+  to   { transform: rotate(0deg) scale(1); }
+}
+
+@keyframes bgs-morph {
+  0%   { border-radius: 38% 62% 45% 55% / 52% 40% 60% 48%; transform: scale(1); }
+  50%  { border-radius: 42% 58% 48% 52% / 48% 55% 40% 60%; transform: scale(1.05); }
+  100% { border-radius: 35% 65% 50% 50% / 55% 45% 55% 45%; transform: scale(0.98); }
+}
+
+@keyframes bgs-morph-alt {
+  0%   { border-radius: 42% 58% 52% 48% / 48% 55% 45% 52%; transform: scale(1); }
+  50%  { border-radius: 38% 62% 48% 52% / 52% 48% 52% 48%; transform: scale(0.95); }
+  100% { border-radius: 45% 55% 55% 45% / 50% 50% 50% 50%; transform: scale(1.03); }
+}
+
+/* === UTILITY CLASSES === */
+.animate-fade-in-up { animation: fade-in-up var(--duration-slow) var(--ease-out) both; }
+.animate-fade-in    { animation: fade-in    var(--duration-normal) var(--ease-out) both; }
+.animate-scale-in   { animation: scale-in   var(--duration-normal) var(--ease-spring) both; }
+
+.typing-cursor::after {
+  content: '\2588';
+  display: inline-block;
+  margin-left: 1px;
+  animation: typing-cursor 0.8s ease-in-out infinite;
+  font-size: 0.85em;
+  vertical-align: baseline;
+  color: var(--athena-text-2);
+}
+
+.stream-text { will-change: opacity, transform; }
+
+/* Global progress bar */
+.progress-bar-track {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 9999;
+  background: transparent;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(var(--athena-accent-rgb), 0.5) 20%,
+    rgba(var(--athena-accent-rgb), 0.85) 50%,
+    rgba(var(--athena-accent-rgb), 0.5) 80%,
+    transparent 100%
+  );
+  animation: progress-bar 1.4s ease-in-out infinite;
+}
+
+/* Prose styles for AI responses */
+.athena-prose {
+  font-family: 'Manrope', sans-serif;
+  color: var(--athena-text);
+  line-height: 1.82;
+  font-size: 15.5px;
+}
+
+.athena-prose p { margin: 0 0 1em; }
+.athena-prose p:last-child { margin-bottom: 0; }
+
+.athena-prose strong {
+  font-weight: 600;
+  color: var(--athena-text);
+}
+
+.athena-prose em { font-style: italic; }
+
+.athena-prose ul, .athena-prose ol {
+  padding-left: 1.4em;
+  margin: 0 0 1em;
+}
+
+.athena-prose li { margin-bottom: 0.5em; }
+
+.athena-prose h2 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1.15em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 1.5em 0 0.5em;
+  color: var(--athena-text);
+}
+
+.athena-prose h3 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 1em;
+  font-weight: 600;
+  margin: 1.2em 0 0.4em;
+  color: var(--athena-text);
+}
+
+.athena-prose code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.82em;
+  background: rgba(var(--athena-accent-rgb), 0.06);
+  border: 1px solid rgba(var(--athena-accent-rgb), 0.08);
+  border-radius: 5px;
+  padding: 0.1em 0.4em;
+}
+
+.athena-prose a {
+  color: var(--athena-text);
+  text-decoration: underline;
+  text-decoration-color: rgba(var(--athena-accent-rgb), 0.3);
+  text-underline-offset: 2px;
+  transition: text-decoration-color var(--duration-fast);
+}
+
+.athena-prose a:hover {
+  text-decoration-color: rgba(var(--athena-accent-rgb), 0.8);
+}
+
+/* Settings modal - glass without backdrop-filter on panel */
+.glass-panel-settings {
+  position: relative;
+  background: var(--glass-bg-strong);
+  border: 0.5px solid var(--glass-border);
+  border-radius: 20px;
+  box-shadow: var(--glass-shadow-elevated);
+  overflow: hidden;
+}
+.glass-panel-settings::before,
+.glass-panel-settings::after {
+  display: none;
+}
+
+/* Hide scrollbar everywhere */
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+*::-webkit-scrollbar { display: none; }
+
+/* Message hover actions */
+.message-block:hover .footer-actions {
+  opacity: 1 !important;
+}
+
+/* User message edit actions */
+.message-user:hover .user-edit-actions {
+  opacity: 1 !important;
+}
+
+/* Citation badges */
+.athena-prose .citation-badge,
+.citation-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 4px 0 2px;
+  border-radius: 3px;
+  text-decoration: none !important;
+  vertical-align: middle;
+  background: rgba(var(--athena-accent-rgb), 0.06);
+  border: 0.5px solid rgba(var(--athena-accent-rgb), 0.10);
+  cursor: pointer;
+  transition: background 120ms ease;
+  max-width: 72px;
+  position: relative;
+}
+.citation-badge:hover {
+  background: rgba(var(--athena-accent-rgb), 0.14);
+  text-decoration: none !important;
+}
+.citation-badge img {
+  border-radius: 1px;
+  flex-shrink: 0;
+  display: block;
+}
+.citation-badge.multi {
+  min-width: 0;
+  gap: 2px;
+  padding: 0 4px 0 2px;
+}
+.citation-badge.multi .citation-label {
+  mask-image: linear-gradient(to right, black 55%, transparent 78%);
+  -webkit-mask-image: linear-gradient(to right, black 55%, transparent 78%);
+}
+.citation-multi-count {
+  font-size: 8px;
+  font-weight: 600;
+  color: var(--athena-text-3);
+  background: rgba(var(--athena-accent-rgb), 0.08);
+  border-radius: 2px;
+  padding: 0 3px;
+  line-height: 1.2;
+  flex-shrink: 0;
+}
+.citation-label {
+  font-size: 8.5px;
+  line-height: 1;
+  color: var(--athena-text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  mask-image: linear-gradient(to right, black 55%, transparent 90%);
+  -webkit-mask-image: linear-gradient(to right, black 55%, transparent 90%);
+}
+
+/* Citation tooltip */
+.citation-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  min-width: 200px;
+  max-width: 260px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--athena-bg);
+  border: 0.5px solid var(--athena-border);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease, transform 0.12s ease;
+}
+.citation-badge:hover .citation-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.tip-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.tip-domain {
+  font-size: 9.5px;
+  color: var(--athena-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tip-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--athena-text);
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tip-snippet {
+  font-size: 9px;
+  color: var(--athena-text-2);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@keyframes tooltip-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Mermaid diagrams ── */
+.mermaid-diagram {
+  margin: 14px 0;
+  padding: 20px 16px;
+  border-radius: 12px;
+  background: var(--glass-bg);
+  border: 0.5px solid var(--glass-border);
+  box-shadow: 0 0.5px 0.5px rgba(255,255,255,0.04) inset, 0 1px 2px rgba(0,0,0,0.03);
+  overflow-x: auto;
+  display: flex;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+  pointer-events: none;
+}
+
+.mermaid-error {
+  margin: 0;
+  white-space: pre-wrap;
+  color: var(--athena-text-3);
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  text-align: center;
+}
+
+/* ── Diagram overlay ── */
+.diagram-overlay-box svg {
+  width: 100%;
+  height: 100%;
+  min-width: 400px;
+  min-height: 200px;
+}
+
+/* ── Math blocks ── */
+.math-block {
+  margin: 14px 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.math-block .katex-display {
+  margin: 0.5em 0;
+}
+
+.athena-prose .katex {
+  font-size: 1.05em;
+}
+
+.athena-prose .katex-display > .katex {
+  font-size: 1.15em;
+}
+
+/* ── Code blocks ── */
+.code-block-wrapper {
+  position: relative;
+  margin: 14px 0;
+}
+
+.code-block-wrapper .code-block-lang {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  font-size: 10px;
+  color: var(--athena-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-family: 'Outfit', sans-serif;
+  font-weight: 500;
+  z-index: 1;
+  user-select: none;
+}
+
+.code-block-wrapper .code-block {
+  margin: 0;
+  padding: 14px 16px;
+  padding-top: 20px;
+  border-radius: 12px;
+  overflow-x: auto;
+  background: var(--glass-bg);
+  border: 0.5px solid var(--glass-border);
+  box-shadow: 0 0.5px 0.5px rgba(255,255,255,0.04) inset, 0 1px 2px rgba(0,0,0,0.03);
+  font-size: 13px;
+  line-height: 1.65;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--athena-text);
+}
+
+.code-block-wrapper .code-block code {
+  background: none !important;
+  border: none !important;
+  padding: 0 !important;
+  font-size: inherit !important;
+  color: inherit !important;
+}

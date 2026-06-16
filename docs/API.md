@@ -1,0 +1,903 @@
+# ATHENA-001 API Documentation
+
+> Version 2 — Node.js Express backend
+
+---
+
+## Table of Contents
+
+- [Base URL](#base-url)
+- [Authentication](#authentication)
+- [Common Headers](#common-headers)
+- [Endpoints Overview](#endpoints-overview)
+- [Search API (SSE Streaming)](#search-api-sse-streaming)
+- [Research Jobs API](#research-jobs-api)
+- [Research Batches API](#research-batches-api)
+- [Settings API](#settings-api)
+- [Conversations API](#conversations-api)
+- [Utility Endpoints](#utility-endpoints)
+- [Type Definitions](#type-definitions)
+- [Research Budget System](#research-budget-system)
+- [Provider & Model Routing](#provider--model-routing)
+- [SSE Event Reference](#sse-event-reference)
+- [Error Handling](#error-handling)
+- [Rate Limits & Retention](#rate-limits--retention)
+
+---
+
+## Base URL
+
+```
+http://localhost:3001
+```
+
+In development, the Vite dev server (`http://localhost:5173`) proxies `/api/*` requests to the backend at `http://localhost:3001`, stripping the `/api` prefix. For example, a frontend `fetch('/api/search')` reaches `POST /search` on the backend.
+
+**Configuration** (`backend/settings.json`):
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `host` | `"0.0.0.0"` | Bind address |
+| `port` | `3001` | Server port |
+
+---
+
+## Authentication
+
+Authentication is not implemented. The server is designed for local/trusted-network use. API keys for external services (Groq, Gemini, Serper) are stored in `backend/settings.json` and used server-side only — they are never exposed to clients.
+
+---
+
+## Common Headers
+
+| Header | Value | Notes |
+|--------|-------|-------|
+| `Content-Type` | `application/json` | Required for POST/PUT bodies |
+| `Accept` | `application/json` | Default response format |
+
+---
+
+## Endpoints Overview
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/search` | Interactive search with SSE streaming |
+| `POST` | `/research-jobs` | Create a long-running research job |
+| `GET` | `/research-jobs/:id` | Get job status and result |
+| `GET` | `/research-jobs/:id/events` | SSE stream of job events |
+| `POST` | `/research-jobs/:id/cancel` | Cancel a running job |
+| `GET` | `/research-batches` | List all research batches |
+| `POST` | `/research-batches` | Create a batch of research queries |
+| `GET` | `/research-batches/:id` | Get batch status and results |
+| `GET` | `/research-batches/:id/events` | SSE stream of batch events |
+| `POST` | `/research-batches/:id/cancel` | Cancel a running batch |
+| `GET` | `/settings` | Get current settings |
+| `PUT` | `/settings` | Update settings |
+| `GET` | `/conversations` | List conversations |
+| `POST` | `/conversations` | Create conversation |
+| `GET` | `/conversations/:id/messages` | Get conversation messages |
+| `PUT` | `/conversations/:id/messages` | Save conversation messages |
+| `PUT` | `/conversations/:id/rename` | Rename conversation |
+| `DELETE` | `/conversations/:id` | Delete conversation |
+| `GET` | `/health` | Server health check |
+| `GET` | `/config` | Public configuration (key count, provider count) |
+| `GET` | `/autocomplete` | DuckDuckGo search suggestions |
+| `GET` | `/ping` | Version info |
+| `POST` | `/test-llm` | Test LLM connectivity |
+
+---
+
+## Search API (SSE Streaming)
+
+### `POST /search`
+
+Interactive research query with real-time SSE streaming. Best for single-turn queries where the client waits for the full response.
+
+**Request Body:**
+
+```json
+{
+  "query": "What is quantum computing?",
+  "history": [
+    { "role": "user", "content": "Previous question" },
+    { "role": "assistant", "content": "Previous answer" }
+  ],
+  "mode": "deep"
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `query` | `string` | **Yes** | — | The search query |
+| `history` | `Array<{role, content}>` | No | `[]` | Conversation history for context |
+| `mode` | `"quick" \| "deep"` | No | `"quick"` | Research depth |
+
+**Response:** SSE stream (`text/event-stream`).
+
+**Events emitted (in order):**
+
+```
+event: step
+data: {"type":"plan","query":"...","model":"...","note":"..."}
+
+event: step
+data: {"type":"search","query":"...","result_count":5}
+
+event: token
+data: {"text":"Partial answer text..."}
+
+event: step
+data: {"type":"synthesize","note":"Generating final answer"}
+
+event: done
+data: {"query":"...","answer":"...","sources":[...],"steps":[...],"results_count":5,"elapsed_ms":4230,"research_budget":{"used":3,"limit":20,"exhausted":false}}
+```
+
+**Possible events:**
+
+| Event | Data Shape | Description |
+|-------|-----------|-------------|
+| `step` | `AgentStep` | Research phase update (plan, search, analyze, synthesize) |
+| `token` | `{ text: string }` | Streaming answer token |
+| `done` | `SearchResponse` | Final result with complete answer and sources |
+| `error` | `{ message: string }` | Error occurred, stream ended |
+
+**Modes:**
+
+- **`quick`**: Single-pass research. Model can call `web_search` tool up to ~3 rounds. Faster, uses fewer credits.
+- **`deep`**: Multi-pass research. After initial search+analyze, a critical review phase generates follow-up queries, then searches again before synthesis. Uses `general.deepIterations + 2` search rounds.
+
+**Client timeout:** 3 minutes (180,000 ms). The frontend `searchStream()` function in `src/lib/api.ts` automatically aborts after this duration.
+
+---
+
+## Research Jobs API
+
+Long-running research jobs that persist in memory and can be polled or SSE-subscribed. Jobs survive until the server restarts or is pruned.
+
+### `POST /research-jobs`
+
+Create a new research job. Returns immediately with a `202 Accepted` status.
+
+**Request Body:**
+
+```json
+{
+  "query": "History of the Roman Empire",
+  "history": [],
+  "mode": "deep"
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `query` | `string` | **Yes** | — | The research query |
+| `history` | `Array<{role, content}>` | No | `[]` | Conversation context |
+| `mode` | `"quick" \| "deep"` | No | settings `api.defaultMode` | Research depth |
+
+**Response (202):**
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "query": "History of the Roman Empire",
+  "mode": "deep",
+  "status": "queued",
+  "createdAt": "2026-06-16T01:00:00.000Z",
+  "updatedAt": "2026-06-16T01:00:00.000Z",
+  "cancelled": false,
+  "steps": [],
+  "events": []
+}
+```
+
+### `GET /research-jobs/:id`
+
+Poll for job status and result.
+
+**Response (200):**
+
+```json
+{
+  "id": "550e8400-...",
+  "query": "History of the Roman Empire",
+  "mode": "deep",
+  "status": "completed",
+  "createdAt": "2026-06-16T01:00:00.000Z",
+  "updatedAt": "2026-06-16T01:02:30.000Z",
+  "startedAt": "2026-06-16T01:00:01.000Z",
+  "finishedAt": "2026-06-16T01:02:30.000Z",
+  "cancelled": false,
+  "steps": [
+    { "type": "plan", "query": "History of the Roman Empire", "note": "Breaking down into sub-topics..." },
+    { "type": "search", "query": "Rome founding republic empire timeline", "result_count": 8 }
+  ],
+  "result": {
+    "query": "History of the Roman Empire",
+    "answer": "The Roman Empire began in 27 BCE...",
+    "sources": [...],
+    "steps": [...],
+    "results_count": 8,
+    "elapsed_ms": 149000
+  }
+}
+```
+
+**Status: 404** — job ID not found.
+
+**Job statuses:**
+
+| Status | Description |
+|--------|-------------|
+| `queued` | Job created, waiting to start |
+| `running` | Initial execution started |
+| `planning` | Agent is creating a research plan |
+| `searching` | Agent is searching/analyzing |
+| `reviewing` | Agent is doing critical review (deep mode only) |
+| `synthesizing` | Agent is generating final answer |
+| `completed` | Research finished successfully, `result` is populated |
+| `failed` | Research failed, `error` field contains reason |
+| `cancelled` | Cancelled by user via cancel endpoint |
+
+### `GET /research-jobs/:id/events`
+
+SSE stream of job events in real time.
+
+**Response:** `text/event-stream`.
+
+Same event types as `/search` (`step`, `token`, `done`, `error`) wrapped with job metadata.
+
+```
+event: step
+data: {"type":"step","data":{"type":"plan",...},"timestamp":"..."}
+
+event: done
+data: {"type":"done","response":{...},"timestamp":"..."}
+```
+
+The stream stays open until the job reaches a terminal state (`completed`, `failed`, `cancelled`).
+
+### `POST /research-jobs/:id/cancel`
+
+Cancel a running job. The job's AbortController is triggered, stopping the engine mid-execution.
+
+**Response (200):**
+
+```json
+{
+  "id": "550e8400-...",
+  "status": "cancelled",
+  "cancelled": true,
+  "finishedAt": "2026-06-16T01:01:00.000Z",
+  ...
+}
+```
+
+**Status: 404** — job ID not found.
+
+---
+
+## Research Batches API
+
+Batch processing for multiple research queries with concurrency control and shared budget.
+
+### `GET /research-batches`
+
+List all research batches, newest first.
+
+**Response (200):**
+
+```json
+[
+  {
+    "id": "batch-uuid-1",
+    "queries": ["What is AI?", "What is ML?"],
+    "mode": "quick",
+    "maxConcurrent": 2,
+    "sharedCredits": 40,
+    "perItemCredits": 20,
+    "status": "completed",
+    "createdAt": "2026-06-16T01:00:00.000Z",
+    "updatedAt": "2026-06-16T01:02:30.000Z",
+    "startedAt": "2026-06-16T01:00:01.000Z",
+    "finishedAt": "2026-06-16T01:02:30.000Z",
+    "cancelled": false,
+    "items": [
+      { "id": "item-uuid-1", "query": "What is AI?", "status": "completed" },
+      { "id": "item-uuid-2", "query": "What is ML?", "status": "completed" }
+    ]
+  }
+]
+```
+
+### `POST /research-batches`
+
+Create a batch of research queries.
+
+**Request Body:**
+
+```json
+{
+  "queries": [
+    "What is artificial intelligence?",
+    "What is machine learning?",
+    "What is deep learning?"
+  ],
+  "history": [],
+  "mode": "quick",
+  "maxConcurrent": 2,
+  "sharedCredits": 60,
+  "perItemCredits": 20
+}
+```
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `queries` | `string[]` | **Yes** | — | Array of queries to research (min 1) |
+| `history` | `Array<{role, content}>` | No | `[]` | Shared conversation context |
+| `mode` | `"quick" \| "deep"` | No | settings `api.defaultMode` | Research depth for all items |
+| `maxConcurrent` | `number` | No | settings `api.defaultMaxConcurrent` (default: `2`) | Max parallel items |
+| `sharedCredits` | `number` | No | `perItemCredits * queries.length` | Total research credits shared across all items |
+| `perItemCredits` | `number` | No | `20` | Max credits per individual item |
+
+**Response (202):**
+
+```json
+{
+  "id": "batch-uuid",
+  "queries": ["What is AI?", "..."],
+  "mode": "quick",
+  "maxConcurrent": 2,
+  "sharedCredits": 60,
+  "perItemCredits": 20,
+  "status": "queued",
+  "createdAt": "...",
+  "items": [
+    { "id": "item-1", "query": "What is AI?", "status": "pending" },
+    { "id": "item-2", "query": "...", "status": "pending" }
+  ],
+  ...
+}
+```
+
+### `GET /research-batches/:id`
+
+Get batch status including per-item results. When items are `completed`, the `results` array contains each item's `SearchResponse`.
+
+**Response (200):**
+
+```json
+{
+  "id": "batch-uuid",
+  "status": "running",
+  "items": [
+    { "id": "item-1", "query": "What is AI?", "status": "running", "startedAt": "..." },
+    { "id": "item-2", "query": "What is ML?", "status": "completed", "finishedAt": "..." }
+  ],
+  "results": [
+    null,
+    { "query": "What is ML?", "answer": "...", "sources": [...], ... }
+  ]
+}
+```
+
+### `GET /research-batches/:id/events`
+
+SSE stream of batch events.
+
+```
+event: status
+data: {"type":"status","status":"running","timestamp":"..."}
+
+event: step
+data: {"type":"step","itemId":"item-1","note":"Planning...","query":"What is AI?","model":"llama-3.3-70b","timestamp":"..."}
+
+event: item
+data: {"type":"item","item":{"id":"item-1","query":"...","status":"completed"},...}
+
+event: done
+data: {"type":"done","batch":{"id":"...","status":"completed","items":[...]}}
+```
+
+### `POST /research-batches/:id/cancel`
+
+Cancel all running and pending items in a batch.
+
+**Budget System:**
+
+- Each item uses `perItemCredits` from the shared pool
+- When `sharedRemaining` reaches 0, remaining pending items fail with "Batch research budget exhausted"
+- An item that finishes under budget returns unused credits to the pool (not currently implemented — credits are allocated upfront)
+
+---
+
+## Settings API
+
+### `GET /settings`
+
+Returns the full settings object. Keys are masked in the response.
+
+**Response (200):**
+
+```json
+{
+  "version": 2,
+  "port": 3001,
+  "host": "0.0.0.0",
+  "providerOrder": ["groq", "gemini", "vercel", "openrouter", "custom"],
+  "providers": {
+    "groq": {
+      "enabled": true,
+      "name": "groq",
+      "keys": ["gsk_...abcd"],
+      "models": ["llama-3.3-70b-versatile"],
+      "url": "https://api.groq.com/openai/v1/chat/completions",
+      "label": "Groq"
+    }
+  },
+  "serper": { "keys": ["serp_...wxyz"], "url": "https://google.serper.dev/search" },
+  "research": { "maxCreditsPerQuery": 20, "maxFollowUpQueries": 3 },
+  "modelRouting": {
+    "title": { "primary": { "providerId": "groq", "model": "llama-3.3-70b-versatile" }, "fallback": [] },
+    "fast": { "primary": { "providerId": "groq", "model": "llama-3.3-70b-versatile" }, "fallback": [] },
+    "wide": { ... },
+    "reasoning": { ... },
+    "synthesis": { ... },
+    "deepResearch": { ... },
+    "fallback": { ... }
+  },
+  "api": {
+    "defaultMaxConcurrent": 2,
+    "maxActiveJobs": 50,
+    "maxActiveBatches": 50,
+    "maxEventsPerJob": 250,
+    "maxEventsPerBatch": 300,
+    "maxRetentionMinutes": 1440,
+    "defaultMode": "quick"
+  },
+  "thinkingStripPatterns": "",
+  "maxSources": 8,
+  "deepIterations": 3
+}
+```
+
+### `PUT /settings`
+
+Update settings. Pass the full settings object (GET first, modify, PUT back).
+
+**Request Body:** Same shape as GET response.
+
+**Response (200):**
+
+```json
+{ "ok": true }
+```
+
+**Settings Schema v2** — The `version` field enables automatic migration. Old settings without the new fields are normalized with defaults.
+
+**Settings sections:**
+
+| Section | Description |
+|---------|-------------|
+| `providers` | Provider credentials and enabled state |
+| `providerOrder` | Priority order for provider cycling |
+| `modelRouting` | Task-specific model assignments (7 roles) |
+| `research` | Budget: `maxCreditsPerQuery`, `maxFollowUpQueries` |
+| `api` | API behavior: concurrency, retention, limits |
+| `serper` | Search API credentials |
+| `general` | `maxSources`, `deepIterations`, `thinkingStripPatterns` |
+
+---
+
+## Conversations API
+
+### `GET /conversations`
+
+List all conversations.
+
+**Response (200):**
+
+```json
+[
+  { "id": "conv-uuid", "query": "What is AI?", "title": "AI Overview", "timestamp": "2026-06-16T01:00:00.000Z" }
+]
+```
+
+### `POST /conversations`
+
+Create a new conversation. Triggers automatic title generation using the configured title model.
+
+**Request Body:**
+
+```json
+{ "id": "conv-uuid", "query": "What is AI?" }
+```
+
+**Response (200):** Updated conversation list.
+
+### `GET /conversations/:id/messages`
+
+Get all messages for a conversation.
+
+**Response (200):**
+
+```json
+[
+  { "type": "user", "content": "What is AI?" },
+  { "type": "assistant", "content": "Artificial intelligence is...", "data": { "query": "...", "answer": "...", "sources": [...], "steps": [...] } }
+]
+```
+
+### `PUT /conversations/:id/messages`
+
+Save/update messages for a conversation.
+
+**Request Body:**
+
+```json
+{ "messages": [...] }
+```
+
+### `PUT /conversations/:id/rename`
+
+Rename a conversation.
+
+**Request Body:**
+
+```json
+{ "title": "New Title" }
+```
+
+### `DELETE /conversations/:id`
+
+Delete a conversation.
+
+---
+
+## Utility Endpoints
+
+### `GET /health`
+
+```json
+{ "status": "ok" }
+```
+
+### `GET /config`
+
+```json
+{
+  "groqKeyCount": 1,
+  "geminiKeyCount": 0,
+  "serperKeyCount": 1,
+  "providerCount": 5
+}
+```
+
+Exposed publicly (no auth) for the frontend to show configuration status.
+
+### `GET /autocomplete?q=search+term`
+
+Proxies DuckDuckGo autocomplete. Requires minimum 2 characters.
+
+```json
+{ "suggestions": ["search term meaning", "search term definition", ...] }
+```
+
+Maximum 6 suggestions returned.
+
+### `GET /ping`
+
+```json
+{ "version": 2, "note": "new code running" }
+```
+
+### `POST /test-llm`
+
+Test LLM provider connectivity. Sends a non-streaming request first; falls back to streaming if that fails.
+
+**Request Body:**
+
+```json
+{ "messages": [{ "role": "user", "content": "Hello" }] }
+```
+
+**Optional query parameter:** `?label=test-name`
+
+**Response:**
+
+```json
+{
+  "ok": true,
+  "mode": "non-streaming",
+  "data": { "choices": [...] },
+  "model": "llama-3.3-70b-versatile",
+  "provider": "groq"
+}
+```
+
+Or on streaming fallback:
+
+```json
+{
+  "ok": true,
+  "mode": "streaming",
+  "fullContent": "Hello! How can I help you?",
+  "model": "llama-3.3-70b-versatile",
+  "provider": "groq"
+}
+```
+
+On failure (both modes):
+
+```json
+{ "ok": false, "error": "...", "error2": "..." }
+```
+
+---
+
+## Type Definitions
+
+### `SearchResponse`
+
+```typescript
+interface SearchResponse {
+  query: string;
+  answer: string;
+  sources: Source[];
+  steps: AgentStep[];
+  results_count: number;
+  elapsed_ms: number;
+  research_budget?: {
+    used: number;
+    limit: number;
+    exhausted: boolean;
+  };
+}
+```
+
+### `Source`
+
+```typescript
+interface Source {
+  title: string | null;
+  url: string;
+  domain: string;
+  snippet?: string | null;
+}
+```
+
+### `AgentStep`
+
+```typescript
+interface AgentStep {
+  type: string;       // "plan" | "search" | "analyze" | "synthesize" | "review"
+  query?: string;
+  result_count?: number;
+  note?: string;
+  model?: string;
+  reasoning?: string;
+  duration_ms?: number;
+}
+```
+
+### `ResearchJobRecord`
+
+```typescript
+interface ResearchJobRecord {
+  id: string;
+  query: string;
+  history?: { role: string; content: string }[];
+  mode: 'quick' | 'deep';
+  status: 'queued' | 'planning' | 'searching' | 'reviewing' | 'synthesizing' | 'running' | 'completed' | 'failed' | 'cancelled';
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  result?: SearchResponse;
+  error?: string;
+  cancelled: boolean;
+  steps: AgentStep[];
+}
+```
+
+### `ResearchBatchRecord`
+
+```typescript
+interface ResearchBatchRecord {
+  id: string;
+  queries: string[];
+  history?: { role: string; content: string }[];
+  mode: 'quick' | 'deep';
+  maxConcurrent: number;
+  sharedCredits: number;
+  perItemCredits: number;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  cancelled: boolean;
+  items: ResearchBatchItem[];
+  results: Array<SearchResponse | null>;
+}
+```
+
+### `ResearchBatchItem`
+
+```typescript
+interface ResearchBatchItem {
+  id: string;
+  query: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  result?: SearchResponse;
+  error?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+```
+
+---
+
+## Research Budget System
+
+Every research query consumes **research credits**. The budget prevents runaway costs from excessive tool calls and search rounds.
+
+### Credit Model
+
+| Scope | Setting | Default | Description |
+|-------|---------|---------|-------------|
+| Per query (interactive search) | `research.maxCreditsPerQuery` | `20` | Max credits for a single `/search` call |
+| Per job | `research.maxCreditsPerQuery` | `20` | Max credits for a research job |
+| Per batch item | `perItemCredits` | `20` | Max credits per batch item |
+| Batch shared pool | `sharedCredits` | `perItemCredits * items.length` | Total credits shared across all items |
+
+### How Credits Are Consumed
+
+- Each tool call (search) consumes 1 credit
+- Each LLM call (analyze, synthesize, review) consumes 1 credit
+- When budget is exhausted, the engine stops making new tool calls and proceeds directly to synthesis
+
+### Budget Reporting
+
+Completed search responses include `research_budget`:
+
+```json
+"research_budget": {
+  "used": 5,
+  "limit": 20,
+  "exhausted": false
+}
+```
+
+---
+
+## Provider & Model Routing
+
+### Supported Providers
+
+| ID | Label | Default URL |
+|----|-------|-------------|
+| `groq` | Groq | `https://api.groq.com/openai/v1/chat/completions` |
+| `gemini` | Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` |
+| `vercel` | Vercel AI Gateway | (user-configured) |
+| `openrouter` | OpenRouter | `https://openrouter.ai/api/v1/chat/completions` |
+| `custom` | Custom | (user-configured) |
+
+Providers must be OpenAI-compatible (standard chat completions API format).
+
+### Model Roles
+
+The system assigns models to tasks through `modelRouting`:
+
+| Role | Purpose | Temperature |
+|------|---------|-------------|
+| `title` | Conversation title generation | 0.3 |
+| `fast` | Quick responses, simple queries | 0.1 (round 0) / 0.3 (planning) |
+| `wide` | Context-heavy prompts, large token output | 0.1 |
+| `reasoning` | Complex reasoning tasks | 0.1 |
+| `synthesis` | Final answer synthesis | 0 |
+| `deepResearch` | Deep research agent loop | 0.1 |
+| `fallback` | Default fallback when others fail | 0.1 |
+
+### Fallback Chain
+
+Each role can have a fallback chain. If the primary provider/model returns a 4xx/5xx error, the system retries with the next fallback entry. If all entries fail, the system tries the next enabled provider in `providerOrder`.
+
+### Provider Cycling
+
+For each provider, the system round-robins through configured API keys and models. If a provider has 3 keys and 2 models, the effective combinations cycled are:
+```
+key[0]+model[0] → key[1]+model[0] → key[2]+model[0] → key[0]+model[1] → ...
+```
+
+---
+
+## SSE Event Reference
+
+### Event Types
+
+| Event | Emitted By | Description |
+|-------|-----------|-------------|
+| `step` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Agent step update |
+| `token` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Streaming token |
+| `done` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Final result |
+| `error` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Error |
+| `status` | `/research-jobs/:id/events`, `/research-batches/:id/events` | Status transition |
+| `item` | `/research-batches/:id/events` | Per-item status update |
+
+### SSE Wire Format
+
+```
+event: step
+data: {"type":"step","data":{"type":"search","query":"...","result_count":5},"timestamp":"2026-06-16T01:00:00.000Z"}
+
+event: token
+data: {"type":"token","text":"partial answer","timestamp":"..."}
+
+event: done
+data: {"type":"done","response":{"query":"...","answer":"...","sources":[...]},"timestamp":"..."}
+
+event: error
+data: {"type":"error","message":"Provider unavailable","timestamp":"..."}
+
+event: status
+data: {"type":"status","status":"running","timestamp":"..."}
+```
+
+Events are separated by double newlines (`\n\n`). Each event line is prefixed with `event: ` and `data: `.
+
+---
+
+## Error Handling
+
+### HTTP Status Codes
+
+| Code | Meaning |
+|------|---------|
+| `200` | Success |
+| `202` | Accepted (job/batch created, processing async) |
+| `400` | Bad request (missing required fields) |
+| `404` | Resource not found (job/batch/conversation ID) |
+| `500` | Internal server error (settings parse failure, etc.) |
+
+### Error Response Format
+
+```json
+{ "detail": "Error message describing what went wrong" }
+```
+
+### Common Error Scenarios
+
+| Scenario | Status | Message |
+|----------|--------|---------|
+| Missing query | `400` | `"Query is required"` |
+| Empty queries array | `400` | `"queries array is required"` |
+| Missing conversation id | `400` | `"id and query required"` |
+| Missing rename title | `400` | `"title required"` |
+| Job not found | `404` | `"Job not found"` |
+| Batch not found | `404` | `"Batch not found"` |
+| Settings parse error | `500` | `{ "detail": "..." }` |
+
+---
+
+## Rate Limits & Retention
+
+### In-Memory Limits (configurable via settings `api.*`)
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `maxActiveJobs` | `50` | Max concurrent research jobs before oldest are pruned |
+| `maxActiveBatches` | `50` | Max concurrent batches before oldest are pruned |
+| `maxEventsPerJob` | `250` | Events retained per job (oldest dropped) |
+| `maxEventsPerBatch` | `300` | Events retained per batch (oldest dropped) |
+| `maxRetentionMinutes` | `1440` (24h) | Target retention period (currently count-based pruning, not time-based) |
+
+### Pruning Behavior
+
+When the limit is exceeded, the oldest entries (by `createdAt`) are removed until the count is within bounds. Pruning affects both the main record and its event subscriptions.
+
+### Limitations
+
+- Jobs and batches are **in-memory only** — they do not survive server restart
+- There is no persistent database for job/batch history
+- For production use, add a persistent store (Redis, SQLite, PostgreSQL, etc.)
