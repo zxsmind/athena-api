@@ -1,5 +1,5 @@
 import { MoreHorizontal, Loader2, RefreshCw, Pencil, Check, Copy } from 'lucide-react';
-import { STEP_LABELS, formatTime, getSourcesForMessage } from '../../lib/chat-utils';
+import { STEP_LABELS, formatTime, getSourcesForMessage, FALLBACK_FAVICON } from '../../lib/chat-utils';
 import { renderMarkdown } from '../markdown';
 import SearchItem from '../SearchItem';
 import type { Source, Message } from '../../lib/api';
@@ -17,9 +17,9 @@ function SourcesBadge({ sources, onCopy, copied }: { sources: Source[]; onCopy: 
       <div style={{ display: 'flex', alignItems: 'center' }}>
         {sources.slice(0, 4).map((src, i) => (
           <img key={i}
-            src={`https://icons.duckduckgo.com/ip3/${src.domain}.ico`}
+            src={`https://www.google.com/s2/favicons?domain=${src.domain}&sz=16`}
             width={12} height={12} loading="lazy"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+            onError={(e) => { (e.target as HTMLImageElement).src = FALLBACK_FAVICON; }}
             style={{
               borderRadius: 2, marginLeft: i === 0 ? 0 : -4,
               position: 'relative', zIndex: 4 - i,

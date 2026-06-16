@@ -109,5 +109,6 @@ export function computeCitationTooltipPosition(
   return { left, top };
 }
 
-export const FAVICON_URL = 'https://icons.duckduckgo.com/ip3/${domain}.ico';
+export const FAVICON_URL = 'https://www.google.com/s2/favicons?domain=${domain}&sz=16';
+export const FALLBACK_FAVICON = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2216%22 height=%2216%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23999%22 stroke-width=%222%22%3E%3Ccircle cx=%2212%22 cy=%2212%22 r=%2210%22/%3E%3Cline x1=%222%22 y1=%2212%22 x2=%2222%22 y2=%2212%22/%3E%3Cpath d=%22M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z%22/%3E%3C/svg%3E';
 export const ABORT_TIMEOUT_MS = 120000;

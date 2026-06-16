@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Source } from '../../lib/api';
+import { FALLBACK_FAVICON } from '../../lib/chat-utils';
 
 export default function SourcesPanel({ sources }: { sources: Source[] }) {
   const [expanded, setExpanded] = useState(false);
@@ -28,9 +29,9 @@ export default function SourcesPanel({ sources }: { sources: Source[] }) {
           <div style={{ display: 'flex', alignItems: 'center' }}>
             {sources.slice(0, 4).map((s, i) => (
               <img key={i}
-                src={`https://icons.duckduckgo.com/ip3/${s.domain}.ico`}
+                src={`https://www.google.com/s2/favicons?domain=${s.domain}&sz=16`}
                 width={14} height={14} loading="lazy"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                onError={(e) => { (e.target as HTMLImageElement).src = FALLBACK_FAVICON; }}
                 style={{
                   borderRadius: 2, marginLeft: i === 0 ? 0 : -4,
                   position: 'relative', zIndex: 4 - i,
@@ -74,8 +75,8 @@ export default function SourcesPanel({ sources }: { sources: Source[] }) {
               )}
               <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <img src={`https://icons.duckduckgo.com/ip3/${src.domain}.ico`} width={14} height={14} loading="lazy"
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                  <img src={`https://www.google.com/s2/favicons?domain=${src.domain}&sz=16`} width={14} height={14} loading="lazy"
+                    onError={(e) => { (e.target as HTMLImageElement).src = FALLBACK_FAVICON; }}
                     style={{ borderRadius: 2, flexShrink: 0 }} />
                   <span style={{ fontSize: 10, color: 'var(--athena-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {src.domain}

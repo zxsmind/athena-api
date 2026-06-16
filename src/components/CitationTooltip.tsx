@@ -1,5 +1,5 @@
 import type { CitationTooltipItem, CitationTooltipPosition } from '../lib/chat-utils';
-import { FAVICON_URL } from '../lib/chat-utils';
+import { FAVICON_URL, FALLBACK_FAVICON } from '../lib/chat-utils';
 
 export default function CitationTooltip({
   items,
@@ -58,11 +58,11 @@ export default function CitationTooltip({
             {idx > 0 && <div style={{ height: 1, background: 'var(--athena-border)', margin: '1px 0' }} />}
             <span className="tip-row">
               <img
-                src={`https://icons.duckduckgo.com/ip3/${item.domain}.ico`}
+                src={`https://www.google.com/s2/favicons?domain=${item.domain}&sz=16`}
                 width={14}
                 height={14}
                 loading="lazy"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                onError={(e) => { (e.target as HTMLImageElement).src = FALLBACK_FAVICON; }}
               />
               <span className="tip-domain">{item.domain}</span>
             </span>
