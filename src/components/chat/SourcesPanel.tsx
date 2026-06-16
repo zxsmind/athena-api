@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { Source } from '../lib/api';
+import type { Source } from '../../lib/api';
 
 export default function SourcesPanel({ sources }: { sources: Source[] }) {
   const [expanded, setExpanded] = useState(false);

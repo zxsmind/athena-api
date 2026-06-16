@@ -1,8 +1,8 @@
 import { MoreHorizontal, Loader2, RefreshCw, Pencil, Check, Copy } from 'lucide-react';
-import { STEP_LABELS, formatTime, getSourcesForMessage } from '../lib/chat-utils';
-import { renderMarkdown } from './markdown';
-import SearchItem from './SearchItem';
-import type { Source, Message } from '../lib/api';
+import { STEP_LABELS, formatTime, getSourcesForMessage } from '../../lib/chat-utils';
+import { renderMarkdown } from '../markdown';
+import SearchItem from '../SearchItem';
+import type { Source, Message } from '../../lib/api';
 
 function SourcesBadge({ sources, onCopy, copied }: { sources: Source[]; onCopy: () => void; copied: boolean }) {
   return (
