@@ -582,7 +582,9 @@ export async function agenticResearchStream(
     exhausted: options.budget?.exhausted ?? false,
   };
 
-  const systemPrompt = mode === 'deep' ? DEEP_SYSTEM_PROMPT : SYSTEM_PROMPT;
+  const now = new Date();
+  const today = `${now.toLocaleDateString('en-US', { month: 'long' })} ${now.getDate()}, ${now.getFullYear()}`;
+  const systemPrompt = (mode === 'deep' ? DEEP_SYSTEM_PROMPT : SYSTEM_PROMPT) + `\n\n**Today's date:** ${today}.`;
   const messages: any[] = [
     { role: 'system', content: systemPrompt },
   ];
