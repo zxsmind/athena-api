@@ -1,7 +1,7 @@
-import { initLLM, callLLM, callLLMStream, stripThinkingTags, type LLMRole } from './llm.js';
+import { initLLM, callLLM, type LLMRole } from './llm.js';
 import { fetchResults, fetchPageContent } from './search.js';
 import type { SearchResponse, Source, AgentStep } from './schemas.js';
-import { SYSTEM_PROMPT, SYNTHESIS_PROMPT, DEEP_SYSTEM_PROMPT } from './agent/prompts.js';
+import { SYSTEM_PROMPT, DEEP_SYSTEM_PROMPT } from './agent/prompts.js';
 import { loadSettings } from './settings-store.js';
 
 initLLM();
@@ -609,7 +609,7 @@ export async function agenticResearchStream(
     if (!more) break;
   }
 
-  /* ── If the model gave a direct answer (no tool calls), send it directly ── */
+  /* ── If the model gave a direct answer, send it ── */
   const lastAssistantMsg = messages.filter(m => m.role === 'assistant' && m.content && !parseInlineToolCall(m.content)).pop();
   if (lastAssistantMsg?.content) {
     const elapsed = Math.round(performance.now() - start);
@@ -617,7 +617,7 @@ export async function agenticResearchStream(
     return;
   }
 
-  /* ── Chat mode: no tools used, no answer → use direct model response ── */
+  /* ── Chat mode: no tools → direct response ── */
   if (!usedTools && allSources.size === 0) {
     const lastMsg = messages[messages.length - 1];
     if (lastMsg?.role === 'assistant' && lastMsg.content && !parseInlineToolCall(lastMsg.content)) {
@@ -627,102 +627,17 @@ export async function agenticResearchStream(
     }
   }
 
-  /* ── Phase 3: Synthesis (fallback — rarely reached now) ── */
-  {
-    const synthStart = performance.now();
-    const synthStep: AgentStep = { type: 'synthesize', note: mode === 'deep' ? 'Synthesizing comprehensive answer...' : 'Answer generated' };
-    steps.push(synthStep);
-    onEvent({ type: 'step', data: synthStep });
-
-    const currentLoopStartIndex = sanitizedHistory.length + 2;
-    const currentLoopMessages = messages
-      .slice(currentLoopStartIndex)
-      .filter((m: any) => {
-        if (m.role === 'assistant' && m.content && parseInlineToolCall(m.content)) {
-          return false;
-        }
-        return true;
-      });
-
-    const activeSystemPrompt = mode === 'deep' ? DEEP_SYSTEM_PROMPT : SYSTEM_PROMPT;
-    const synthMessages = [
-      { role: 'system', content: `${activeSystemPrompt}\n\n${SYNTHESIS_PROMPT}` },
-      ...sanitizedHistory,
-      { role: 'user', content: query },
-      ...currentLoopMessages,
-    ];
-
-    synthStep.context = JSON.stringify(synthMessages, null, 2);
-
-    let fullContent: string;
-    try {
-      const result = await callLLMStream({
-        messages: synthMessages,
-        temperature: 0,
-        role: activeRole,
-        signal: options.signal,
-        onToken: (text) => { onEvent({ type: 'token', text }); },
-        onModelSelected: (selectedModel) => {
-          synthStep.model = selectedModel;
-          onEvent({ type: 'step', data: synthStep });
-        },
-        label: 'synthesis',
-      });
-      fullContent = result.fullContent || '';
-    } catch (err: any) {
-      onEvent({ type: 'error', message: err.message || 'Synthesis failed' });
-      return;
-    }
-
-    if (parseInlineToolCall(fullContent)) {
-      fullContent = fullContent.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
-    }
-
-    if (!fullContent) {
-      try {
-        const fallback = await callLLM({
-          messages: synthMessages,
-          temperature: 0,
-          role: activeRole,
-          signal: options.signal,
-          label: 'synthesis-fallback',
-        });
-        fullContent = stripThinkingTags(fallback.fullContent || '');
-      } catch (err: any) {
-        onEvent({ type: 'error', message: err.message || 'Synthesis failed' });
-        return;
-      }
-    }
-
-    if (!fullContent) {
-      onEvent({ type: 'error', message: 'Synthesis returned empty response.' });
-      return;
-    }
-
-    synthStep.duration_ms = Math.round(performance.now() - synthStart);
-
-    const elapsed = Math.round(performance.now() - start);
-    if (budget.exhausted) {
-      const budgetStep: AgentStep = { type: 'budget', note: `Research budget used ${budget.usedCredits}/${budget.usedCredits + budget.remainingCredits}` };
-      steps.push(budgetStep);
-      onEvent({ type: 'step', data: budgetStep });
-    }
-    onEvent({
-      type: 'done',
-      response: {
-        query,
-        answer: fullContent,
-        sources: Array.from(allSources.values()).map(({ source_index, ...s }) => s as Source),
-        steps,
-        results_count: allSources.size,
-        elapsed_ms: elapsed,
-        research_budget: {
-          used: budget.usedCredits,
-          limit: budget.usedCredits + budget.remainingCredits,
-          exhausted: budget.exhausted,
-        },
-      },
-    });
+  /* ── No answer → best-effort ── */
+  const elapsed = Math.round(performance.now() - start);
+  if (budget.exhausted) {
+    const budgetStep: AgentStep = { type: 'budget', note: `Research budget used ${budget.usedCredits}/${budget.usedCredits + budget.remainingCredits}` };
+    steps.push(budgetStep);
+    onEvent({ type: 'step', data: budgetStep });
+  }
+  if (allSources.size > 0) {
+    onEvent({ type: 'error', message: 'Araştırma bütçesi doldu ancak model cevap üretemedi.' });
+  } else {
+    onEvent({ type: 'error', message: 'Model could not produce an answer.' });
   }
 }
 
