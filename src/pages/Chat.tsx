@@ -154,7 +154,7 @@ function inlineMD(t: string, sources?: Source[]) {
 
   /* restore math placeholders as inline spans */
   if (sources && sources.length > 0) {
-    html = html.replace(/(?:\[|【)(\d+(?:\s*,\s*\d+)*)(?:\]|】)/g, (match, nums) => {
+    html = html.replace(/(?:\[|【)(\d+(?:\s*,\s*\d+)*)(?:†[^\]】]*)?(?:\]|】)/g, (match, nums) => {
       const indices = nums.split(/\s*,\s*/).map((n: string) => parseInt(n, 10) - 1);
       const valid = indices.filter((i: number) => i >= 0 && i < sources.length);
       if (valid.length === 0) return match;
