@@ -343,7 +343,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
     }}>
       <div onClick={e => e.stopPropagation()} className="glass-panel-settings" style={{
         width: isMobile ? '96%' : '94%', maxWidth: isMobile ? '100%' : 880,
-        height: isMobile ? 'auto' : 620, maxHeight: '90vh',
+        height: isMobile ? '85vh' : 620, maxHeight: '90vh',
         display: 'flex', flexDirection: 'column',
         animation: 'scale-in 200ms var(--ease-spring) both',
       }}>
