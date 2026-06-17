@@ -209,7 +209,6 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
       })).filter(item => item.domain || item.title);
 
       setCitationTooltip({ visible: true, rect, items });
-      setCitationTooltipPos(computeCitationTooltipPosition(rect, estimateCitationTooltipSize(items)));
     };
 
     const isInBadge = (el: Element | null): boolean =>
