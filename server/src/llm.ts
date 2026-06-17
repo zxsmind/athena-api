@@ -1,7 +1,6 @@
 import { loadSettings } from './settings-store.js';
 import fs from 'fs';
 import path from 'path';
-import { createSmartRoutingEngine } from '@mindbox/smart-routing-core';
 import { resolveTargets, modelSupportsTools, buildLLMRequestBody, learnedNoToolCalling } from './llm-utils.js';
 
 const LOG_FILE = path.resolve(process.cwd(), 'llm-errors.log');
@@ -11,13 +10,6 @@ function logError(label: string, target: string, status: number, body: string): 
   const line = `[${ts}] [${label}] [${status}] ${target}\n${body}\n${'─'.repeat(80)}\n`;
   try { fs.appendFileSync(LOG_FILE, line, 'utf8'); } catch (e) { console.error('[logError] Failed to write log:', e); }
   console.error(`[${status}] ${label} (${target}):\n${body}`);
-}
-
-let routingEngine = createSmartRoutingEngine();
-
-export function initLLM() {
-  const snapshot = routingEngine ? routingEngine.getSnapshot() : null;
-  routingEngine = createSmartRoutingEngine(snapshot);
 }
 
 export type LLMRole = keyof import('./settings-store.js').ModelRouting;
@@ -336,7 +328,6 @@ async function globalRetryBackoff(globalAttempt: number, opts: LLMOptions, label
     if (opts.signal?.aborted) throw new Error(`${label} cancelled`);
     await new Promise(resolve => setTimeout(resolve, 200));
   }
-  initLLM();
 }
 
 export async function callLLM(opts: LLMOptions): Promise<LLMResult> {

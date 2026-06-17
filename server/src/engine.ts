@@ -1,4 +1,4 @@
-import { initLLM, callLLM, type LLMRole } from './llm.js';
+import { callLLM, type LLMRole } from './llm.js';
 import type { LLMResult } from './llm.js';
 import { fetchResults, fetchPageContent } from './search.js';
 import type { SearchResponse, Source, AgentStep } from './schemas.js';
@@ -9,8 +9,6 @@ import { temperatureForRound, sanitizeHistory, domain, normalizeContent } from '
 import { parseInlineToolCall } from './engine/tool-parser.js';
 
 export type { EngineEvent, ResearchRunOptions, ResearchBudgetState } from './engine/types.js';
-
-let routingEngine: any = null;
 
 /* ── Core tool-calling round ── */
 async function toolCallingRound(

@@ -1,5 +1,4 @@
 import { loadSettings, saveSettings as storeSave, type SettingsStore } from './settings-store.js';
-import { initLLM } from './llm.js';
 import { resetSerper } from './search.js';
 
 export interface ModelReference {
@@ -124,6 +123,5 @@ export function saveSettings(data: SettingsData): void {
   }
 
   storeSave(store);
-  initLLM();
   resetSerper();
 }

@@ -148,6 +148,12 @@ function createSSEEndpoint<T extends { events: any[]; status: string }>(
       }
     };
 
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => { try { res.end(); } catch {} }, 30000);
+    };
+
     const flush = (current: T) => {
       for (const ev of current.events) {
         if (!sentEvents.has(ev)) {
@@ -155,15 +161,15 @@ function createSSEEndpoint<T extends { events: any[]; status: string }>(
           sentEvents.add(ev);
         }
       }
-      if (current.status === 'completed' || current.status === 'failed' || current.status === 'cancelled') {
-        setTimeout(() => { try { res.end(); } catch {} }, 2000);
-      }
+      if (current.status !== 'running') resetIdle();
     };
 
     flush(record);
-    if (record.status !== 'completed' && record.status !== 'failed' && record.status !== 'cancelled') {
+    if (record.status === 'running') {
       const unsubscribe = subscribe(id, flush);
       req.on('close', unsubscribe);
+    } else {
+      resetIdle();
     }
   };
 }

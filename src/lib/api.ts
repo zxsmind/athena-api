@@ -164,7 +164,13 @@ export function subscribeToJobEvents(
 ): () => void {
   const url = `${BASE}/research-jobs/${jobId}/events`;
   const source = new EventSource(url);
-  let settled = false;
+  let done = false;
+
+  const terminal = (type: string) => {
+    if (done) return;
+    done = true;
+    source.close();
+  };
 
   const eventTypes = ['status', 'step', 'token', 'sources', 'done', 'error'] as const;
   for (const type of eventTypes) {
@@ -172,13 +178,12 @@ export function subscribeToJobEvents(
       if (signal?.aborted) return;
       try {
         const data = JSON.parse(e.data) as ResearchJobEvent;
-        if (data.type === 'done' || data.type === 'error') settled = true;
         switch (data.type) {
+          case 'done': terminal('done'); callbacks.onDone?.(data.response); break;
+          case 'error': terminal('error'); callbacks.onError?.(data.message); break;
           case 'token': callbacks.onToken?.(data.text); break;
           case 'step': callbacks.onStep?.(data.data); break;
           case 'sources': callbacks.onSources?.(data.sources); break;
-          case 'done': callbacks.onDone?.(data.response); break;
-          case 'error': callbacks.onError?.(data.message); break;
           case 'status': callbacks.onStatus?.(data.status); break;
         }
       } catch { /* skip malformed */ }
@@ -186,7 +191,7 @@ export function subscribeToJobEvents(
   }
 
   source.onerror = () => {
-    if (settled) return;
+    if (done) return;
     callbacks.onError?.('Connection lost. Reconnecting...');
   };
 
