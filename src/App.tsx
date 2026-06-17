@@ -2,6 +2,8 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { Menu } from 'lucide-react';
 import useTheme from './theme';
 import { ColorModeProvider } from './context/ColorMode';
 import { SettingsModalProvider, useSettingsModal } from './context/SettingsModal';
@@ -27,9 +29,11 @@ function Layout() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [chatMessages, setChatMessages] = useState<Record<string, Message[]>>({});
   const [loading, setLoading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const bgRef = useRef<LiquidBackgroundHandle>(null);
+  const isMobile = useMediaQuery('(max-width: 1023px)');
 
   const { isOpen, open, close } = useSettingsModal();
 
@@ -89,9 +93,28 @@ function Layout() {
           onRename={handleRename}
           onDelete={handleDelete}
           onOpenSettings={open}
+          open={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
         />
 
         <main style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+          {isMobile && (
+            <button
+              onClick={() => setSidebarOpen(true)}
+              title="Open sidebar"
+              style={{
+                position: 'absolute', top: 12, left: 12, zIndex: 10,
+                width: 32, height: 32, borderRadius: 8, border: 'none',
+                background: 'none', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'var(--athena-text-2)',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--athena-border)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
+            >
+              <Menu size={18} />
+            </button>
+          )}
           <Routes>
             <Route path="/" element={<Landing onSearch={handleSearch} />} />
             <Route

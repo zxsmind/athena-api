@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useLocation } from 'react-router-dom';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import { MoreHorizontal } from 'lucide-react';
 import SearchInput from '../components/SearchInput';
 import { getDefaultMode } from '../hooks/useDefaultMode';
@@ -28,6 +29,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
   const location = useLocation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const convId = id ?? '';
+  const isMobile = useMediaQuery('(max-width: 1023px)');
 
   const initialQuery = (location.state as { query?: string; mode?: 'quick' | 'deep' } | null)?.query ?? '';
   const initialMode = (location.state as { query?: string; mode?: 'quick' | 'deep' } | null)?.mode ?? getDefaultMode();
@@ -549,7 +551,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
       {title && (
         <span data-ctx="title" style={{
-          position: 'absolute', top: 14, right: 28,
+          position: 'absolute', top: 14, right: 'var(--chat-pad-x, 28px)',
           fontSize: 13, fontWeight: 400, color: 'var(--athena-text-3)',
           whiteSpace: 'nowrap', opacity: 0.7,
         }}>
@@ -558,7 +560,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
       )}
 
       <div ref={scrollRef} style={{
-        flex: 1, overflow: 'hidden auto', padding: '14px 28px 0',
+        flex: 1, overflow: 'hidden auto', padding: `14px var(--chat-pad-x, 28px) 0`,
         maxWidth: 720, margin: '0 auto', width: '100%',
       }}>
         {messages.map((msg, i) => {
@@ -611,7 +613,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
         })}
       </div>
 
-      <div style={{ flexShrink: 0, padding: '12px 28px 20px', maxWidth: 720, margin: '0 auto', width: '100%' }}>
+      <div style={{ flexShrink: 0, padding: `12px var(--chat-pad-x, 28px) 20px`, maxWidth: 720, margin: '0 auto', width: '100%' }}>
         <SearchInput
           onSubmit={handleFollowUp}
           compact
@@ -623,10 +625,12 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
       </div>
 
       <div style={{
-        position: 'fixed', top: '50%', right: 16,
-        transform: 'translateY(-50%)', width: 260,
-        display: 'flex', flexDirection: 'column', zIndex: 999,
+        position: 'fixed', zIndex: 999,
         transition: 'opacity 200ms ease', opacity: panelOpacity,
+        ...(isMobile
+          ? { right: 12, left: 12, bottom: 80, maxHeight: '35vh', overflow: 'hidden' }
+          : { top: '50%', right: 16, transform: 'translateY(-50%)', width: 260 }
+        ),
       }}>
         {panelSources.length > 0 && <SourcesPanel sources={panelSources} />}
       </div>
