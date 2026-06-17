@@ -652,6 +652,22 @@ body {
   color: var(--athena-text);
 }
 
+.athena-prose h4 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.92em;
+  font-weight: 600;
+  margin: 1em 0 0.3em;
+  color: var(--athena-text);
+}
+
+.athena-prose h5, .athena-prose h6 {
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.85em;
+  font-weight: 600;
+  margin: 0.8em 0 0.2em;
+  color: var(--athena-text-2);
+}
+
 .athena-prose code {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.82em;
