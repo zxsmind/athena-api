@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import { Section, InputRow, ListSection, InfoPanel, CapabilityGrid } from './settings/SharedComponents';
+import { Section, InputRow, ListSection, InfoPanel } from './settings/SharedComponents';
 import { ModelRouteEditor } from './settings/ModelEditor';
 import { PromptDialog } from './settings/PromptDialog';
 import type { SettingsData, ModelRouting, ModelRoute, ProviderConfig, TabKey } from './settings/types';
@@ -319,16 +319,6 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
             </div>
           </div>
         </Section>
-        <Section title="Available Capabilities">
-          <CapabilityGrid items={[
-            ['OpenAI-compatible endpoints', 'Supported through provider base URLs'],
-            ['Custom provider capabilities', 'Supported through provider metadata'],
-            ['Research job polling', 'Supported with /research-jobs/:id'],
-            ['Research job events', 'Supported with /research-jobs/:id/events'],
-            ['Cancellation', 'Supported with /research-jobs/:id/cancel'],
-            ['Batch requests', 'Supported with /research-batches'],
-          ]} />
-        </Section>
         <Section title="Documentation">
           <a href="/docs/API.md" target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 10, textDecoration: 'none', border: '0.5px solid var(--athena-border)', background: 'rgba(var(--athena-accent-rgb), 0.025)', color: 'var(--athena-text)', transition: 'background 120ms' }}
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(var(--athena-accent-rgb), 0.06)'; }}
@@ -341,6 +331,68 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
             </div>
             <span style={{ color: 'var(--athena-text-3)', flexShrink: 0 }}>↗</span>
           </a>
+        </Section>
+        <Section title="Endpoints">
+          <div style={{ fontSize: 10, color: 'var(--athena-text-3)', marginBottom: 8, lineHeight: 1.5 }}>
+            All API endpoints are registered at the server root. In dev, Vite proxies <code style={{ fontSize: 9.5 }}>/api/*</code> → backend.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {[
+              { group: 'Research', items: [
+                { method: 'POST', path: '/search', desc: 'Create research job, returns { id }' },
+                { method: 'POST', path: '/research-jobs', desc: 'Create research job (full response)' },
+                { method: 'GET', path: '/research-jobs/:id', desc: 'Poll job status & result' },
+                { method: 'GET', path: '/research-jobs/:id/events', desc: 'SSE event stream' },
+                { method: 'POST', path: '/research-jobs/:id/cancel', desc: 'Cancel running job' },
+              ]},
+              { group: 'Batches', items: [
+                { method: 'GET', path: '/research-batches', desc: 'List all batches' },
+                { method: 'POST', path: '/research-batches', desc: 'Create batch of queries' },
+                { method: 'GET', path: '/research-batches/:id', desc: 'Get batch status' },
+                { method: 'GET', path: '/research-batches/:id/events', desc: 'SSE batch event stream' },
+                { method: 'POST', path: '/research-batches/:id/cancel', desc: 'Cancel batch' },
+              ]},
+              { group: 'Conversations', items: [
+                { method: 'GET', path: '/conversations', desc: 'List conversations' },
+                { method: 'POST', path: '/conversations', desc: 'Create conversation' },
+                { method: 'GET', path: '/conversations/:id/messages', desc: 'Get messages' },
+                { method: 'PUT', path: '/conversations/:id/messages', desc: 'Save messages' },
+                { method: 'PUT', path: '/conversations/:id/rename', desc: 'Rename conversation' },
+                { method: 'DELETE', path: '/conversations/:id', desc: 'Delete conversation' },
+              ]},
+              { group: 'System', items: [
+                { method: 'GET', path: '/settings', desc: 'Get settings' },
+                { method: 'PUT', path: '/settings', desc: 'Update settings' },
+                { method: 'GET', path: '/health', desc: 'Health check' },
+                { method: 'GET', path: '/config', desc: 'Public config (key counts)' },
+                { method: 'GET', path: '/autocomplete', desc: 'Search suggestions' },
+                { method: 'GET', path: '/ping', desc: 'Server version info' },
+                { method: 'POST', path: '/test-llm', desc: 'Test LLM connectivity' },
+              ]},
+            ].map(group => (
+              <div key={group.group}>
+                <div style={{ fontSize: 9, fontWeight: 500, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--athena-text-3)', marginBottom: 4, marginTop: 6 }}>{group.group}</div>
+                {group.items.map(endpoint => (
+                  <div key={endpoint.path} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
+                    <span style={{
+                      fontSize: 8.5, fontWeight: 700, fontFamily: '"JetBrains Mono", monospace',
+                      padding: '1px 5px', borderRadius: 4, flexShrink: 0,
+                      background: endpoint.method === 'GET' ? 'rgba(34, 197, 94, 0.08)' : endpoint.method === 'POST' ? 'rgba(59, 130, 246, 0.08)' : endpoint.method === 'PUT' ? 'rgba(234, 179, 8, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+                      color: endpoint.method === 'GET' ? '#22c55e' : endpoint.method === 'POST' ? '#3b82f6' : endpoint.method === 'PUT' ? '#eab308' : '#ef4444',
+                    }}>
+                      {endpoint.method}
+                    </span>
+                    <span style={{ fontSize: 9.5, fontFamily: '"JetBrains Mono", monospace', color: 'var(--athena-text-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {endpoint.path}
+                    </span>
+                    <span style={{ fontSize: 9, color: 'var(--athena-text-3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {endpoint.desc}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
         </Section>
       </>
     );
