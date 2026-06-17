@@ -2,10 +2,11 @@ import { useState } from 'react';
 import type { Source } from '../../lib/api';
 import { FALLBACK_FAVICON } from '../../lib/chat-utils';
 
-export default function SourcesPanel({ sources }: { sources: Source[] }) {
+export default function SourcesPanel({ sources, maxHeight }: { sources: Source[]; maxHeight?: string }) {
   const [expanded, setExpanded] = useState(false);
   const items = expanded ? sources : sources.slice(0, 3);
   const totalCount = sources.length;
+  const mh = maxHeight || '70vh';
 
   return (
     <div style={{
@@ -17,7 +18,7 @@ export default function SourcesPanel({ sources }: { sources: Source[] }) {
       display: 'flex',
       flexDirection: 'column',
       boxShadow: '0 4px 24px rgba(0,0,0,0.06)',
-      maxHeight: '70vh',
+      maxHeight: mh,
     }}>
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6,
@@ -51,7 +52,7 @@ export default function SourcesPanel({ sources }: { sources: Source[] }) {
 
       <div style={{
         overflowY: 'auto',
-        maxHeight: `calc(70vh - ${expanded && totalCount > 3 ? 100 : 80}px)`,
+        maxHeight: `calc(${mh} - ${expanded && totalCount > 3 ? 100 : 80}px)`,
       }}>
         {items.map((src, i) => (
           <div key={i}>

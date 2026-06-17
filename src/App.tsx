@@ -47,6 +47,14 @@ function Layout() {
     bgRef.current?.setActive(location.pathname.startsWith('/c/'));
   }, [location.pathname]);
 
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && sidebarOpen) setSidebarOpen(false);
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [sidebarOpen]);
+
   const handleSearch = useCallback(async (query: string, mode?: 'quick' | 'deep') => {
     const id = crypto.randomUUID();
     navigate(`/c/${id}`, { state: { query, mode } });

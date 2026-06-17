@@ -107,7 +107,7 @@ export default function Sidebar({ conversations, onNewChat, onRename, onDelete, 
           {/* New Chat */}
           <div style={{ padding: '0 6px 8px', flexShrink: 0 }}>
             <button
-              onClick={onNewChat}
+              onClick={() => { onNewChat(); onClose?.(); }}
               style={{
                 width: '100%',
                 display: 'flex',
@@ -224,7 +224,7 @@ export default function Sidebar({ conversations, onNewChat, onRename, onDelete, 
                   return (
                     <li key={conv.id}>
                       <button
-                        onClick={() => navigate(`/c/${conv.id}`)}
+                        onClick={() => { navigate(`/c/${conv.id}`); onClose?.(); }}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           showMenu(e.clientX, e.clientY, [

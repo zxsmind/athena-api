@@ -628,11 +628,11 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
         position: 'fixed', zIndex: 999,
         transition: 'opacity 200ms ease', opacity: panelOpacity,
         ...(isMobile
-          ? { right: 12, left: 12, bottom: 80, maxHeight: '35vh', overflow: 'hidden' }
+          ? { right: 12, left: 12, bottom: 84 }
           : { top: '50%', right: 16, transform: 'translateY(-50%)', width: 260 }
         ),
       }}>
-        {panelSources.length > 0 && <SourcesPanel sources={panelSources} />}
+        {panelSources.length > 0 && <SourcesPanel sources={panelSources} maxHeight={isMobile ? '35vh' : undefined} />}
       </div>
 
       {(() => {
