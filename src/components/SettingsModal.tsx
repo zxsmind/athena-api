@@ -10,13 +10,7 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-const SETTINGS_ICONS = {
-  general: <span>⚙</span>,
-  providers: <span>🔑</span>,
-  models: <span>💻</span>,
-  advanced: <span>⚡</span>,
-  api: <span>🖥</span>,
-};
+const SETTINGS_ICONS: Record<string, any> = {};
 
 export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [data, setData] = useState<SettingsData | null>(null);
@@ -148,11 +142,11 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
         <>
           <Section title="Application">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <InputRow icon={<span>🌐</span>} label="Host" value={data.host} onChange={v => patchData({ host: v })} placeholder="0.0.0.0" />
+              <InputRow label="Host" value={data.host} onChange={v => patchData({ host: v })} placeholder="0.0.0.0" />
               <InputRow icon={<span>#</span>} label="Port" value={String(data.port)} onChange={v => patchData({ port: parseInt(v, 10) || 3001 })} placeholder="3001" />
             </div>
           </Section>
-          <InfoPanel icon={<span>🧠</span>} title="General Settings Scope" text="This tab stays for application-wide settings. Provider credentials, task-specific model choices, research behavior, and API capabilities live in their own tabs." />
+              <InfoPanel title="General Settings Scope" text="This tab stays for application-wide settings. Provider credentials, task-specific model choices, research behavior, and API capabilities live in their own tabs." />
         </>
       );
     }
@@ -207,9 +201,9 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
             return (
               <Section key={key} title={p.label}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <InputRow icon={<span>🌐</span>} label="API URL" value={p.url} onChange={v => updateProvider(key, { url: v })} placeholder="https://api.example.com/v1/chat/completions" />
-                  {key === 'custom' && <InputRow icon={<span>#</span>} label="Display Name" value={p.name} onChange={v => updateProvider(key, { name: v })} placeholder="custom" />}
-                  <ListSection icon={<span>🔑</span>} label="API Keys" items={p.keys} onAdd={() => addKey(key)} onRemove={i => removeKey(key, i)} emptyText="No API keys configured" maskItems />
+                  <InputRow label="API URL" value={p.url} onChange={v => updateProvider(key, { url: v })} placeholder="https://api.example.com/v1/chat/completions" />
+                  {key === 'custom' && <InputRow label="Display Name" value={p.name} onChange={v => updateProvider(key, { name: v })} placeholder="custom" />}
+                  <ListSection label="API Keys" items={p.keys} onAdd={() => addKey(key)} onRemove={i => removeKey(key, i)} emptyText="No API keys configured" maskItems />
                 </div>
               </Section>
             );
@@ -265,24 +259,24 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
         <>
           <Section title="Search API">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <InputRow icon={<span>🌐</span>} label="Serper URL" value={data.serper.url} onChange={v => patchData({ serper: { ...data.serper, url: v } })} placeholder="https://google.serper.dev/search" />
-              <ListSection icon={<span>🔑</span>} label="Serper Keys" items={data.serper.keys} onAdd={addSerperKey} onRemove={removeSerperKey} emptyText="No Serper API keys configured" maskItems />
+              <InputRow label="Serper URL" value={data.serper.url} onChange={v => patchData({ serper: { ...data.serper, url: v } })} placeholder="https://google.serper.dev/search" />
+              <ListSection label="Serper Keys" items={data.serper.keys} onAdd={addSerperKey} onRemove={removeSerperKey} emptyText="No Serper API keys configured" maskItems />
             </div>
           </Section>
           <Section title="Research Controls">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <InputRow icon={<span>#</span>} label="Max Sources" value={String(data.maxSources)} onChange={v => patchData({ maxSources: parseInt(v, 10) || 8 })} placeholder="8" />
-              <InputRow icon={<span>🔍</span>} label="Deep Iterations" value={String(data.deepIterations)} onChange={v => patchData({ deepIterations: parseInt(v, 10) || 3 })} placeholder="3" />
-              <InputRow icon={<span>💻</span>} label="Thinking Strip" value={data.thinkingStripPatterns} onChange={v => patchData({ thinkingStripPatterns: v })} placeholder="<think>.*?</think>" />
+              <InputRow label="Deep Iterations" value={String(data.deepIterations)} onChange={v => patchData({ deepIterations: parseInt(v, 10) || 3 })} placeholder="3" />
+              <InputRow label="Thinking Strip" value={data.thinkingStripPatterns} onChange={v => patchData({ thinkingStripPatterns: v })} placeholder="<think>.*?</think>" />
             </div>
           </Section>
           <Section title="Research Budget">
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <InputRow icon={<span>📦</span>} label="Max Credits" value={String(data.research.maxCreditsPerQuery)} onChange={v => patchData({ research: { ...data.research, maxCreditsPerQuery: parseInt(v, 10) || 20 } })} placeholder="20" />
-              <InputRow icon={<span>🔍</span>} label="Follow-ups" value={String(data.research.maxFollowUpQueries)} onChange={v => patchData({ research: { ...data.research, maxFollowUpQueries: parseInt(v, 10) || 3 } })} placeholder="3" />
+              <InputRow label="Max Credits" value={String(data.research.maxCreditsPerQuery)} onChange={v => patchData({ research: { ...data.research, maxCreditsPerQuery: parseInt(v, 10) || 20 } })} placeholder="20" />
+              <InputRow label="Follow-ups" value={String(data.research.maxFollowUpQueries)} onChange={v => patchData({ research: { ...data.research, maxFollowUpQueries: parseInt(v, 10) || 3 } })} placeholder="3" />
             </div>
           </Section>
-          <InfoPanel icon={<span>📦</span>} title="Research Budget" text="Credits are enforced per query. Follow-up query limits cap deep research expansion before synthesis." />
+          <InfoPanel title="Research Budget" text="Credits are enforced per query. Follow-up query limits cap deep research expansion before synthesis." />
         </>
       );
     }

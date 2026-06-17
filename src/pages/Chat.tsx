@@ -616,6 +616,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
           onSubmit={handleFollowUp}
           compact
           dropdownUp
+          autoFocus
           initialMode={conversationMode.current}
           disabled={isSearching}
         />

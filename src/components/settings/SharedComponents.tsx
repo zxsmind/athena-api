@@ -17,7 +17,7 @@ export function Section({ title, children }: { title: string; children: React.Re
 export function InputRow({
   icon, label, value, onChange, placeholder,
 }: {
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   label: string;
   value: string;
   onChange: (v: string) => void;
@@ -25,7 +25,7 @@ export function InputRow({
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <span style={{ flexShrink: 0, color: 'var(--athena-text-3)', display: 'flex' }}>{icon}</span>
+      {icon && <span style={{ flexShrink: 0, color: 'var(--athena-text-3)', display: 'flex' }}>{icon}</span>}
       <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--athena-text-2)', width: 92 }}>
         {label}
       </span>
@@ -46,7 +46,7 @@ export function InputRow({
 export function ListSection({
   icon, label, items, onAdd, onRemove, emptyText, maskItems = false,
 }: {
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
   label: string;
   items: string[];
   onAdd: () => void;
@@ -61,7 +61,7 @@ export function ListSection({
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ color: 'var(--athena-text-3)', display: 'flex' }}>{icon}</span>
+          {icon && <span style={{ color: 'var(--athena-text-3)', display: 'flex' }}>{icon}</span>}
           <span style={{ fontSize: 10.5, color: 'var(--athena-text-2)' }}>
             {label} {items.length > 0 && <span style={{ color: 'var(--athena-text-3)' }}>({items.length})</span>}
           </span>
@@ -134,7 +134,7 @@ function maskSecret(value: string): string {
   return `${value.slice(0, 4)}...${value.slice(-4)}`;
 }
 
-export function InfoPanel({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) {
+export function InfoPanel({ icon, title, text }: { icon?: React.ReactNode; title: string; text: string }) {
   return (
     <div style={{
       display: 'flex', gap: 9,
@@ -143,7 +143,7 @@ export function InfoPanel({ icon, title, text }: { icon: React.ReactNode; title:
       background: 'rgba(var(--athena-accent-rgb), 0.035)',
       color: 'var(--athena-text-2)',
     }}>
-      <span style={{ color: 'var(--athena-text-3)', display: 'flex', marginTop: 1 }}>{icon}</span>
+      {icon && <span style={{ color: 'var(--athena-text-3)', display: 'flex', marginTop: 1 }}>{icon}</span>}
       <div>
         <div style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--athena-text)', marginBottom: 3 }}>{title}</div>
         <div style={{ fontSize: 10, lineHeight: 1.55 }}>{text}</div>

@@ -74,10 +74,10 @@ export const ROLE_LABELS: Record<keyof ModelRouting, string> = {
 
 export const PROVIDER_OPTIONS = PROVIDER_KEYS.map(key => ({ value: key, label: PROVIDER_LABELS[key] }));
 
-export const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
-  { key: 'general', label: 'General', icon: React.createElement('span', { dangerouslySetInnerHTML: { __html: '⚙' } }) as any },
-  { key: 'providers', label: 'Providers', icon: React.createElement('span', { dangerouslySetInnerHTML: { __html: '🔑' } }) as any },
-  { key: 'models', label: 'Models', icon: React.createElement('span', { dangerouslySetInnerHTML: { __html: '💻' } }) as any },
-  { key: 'advanced', label: 'Advanced', icon: React.createElement('span', { dangerouslySetInnerHTML: { __html: '⚡' } }) as any },
-  { key: 'api', label: 'API', icon: React.createElement('span', { dangerouslySetInnerHTML: { __html: '🖥' } }) as any },
+export const TABS: { key: TabKey; label: string; icon?: React.ReactNode }[] = [
+  { key: 'general', label: 'General' },
+  { key: 'providers', label: 'Providers' },
+  { key: 'models', label: 'Models' },
+  { key: 'advanced', label: 'Advanced' },
+  { key: 'api', label: 'API' },
 ];
