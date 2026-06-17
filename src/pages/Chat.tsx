@@ -14,7 +14,7 @@ import { search, subscribeToJobEvents, fetchMessages, saveMessages, type Message
 import {
   STEP_LABELS, formatTime, normalizeSearchQuery, getSourcesForMessage,
   computeCitationTooltipPosition, estimateCitationTooltipSize,
-  CITATION_TOOLTIP_MAX_HEIGHT, ABORT_TIMEOUT_MS,
+  CITATION_TOOLTIP_MAX_HEIGHT, ABORT_TIMEOUT_MS, FALLBACK_FAVICON,
   type CitationTooltipItem, type CitationTooltipPosition,
 } from '../lib/chat-utils';
 
@@ -47,6 +47,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
   const [panelOpacity, setPanelOpacity] = useState(0);
   const [panelSources, setPanelSources] = useState<Source[]>([]);
   const panelFadeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [mobileSourcesOpen, setMobileSourcesOpen] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(-1);
   const [isSearching, setIsSearching] = useState(false);
   const editRef = useRef<HTMLParagraphElement>(null);
@@ -624,16 +625,99 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
         />
       </div>
 
-      <div style={{
+      {!isMobile && <div style={{
         position: 'fixed', zIndex: 999,
         transition: 'opacity 200ms ease', opacity: panelOpacity,
-        ...(isMobile
-          ? { right: 12, left: 12, bottom: 84 }
-          : { top: '50%', right: 16, transform: 'translateY(-50%)', width: 260 }
-        ),
+        top: '50%', right: 16, transform: 'translateY(-50%)', width: 260,
       }}>
-        {panelSources.length > 0 && <SourcesPanel sources={panelSources} maxHeight={isMobile ? '35vh' : undefined} />}
-      </div>
+        {panelSources.length > 0 && <SourcesPanel sources={panelSources} />}
+      </div>}
+
+      {isMobile && panelSources.length > 0 && (
+        <button
+          onClick={() => setMobileSourcesOpen(true)}
+          style={{
+            position: 'fixed', bottom: 80, right: 12, zIndex: 999,
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '6px 10px 6px 8px',
+            background: 'var(--athena-bg)',
+            border: '0.5px solid var(--athena-border)',
+            borderRadius: 10,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            fontSize: 10.5,
+            fontWeight: 500,
+            color: 'var(--athena-text-2)',
+            boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
+            transition: 'transform 120ms var(--ease-out)',
+          }}
+          onMouseDown={(e) => { (e.currentTarget as HTMLElement).style.transform = 'scale(0.95)'; }}
+          onMouseUp={(e) => { (e.currentTarget as HTMLElement).style.transform = 'scale(1)'; }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            {panelSources.slice(0, 3).map((s, i) => (
+              <img key={i}
+                src={`https://www.google.com/s2/favicons?domain=${s.domain}&sz=16`}
+                width={14} height={14} loading="lazy"
+                onError={(e) => { (e.target as HTMLImageElement).src = FALLBACK_FAVICON; }}
+                style={{ borderRadius: 2, marginLeft: i === 0 ? 0 : -3, position: 'relative', zIndex: 3 - i }} />
+            ))}
+          </div>
+          <span>{panelSources.length}</span>
+        </button>
+      )}
+
+      {isMobile && mobileSourcesOpen && panelSources.length > 0 && (
+        <>
+          <div
+            onClick={() => setMobileSourcesOpen(false)}
+            style={{
+              position: 'fixed', inset: 0, zIndex: 998,
+              background: 'rgba(0,0,0,0.3)',
+              animation: 'fade-in 150ms ease both',
+            }}
+          />
+          <div
+            style={{
+              position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 999,
+              maxHeight: '50vh', borderRadius: '16px 16px 0 0',
+              background: 'var(--athena-bg)',
+              border: '0.5px solid var(--athena-border)',
+              borderBottom: 'none',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 -4px 24px rgba(0,0,0,0.08)',
+              animation: 'fade-in-up 200ms var(--ease-out) both',
+            }}
+          >
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '12px 16px 8px', flexShrink: 0,
+            }}>
+              <div style={{ width: 24 }} />
+              <div style={{
+                width: 32, height: 3, borderRadius: 2,
+                background: 'var(--athena-text-3)', opacity: 0.4, flexShrink: 0,
+              }} />
+              <button
+                onClick={() => setMobileSourcesOpen(false)}
+                style={{
+                  width: 24, height: 24, borderRadius: 6, border: 'none',
+                  background: 'none', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: 'var(--athena-text-3)', padding: 0,
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div style={{ flex: 1, minHeight: 0, padding: '0 4px 8px' }}>
+              <SourcesPanel sources={panelSources} maxHeight="50vh" />
+            </div>
+          </div>
+        </>
+      )}
 
       {(() => {
         const modalMsg = modalMsgIdx >= 0 && modalMsgIdx < messages.length
