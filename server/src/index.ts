@@ -286,8 +286,9 @@ async function generateTitle(conversationId: string, query: string) {
     if (title) {
       await updateConversationTitle(conversationId, title.slice(0, 60));
     }
-  } catch {
-    // Silently fail — query is used as fallback
+  } catch (err: any) {
+    console.error(`[title-gen] failed:`, err?.message || err);
+    console.error(`[title-gen] full error:`, JSON.stringify(err, Object.getOwnPropertyNames(err)));
   }
 }
 
