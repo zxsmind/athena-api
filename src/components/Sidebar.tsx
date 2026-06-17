@@ -5,7 +5,9 @@ import {
   Sun,
   Settings,
   MessageSquare,
+  X,
 } from 'lucide-react';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import { useColorMode } from '../context/ColorMode';
 import { useContextMenu } from './ContextMenuProvider';
 
@@ -24,48 +26,58 @@ interface SidebarProps {
   onRename: (id: string) => void;
   onDelete: (id: string) => void;
   onOpenSettings: () => void;
+  open?: boolean;
+  onClose?: () => void;
 }
 
-export default function Sidebar({ conversations, onNewChat, onRename, onDelete, onOpenSettings }: SidebarProps) {
+export default function Sidebar({ conversations, onNewChat, onRename, onDelete, onOpenSettings, open, onClose }: SidebarProps) {
   const { mode, toggle } = useColorMode();
   const navigate = useNavigate();
   const location = useLocation();
   const dark = mode === 'dark';
   const { show: showMenu } = useContextMenu();
+  const isMobile = useMediaQuery('(max-width: 1023px)');
 
-  return (
-    <aside
+  const content = (
+    <div
+      className="glass-sidebar"
       style={{
-        position: 'relative',
-        zIndex: 20,
         height: '100%',
-        flexShrink: 0,
-        width: SIDEBAR_W,
-        padding: '10px 8px',
+        borderRadius: 20,
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        position: 'relative',
       }}
     >
+      {isMobile && onClose && (
+        <button
+          onClick={onClose}
+          title="Close sidebar"
+          style={{
+            position: 'absolute', top: 10, right: 10, zIndex: 3,
+            width: 28, height: 28, borderRadius: 6, border: 'none',
+            background: 'none', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: 'var(--athena-text-3)',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--athena-border)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
+        >
+          <X size={14} />
+        </button>
+      )}
       <div
-        className="glass-sidebar"
         style={{
-          height: '100%',
-          borderRadius: 20,
+          position: 'relative',
+          zIndex: 2,
           display: 'flex',
           flexDirection: 'column',
+          height: '100%',
+          padding: '0 8px',
           overflow: 'hidden',
-          position: 'relative',
         }}
       >
-        <div
-          style={{
-            position: 'relative',
-            zIndex: 2,
-            display: 'flex',
-            flexDirection: 'column',
-            height: '100%',
-            padding: '0 8px',
-            overflow: 'hidden',
-          }}
-        >
           {/* Header */}
           <div
             style={{
@@ -95,7 +107,7 @@ export default function Sidebar({ conversations, onNewChat, onRename, onDelete, 
           {/* New Chat */}
           <div style={{ padding: '0 6px 8px', flexShrink: 0 }}>
             <button
-              onClick={onNewChat}
+              onClick={() => { onNewChat(); onClose?.(); }}
               style={{
                 width: '100%',
                 display: 'flex',
@@ -212,7 +224,7 @@ export default function Sidebar({ conversations, onNewChat, onRename, onDelete, 
                   return (
                     <li key={conv.id}>
                       <button
-                        onClick={() => navigate(`/c/${conv.id}`)}
+                        onClick={() => { navigate(`/c/${conv.id}`); onClose?.(); }}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           showMenu(e.clientX, e.clientY, [
@@ -328,7 +340,52 @@ export default function Sidebar({ conversations, onNewChat, onRename, onDelete, 
             />
           </div>
         </div>
-        </div>
+      </div>
+    );
+
+  if (isMobile) {
+    return (
+      <>
+        <div
+          onClick={onClose}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 998,
+            background: dark ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.25)',
+            opacity: open ? 1 : 0,
+            pointerEvents: open ? 'auto' : 'none',
+            transition: 'opacity 300ms var(--ease-out)',
+          }}
+        />
+        <aside
+          style={{
+            position: 'fixed', left: 0, top: 0, bottom: 0, zIndex: 999,
+            width: SIDEBAR_W, padding: '10px 8px',
+            transform: open ? 'translateX(0)' : 'translateX(-100%)',
+            transition: 'transform 300ms var(--ease-out)',
+            outline: 'none',
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Sidebar"
+        >
+          {content}
+        </aside>
+      </>
+    );
+  }
+
+  return (
+    <aside
+      style={{
+        position: 'relative',
+        zIndex: 20,
+        height: '100%',
+        flexShrink: 0,
+        width: SIDEBAR_W,
+        padding: '10px 8px',
+      }}
+    >
+      {content}
     </aside>
   );
 }

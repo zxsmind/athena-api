@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useLocation } from 'react-router-dom';
+import useMediaQuery from '@mui/material/useMediaQuery';
+import { MoreHorizontal } from 'lucide-react';
 import SearchInput from '../components/SearchInput';
 import { getDefaultMode } from '../hooks/useDefaultMode';
 import ActivityModal from '../components/ActivityModal';
@@ -12,7 +14,7 @@ import { search, subscribeToJobEvents, fetchMessages, saveMessages, type Message
 import {
   normalizeSearchQuery,
   computeCitationTooltipPosition, estimateCitationTooltipSize,
-  ABORT_TIMEOUT_MS,
+  CITATION_TOOLTIP_MAX_HEIGHT, ABORT_TIMEOUT_MS, FALLBACK_FAVICON,
   type CitationTooltipItem, type CitationTooltipPosition,
 } from '../lib/chat-utils';
 
@@ -27,6 +29,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
   const location = useLocation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const convId = id ?? '';
+  const isMobile = useMediaQuery('(max-width: 1023px)');
 
   const initialQuery = (location.state as { query?: string; mode?: 'quick' | 'deep' } | null)?.query ?? '';
   const initialMode = (location.state as { query?: string; mode?: 'quick' | 'deep' } | null)?.mode ?? getDefaultMode();
@@ -43,6 +46,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
   const [panelOpacity, setPanelOpacity] = useState(0);
   const [panelSources, setPanelSources] = useState<Source[]>([]);
   const panelFadeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [mobileSourcesOpen, setMobileSourcesOpen] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(-1);
   const [isSearching, setIsSearching] = useState(false);
   const editRef = useRef<HTMLParagraphElement>(null);
@@ -69,20 +73,21 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
 
     function updateActive() {
       if (!container) return;
-      const els = container.querySelectorAll<HTMLElement>('[data-msg-index]');
+      const els = container.querySelectorAll<HTMLElement>('[data-msg-index]:not([data-msg-type="user"])');
       if (els.length === 0) return;
-      const containerRect = container.getBoundingClientRect();
-      const cCenter = containerRect.top + containerRect.height / 2;
+      const cRect = container.getBoundingClientRect();
 
       let best = -1;
-      let bestDist = Infinity;
+      let bestRatio = 0;
       for (const el of els) {
         const idx = parseInt(el.getAttribute('data-msg-index') || '', 10);
         if (isNaN(idx)) continue;
-        const rect = el.getBoundingClientRect();
-        const eCenter = rect.top + rect.height / 2;
-        const dist = Math.abs(eCenter - cCenter);
-        if (dist < bestDist) { bestDist = dist; best = idx; }
+        const r = el.getBoundingClientRect();
+        const visibleTop = Math.max(r.top, cRect.top);
+        const visibleBottom = Math.min(r.bottom, cRect.bottom);
+        const visibleH = Math.max(0, visibleBottom - visibleTop);
+        const ratio = visibleH / r.height;
+        if (ratio > bestRatio) { bestRatio = ratio; best = idx; }
       }
       if (best >= 0) setActiveMsgIdx(best);
     }
@@ -554,7 +559,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
       {title && (
         <span data-ctx="title" style={{
-          position: 'absolute', top: 14, right: 28,
+          position: 'absolute', top: 14, right: 'var(--chat-pad-x, 28px)',
           fontSize: 13, fontWeight: 400, color: 'var(--athena-text-3)',
           whiteSpace: 'nowrap', opacity: 0.7,
         }}>
@@ -563,7 +568,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
       )}
 
       <div ref={scrollRef} style={{
-        flex: 1, overflow: 'hidden auto', padding: '14px 28px 0',
+        flex: 1, overflow: 'hidden auto', padding: `14px var(--chat-pad-x, 28px) 0`,
         maxWidth: 720, margin: '0 auto', width: '100%',
       }}>
         {messages.map((msg, i) => {
@@ -615,7 +620,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
         })}
       </div>
 
-      <div style={{ flexShrink: 0, padding: '12px 28px 20px', maxWidth: 720, margin: '0 auto', width: '100%' }}>
+      <div style={{ flexShrink: 0, padding: `12px var(--chat-pad-x, 28px) 20px`, maxWidth: 720, margin: '0 auto', width: '100%' }}>
         <SearchInput
           onSubmit={handleFollowUp}
           compact
@@ -626,14 +631,99 @@ autoFocus
         />
       </div>
 
-      <div style={{
-        position: 'fixed', top: '50%', right: 16,
-        transform: 'translateY(-50%)', width: 260,
-        display: 'flex', flexDirection: 'column', zIndex: 999,
+      {!isMobile && <div style={{
+        position: 'fixed', zIndex: 999,
         transition: 'opacity 200ms ease', opacity: panelOpacity,
+        top: '50%', right: 16, transform: 'translateY(-50%)', width: 260,
       }}>
         {panelSources.length > 0 && <SourcesPanel sources={panelSources} />}
-      </div>
+      </div>}
+
+      {isMobile && panelSources.length > 0 && (
+        <button
+          onClick={() => setMobileSourcesOpen(true)}
+          style={{
+            position: 'fixed', bottom: 80, right: 12, zIndex: 999,
+            display: 'flex', alignItems: 'center', gap: 6,
+            padding: '6px 10px 6px 8px',
+            background: 'var(--athena-bg)',
+            border: '0.5px solid var(--athena-border)',
+            borderRadius: 10,
+            cursor: 'pointer',
+            fontFamily: 'inherit',
+            fontSize: 10.5,
+            fontWeight: 500,
+            color: 'var(--athena-text-2)',
+            boxShadow: '0 2px 12px rgba(0,0,0,0.08)',
+            transition: 'transform 120ms var(--ease-out)',
+          }}
+          onMouseDown={(e) => { (e.currentTarget as HTMLElement).style.transform = 'scale(0.95)'; }}
+          onMouseUp={(e) => { (e.currentTarget as HTMLElement).style.transform = 'scale(1)'; }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            {panelSources.slice(0, 3).map((s, i) => (
+              <img key={i}
+                src={`https://www.google.com/s2/favicons?domain=${s.domain}&sz=16`}
+                width={14} height={14} loading="lazy"
+                onError={(e) => { (e.target as HTMLImageElement).src = FALLBACK_FAVICON; }}
+                style={{ borderRadius: 2, marginLeft: i === 0 ? 0 : -3, position: 'relative', zIndex: 3 - i }} />
+            ))}
+          </div>
+          <span>{panelSources.length}</span>
+        </button>
+      )}
+
+      {isMobile && mobileSourcesOpen && panelSources.length > 0 && (
+        <>
+          <div
+            onClick={() => setMobileSourcesOpen(false)}
+            style={{
+              position: 'fixed', inset: 0, zIndex: 998,
+              background: 'rgba(0,0,0,0.3)',
+              animation: 'fade-in 150ms ease both',
+            }}
+          />
+          <div
+            style={{
+              position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 999,
+              maxHeight: '50vh', borderRadius: '16px 16px 0 0',
+              background: 'var(--athena-bg)',
+              border: '0.5px solid var(--athena-border)',
+              borderBottom: 'none',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 -4px 24px rgba(0,0,0,0.08)',
+              animation: 'fade-in-up 200ms var(--ease-out) both',
+            }}
+          >
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '12px 16px 8px', flexShrink: 0,
+            }}>
+              <div style={{ width: 24 }} />
+              <div style={{
+                width: 32, height: 3, borderRadius: 2,
+                background: 'var(--athena-text-3)', opacity: 0.4, flexShrink: 0,
+              }} />
+              <button
+                onClick={() => setMobileSourcesOpen(false)}
+                style={{
+                  width: 24, height: 24, borderRadius: 6, border: 'none',
+                  background: 'none', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: 'var(--athena-text-3)', padding: 0,
+                }}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div style={{ flex: 1, minHeight: 0, padding: '0 4px 8px', display: 'flex', flexDirection: 'column' }}>
+              <SourcesPanel sources={panelSources} maxHeight="100%" />
+            </div>
+          </div>
+        </>
+      )}
 
       {(() => {
         const modalMsg = modalMsgIdx >= 0 && modalMsgIdx < messages.length

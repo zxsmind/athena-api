@@ -83,6 +83,23 @@
   --blur-glass-subtle: blur(24px) saturate(140%);
 }
 
+/* ===== RESPONSIVE ===== */
+:root {
+  --chat-pad-x: 28px;
+}
+
+@media (max-width: 1023px) {
+  :root {
+    --chat-pad-x: 20px;
+  }
+}
+
+@media (max-width: 767px) {
+  :root {
+    --chat-pad-x: 14px;
+  }
+}
+
 /* === GLOBAL RESET === */
 *, *::before, *::after { box-sizing: border-box; }
 
