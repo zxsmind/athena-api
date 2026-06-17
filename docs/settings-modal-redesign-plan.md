@@ -15,7 +15,7 @@ Make the settings modal easier to use by splitting the current single dense scre
 - LLM provider/model selection: `server/src/llm.ts`
 - Research engine: `server/src/engine.ts`
 - Search settings usage: `server/src/search.ts`
-- Persisted settings file: `backend/settings.json`
+- Persisted settings file: `server/data/settings.json`
 
 Current settings are flat:
 
@@ -124,7 +124,7 @@ Suggested additions:
 - `api`
 - `advanced`
 
-Migration must preserve existing `backend/settings.json`.
+Migration must preserve existing `server/data/settings.json`.
 
 ### Phase 3: Provider and Model Binding
 

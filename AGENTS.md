@@ -56,15 +56,9 @@ Proje, kişisel veya küçük ekip kullanımı için tasarlanmış, yerel ağda 
 | **native `fetch`** | Dış API çağrıları (LLM ve web sayfası içeriği) |
 | **Serper.dev** | Google arama sonuçları |
 
-### 2.3. Backend (Eski / Legacy)
+### 2.3. Backend (Eski / Legacy — Silindi)
 
-| Teknoloji | Kullanım |
-|-----------|----------|
-| **Python 3.10** + **FastAPI** | Eski prototip backend (kaynak dosyaları şu anda dizinde yok) |
-| **httpx** | Async HTTP istemcisi (eskiden) |
-| **Pydantic Settings** | `.env` tabanlı yapılandırma (eskiden) |
-
-> **Önemli:** Aktif backend Node.js/Express (`server/`) dizinidir. `backend/` dizini şu anda yalnızca `backend/settings.json` (ortak ayarlar), `backend/.env` (Python env kalıntısı) ve `backend/llm-errors.log` (log dosyası) ile `backend/__pycache__/main.cpython-310.pyc` (eski derleme kalıntısı) içerir. Eski `backend/main.py` ve `athena/` modül kaynak dosyaları mevcut çalışma alanında bulunmuyor. Yeni özellikler veya API'ler **Node.js backend** üzerine eklenir. Python kodu yalnızca açıkça istenirse değiştirilir.
+Eski Python FastAPI backend (`backend/` dizini) tamamen kaldırılmıştır, çünkü proje tamamen Node.js/Express (`server/`) üzerine taşınmıştır. Ayarlar `server/data/settings.json` dosyası ile Node.js backend tarafından doğrudan yönetilir. Python kodu bulunmamaktadır.
 
 ### 2.4. Akıllı Yönlendirme (Smart Routing)
 
@@ -82,7 +76,7 @@ Bu paket, LLM çağrılarında birden fazla provider/key/model kombinasyonu aras
 - **Sohbetler / Mesajlar**: `server/data/db.json` JSON dosyası (`db.ts`).
 - **Araştırma işleri (jobs)**: Bellek içi (in-memory), sunucu yeniden başlayınca silinir.
 - **Araştırma toplu işleri (batches)**: Bellek içi.
-- **Ayarlar**: `backend/settings.json` (v2 şema), `settings-store.ts` tarafından yüklenir ve normalize edilir.
+- **Ayarlar**: `server/data/settings.json` (v2 şema), `settings-store.ts` tarafından yüklenir ve normalize edilir.
 
 ---
 
@@ -149,12 +143,6 @@ ATHENA-001/
 │   ├── dist/                     # Derlenmiş çıktı
 │   ├── package.json
 │   └── tsconfig.json
-│
-├── backend/                      # Eski Python FastAPI backend (legacy) — kaynak dosyalar yok
-│   ├── __pycache__/              # Eski derleme kalıntısı (örn. main.cpython-310.pyc)
-│   ├── .env                      # Python backend env (gitignore)
-│   ├── llm-errors.log            # LLM hata logları
-│   └── settings.json             # Node.js backend ile paylaşılan ayarlar (gitignore'da)
 │
 ├── docs/                         # Proje dokümanları
 │   ├── API.md                    # API referansı (v2, Node backend)
@@ -257,7 +245,7 @@ Modlar:
 
 ### 5.4. Ayarlar Sistemi (`settings-store.ts` + `settings.ts`)
 
-Ayarlar `backend/settings.json` dosyasında saklanır. `settings-store.ts`:
+Ayarlar `server/data/settings.json` dosyasında saklanır. `settings-store.ts`:
 
 - Eski v1 ayarları otomatik v2'ye normalize eder.
 - 2 saniyelik cache tutar.
@@ -332,9 +320,9 @@ Detaylı dokümantasyon: `docs/API.md`.
 
 > Bu bölüm **kesinlikle** dikkate alınmalıdır.
 
-1. **API anahtarları asla frontend'e gitmez.** `backend/settings.json` içindeki `keys` dizileri `GET /settings` yanıtında döner, ancak UI `SettingsModal.tsx` içinde `maskSecret()` ile maskeleme yapar. Yine de anahtarlar istemciye ulaşır; bu bilerek yapılmış bir yerel uygulama tasarımıdır. Üretimde bu ayar endpoint'i daha fazla kısıtlanmalıdır.
-2. **`backend/settings.json` ve `server/data/db.json` commitlenmez.** `.gitignore` içinde belirtilidir. **Asla** bu dosyalara gerçek API anahtarı yazıp commit yapmayın. Eğer yanlışlıkla yapılırsa kullanıcıya hemen bildirin.
-3. **`.env` dosyaları gitignore'dadır.** Python backend için `backend/.env` var; Node.js backend `dotenv` kullanır ama şu anda aktif `.env` dosyası yoktur. Node.js backend `backend/settings.json`'den okur.
+1. **API anahtarları asla frontend'e gitmez.** `server/data/settings.json` içindeki `keys` dizileri `GET /settings` yanıtında döner, ancak UI `SettingsModal.tsx` içinde `maskSecret()` ile maskeleme yapar. Yine de anahtarlar istemciye ulaşır; bu bilerek yapılmış bir yerel uygulama tasarımıdır. Üretimde bu ayar endpoint'i daha fazla kısıtlanmalıdır.
+2. **`server/data/settings.json` ve `server/data/db.json` commitlenmez.** `.gitignore` içinde belirtilidir. **Asla** bu dosyalara gerçek API anahtarı yazıp commit yapmayın. Eğer yanlışlıkla yapılırsa kullanıcıya hemen bildirin.
+3. **`.env` dosyaları gitignore'dadır.** Node.js backend `dotenv` kullanır ama şu anda aktif `.env` dosyası yoktur.
 4. **Yeni provider entegrasyonu** yapılırken OpenAI-compatible chat completions formatına uygun olmalıdır. Gemini native formatı `normalizeGeminiResponse()` ile dönüştürülür.
 5. **Tool calling desteği olmayan modeller** `NO_TOOL_CALLING_MODELS` set'inde veya runtime'da `learnedNoToolCalling` set'inde tutulur; bu modeller araç çağrısı gerektiğinde atlanır.
 6. **Web sayfası çekme (`fetch_url`)**: Dış URL'lere istek atılır; `AbortError` dışındaki hatalar yutulur ve ajan bilgilendirilir. Zararlı içerikten kaçınmak için herhangi bir sanitizasyon yoktur; sonuçlar LLM'e gönderilir.
@@ -411,7 +399,7 @@ Eğer testler mevcut değilse veya değişiklik yeni bir modül etkiliyorsa, mev
 
 | Hata | Olası Neden | Çözüm |
 |------|-------------|-------|
-| `No LLM providers configured` | `backend/settings.json` eksik veya hiç provider `enabled` değil | Ayarlar modalından provider ve model ekleyin, anahtar girin. |
+| `No LLM providers configured` | `server/data/settings.json` eksik veya hiç provider `enabled` değil | Ayarlar modalından provider ve model ekleyin, anahtar girin. |
 | `No Serper API keys configured` | `serper.keys` boş | Ayarlar > Advanced > Serper Keys ekleyin. |
 | `429` sürekli | Rate limit veya smart routing blok | Farklı provider/model ekleyin, key sayısını artırın, bekleyin. |
 | Frontend `/api` 404 | Backend çalışmıyor veya proxy hatalı | `server/` çalıştırıldığından emin olun; `vite.config.ts` proxy kontrol edin. |

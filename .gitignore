@@ -25,7 +25,8 @@ dist-ssr
 
 # Runtime data (auto-generated, not committed)
 server/data/db.json
-backend/settings.json
+server/data/settings.json
+
 *.err
 *.png
 *.webp

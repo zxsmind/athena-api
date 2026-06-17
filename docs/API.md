@@ -33,7 +33,7 @@ http://localhost:3001
 
 In development, the Vite dev server (`http://localhost:5173`) proxies `/api/*` requests to the backend at `http://localhost:3001`, stripping the `/api` prefix. For example, a frontend `fetch('/api/search')` reaches `POST /search` on the backend.
 
-**Configuration** (`backend/settings.json`):
+**Configuration** (`server/data/settings.json`):
 
 | Field | Default | Description |
 |-------|---------|-------------|
@@ -44,7 +44,7 @@ In development, the Vite dev server (`http://localhost:5173`) proxies `/api/*` r
 
 ## Authentication
 
-Authentication is not implemented. The server is designed for local/trusted-network use. API keys for external services (Groq, Gemini, Serper) are stored in `backend/settings.json` and used server-side only — they are never exposed to clients.
+Authentication is not implemented. The server is designed for local/trusted-network use. API keys for external services (Groq, Gemini, Serper) are stored in `server/data/settings.json` and used server-side only — they are never exposed to clients.
 
 ---
 
