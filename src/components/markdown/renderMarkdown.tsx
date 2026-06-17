@@ -78,9 +78,9 @@ export function renderMarkdown(text: string, sources?: Source[], onDiagramClick?
       continue;
     }
 
-    if (/^#{1,3}\s/.test(trimmed)) {
+    if (/^#{1,6}\s/.test(trimmed)) {
       const level = trimmed.match(/^#+/)![0].length;
-      const Tag = level === 1 ? 'h2' : 'h3';
+      const Tag = `h${Math.min(level + 1, 6)}` as keyof JSX.IntrinsicElements;
       nodes.push(<Tag key={key++} dangerouslySetInnerHTML={{ __html: inlineMD(trimmed.replace(/^#+\s*/, ''), sources) }} />);
       i++;
       continue;
