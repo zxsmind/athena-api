@@ -100,7 +100,7 @@ function Layout() {
           onNewChat={handleNewChat}
           onRename={handleRename}
           onDelete={handleDelete}
-          onOpenSettings={open}
+          onOpenSettings={() => { open(); setSidebarOpen(false); }}
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
         />
