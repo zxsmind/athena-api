@@ -164,6 +164,7 @@ export function subscribeToJobEvents(
 ): () => void {
   const url = `${BASE}/research-jobs/${jobId}/events`;
   const source = new EventSource(url);
+  let settled = false;
 
   const eventTypes = ['status', 'step', 'token', 'sources', 'done', 'error'] as const;
   for (const type of eventTypes) {
@@ -171,6 +172,7 @@ export function subscribeToJobEvents(
       if (signal?.aborted) return;
       try {
         const data = JSON.parse(e.data) as ResearchJobEvent;
+        if (data.type === 'done' || data.type === 'error') settled = true;
         switch (data.type) {
           case 'token': callbacks.onToken?.(data.text); break;
           case 'step': callbacks.onStep?.(data.data); break;
@@ -184,6 +186,7 @@ export function subscribeToJobEvents(
   }
 
   source.onerror = () => {
+    if (settled) return;
     callbacks.onError?.('Connection lost. Reconnecting...');
   };
 

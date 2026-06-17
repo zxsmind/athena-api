@@ -156,7 +156,7 @@ function createSSEEndpoint<T extends { events: any[]; status: string }>(
         }
       }
       if (current.status === 'completed' || current.status === 'failed' || current.status === 'cancelled') {
-        res.end();
+        setTimeout(() => { try { res.end(); } catch {} }, 2000);
       }
     };
 
