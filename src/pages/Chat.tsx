@@ -49,6 +49,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
   const [panelSources, setPanelSources] = useState<Source[]>([]);
   const panelFadeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [mobileSourcesOpen, setMobileSourcesOpen] = useState(false);
+  const [mobileSourcesClosing, setMobileSourcesClosing] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState(-1);
   const [isSearching, setIsSearching] = useState(false);
   const editRef = useRef<HTMLParagraphElement>(null);
@@ -702,14 +703,15 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
         </button>
       )}
 
-      {isMobile && mobileSourcesOpen && panelSources.length > 0 && (
+      {isMobile && (mobileSourcesOpen || mobileSourcesClosing) && panelSources.length > 0 && (
         <>
           <div
-            onClick={() => setMobileSourcesOpen(false)}
+            onClick={() => { if (!mobileSourcesClosing) { setMobileSourcesClosing(true); setTimeout(() => { setMobileSourcesClosing(false); setMobileSourcesOpen(false); }, 200); } }}
             style={{
               position: 'fixed', inset: 0, zIndex: 998,
               background: 'rgba(0,0,0,0.3)',
-              animation: 'fade-in 150ms ease both',
+              animation: mobileSourcesClosing ? 'fade-in 150ms ease reverse both' : 'fade-in 150ms ease both',
+              pointerEvents: mobileSourcesClosing ? 'none' : 'auto',
             }}
           />
           <div
@@ -723,7 +725,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
               display: 'flex',
               flexDirection: 'column',
               boxShadow: '0 -4px 24px rgba(0,0,0,0.08)',
-              animation: 'fade-in-up 200ms var(--ease-out) both',
+              animation: mobileSourcesClosing ? 'fade-in-up 200ms var(--ease-out) reverse both' : 'fade-in-up 200ms var(--ease-out) both',
             }}
           >
             <div style={{
@@ -736,7 +738,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
                 background: 'var(--athena-text-3)', opacity: 0.4, flexShrink: 0,
               }} />
               <button
-                onClick={() => setMobileSourcesOpen(false)}
+                onClick={() => { if (!mobileSourcesClosing) { setMobileSourcesClosing(true); setTimeout(() => { setMobileSourcesClosing(false); setMobileSourcesOpen(false); }, 200); } }}
                 style={{
                   width: 24, height: 24, borderRadius: 6, border: 'none',
                   background: 'none', cursor: 'pointer',
