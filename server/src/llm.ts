@@ -1,7 +1,7 @@
 import { loadSettings } from './settings-store.js';
 import fs from 'fs';
 import path from 'path';
-import { createSmartRoutingEngine, type RouteCandidate, type CapacityObservation, type RouteLease } from '@mindbox/smart-routing-core';
+import { createSmartRoutingEngine } from '@mindbox/smart-routing-core';
 import { resolveTargets, modelSupportsTools, buildLLMRequestBody, learnedNoToolCalling } from './llm-utils.js';
 
 const LOG_FILE = path.resolve(process.cwd(), 'llm-errors.log');
@@ -18,35 +18,6 @@ let routingEngine = createSmartRoutingEngine();
 export function initLLM() {
   const snapshot = routingEngine ? routingEngine.getSnapshot() : null;
   routingEngine = createSmartRoutingEngine(snapshot);
-}
-
-function buildCandidates(targets: TargetReference[]): RouteCandidate[] {
-  return targets.map(t => ({
-    routeId: `${t.id}::${t.model}`,
-    sortKey: `${t.id}::${t.model}`,
-    rotationGroupId: t.id,
-    rotationIndex: 0,
-    scopes: [{ scopeId: t.id, limits: { rpm: null, tpm: null, rpd: null, budgetMode: 'requests' as const, budgetLimit: null } }],
-  }));
-}
-
-function recordRoutingOutcome(
-  lease: RouteLease | undefined,
-  kind: 'success' | 'rate-limit' | 'transient-failure' | 'auth-failure',
-  durationMs: number,
-  status?: number,
-  observations?: CapacityObservation[],
-) {
-  try {
-    if (!lease) return;
-    routingEngine.recordOutcome({
-      leaseId: lease.id,
-      kind,
-      settledAt: new Date().toISOString(),
-      detail: status ? `HTTP ${status} ${durationMs}ms` : `${durationMs}ms`,
-      observations: observations ?? [],
-    });
-  } catch { /* routing errors must not break request flow */ }
 }
 
 export type LLMRole = keyof import('./settings-store.js').ModelRouting;
@@ -192,9 +163,7 @@ async function tryProvider(
   opts: LLMOptions,
   body: Record<string, any>,
   label: string,
-  signal: AbortSignal,
   tried: string[],
-  lease?: RouteLease,
 ): Promise<{ data: any; provider: string; model: string } | null> {
   const model = target.model;
   if (opts.tools && !modelSupportsTools(model)) {
@@ -209,62 +178,50 @@ async function tryProvider(
     return null;
   }
 
-  const keyCycle = [...provider.keys];
-  let lastOutcome: { kind: 'rate-limit' | 'transient-failure' | 'auth-failure'; latencyMs: number; status?: number } | null = null;
-  const observations: CapacityObservation[] = [];
-  for (const apiKey of keyCycle) {
+  for (const apiKey of provider.keys) {
     const start = Date.now();
     try {
-      const res = await fetch(target.url, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, model, stream: false }),
-        signal,
-      });
+      const { signal, cleanup } = makeRequestSignal(30000, opts.signal);
+      try {
+        const res = await fetch(target.url, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body, model, stream: false }),
+          signal,
+        });
 
-      if (res.status === 429) {
-        const retryAfter = parseInt(res.headers.get('retry-after') || '5', 10);
-        tried.push(`${target.id}/${model} -> rate limited (retry after ${retryAfter}s, key ${apiKey.slice(-6)})`);
-        logError(label, target.url, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
-        observations.push({ scopeId: target.id, source: 'http-response', observedAt: new Date().toISOString(), retryAfterSeconds: retryAfter });
-        lastOutcome = { kind: 'rate-limit', latencyMs: Date.now() - start, status: 429 };
-        continue;
-      }
-      if (res.status === 401) {
-        tried.push(`${target.id}/${model} -> unauthorized (key ${apiKey.slice(-6)})`);
-        lastOutcome = { kind: 'auth-failure', latencyMs: Date.now() - start, status: 401 };
-        continue;
-      }
-      if (res.status === 400 || res.status === 404 || res.status === 413) {
-        const errBody = await res.text().catch(() => '');
-        tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-        logError(label, target.url, res.status, `Model: ${model}\n${errBody}`);
-        if (res.status === 400 && opts.tools) {
-          learnedNoToolCalling.add(model);
+        if (res.status === 429) {
+          tried.push(`${target.id}/${model} -> rate limited (key ${apiKey.slice(-6)})`);
+          logError(label, target.url, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
+          continue;
         }
-        recordRoutingOutcome(lease, 'transient-failure', Date.now() - start, res.status);
-        return null; // Hard error, skip remaining keys
-      }
-      if (!res.ok) {
-        tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-        lastOutcome = { kind: 'transient-failure', latencyMs: Date.now() - start, status: res.status };
-        continue;
-      }
+        if (res.status === 401) {
+          tried.push(`${target.id}/${model} -> unauthorized (key ${apiKey.slice(-6)})`);
+          continue;
+        }
+        if (res.status === 400 || res.status === 404 || res.status === 413) {
+          const errBody = await res.text().catch(() => '');
+          tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
+          logError(label, target.url, res.status, `Model: ${model}\n${errBody}`);
+          if (res.status === 400 && opts.tools) learnedNoToolCalling.add(model);
+          return null; // Hard error, skip remaining keys
+        }
+        if (!res.ok) {
+          tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
+          continue;
+        }
 
-      let data: any = await res.json();
-      if (target.id === 'gemini' || data.candidates) {
-        data = normalizeGeminiResponse(data, model);
+        let data: any = await res.json();
+        if (target.id === 'gemini' || data.candidates) {
+          data = normalizeGeminiResponse(data, model);
+        }
+        return { data, provider: target.id, model };
+      } finally {
+        cleanup();
       }
-      recordRoutingOutcome(lease, 'success', Date.now() - start, res.status);
-      return { data, provider: target.id, model };
-    } catch (err: any) {
-      if (err.name === 'AbortError') throw err;
-      tried.push(`${target.id}/${model} -> ${err.message}`);
-      lastOutcome = { kind: 'transient-failure', latencyMs: Date.now() - start };
+    } catch {
+      tried.push(`${target.id}/${model} -> request failed`);
     }
-  }
-  if (lastOutcome) {
-    recordRoutingOutcome(lease, lastOutcome.kind, lastOutcome.latencyMs, lastOutcome.status, observations.length > 0 ? observations : undefined);
   }
   return null;
 }
@@ -274,9 +231,7 @@ async function tryProviderStream(
   opts: LLMOptions,
   body: Record<string, any>,
   label: string,
-  signal: AbortSignal,
   tried: string[],
-  lease?: RouteLease,
 ): Promise<{ data: any; fullContent: string; provider: string; model: string } | null> {
   const model = target.model;
   if (opts.tools && !modelSupportsTools(model)) {
@@ -291,95 +246,84 @@ async function tryProviderStream(
     return null;
   }
 
-  const keyCycle = [...provider.keys];
-  let lastOutcome: { kind: 'rate-limit' | 'transient-failure' | 'auth-failure'; latencyMs: number; status?: number } | null = null;
-  const observations: CapacityObservation[] = [];
-  for (const apiKey of keyCycle) {
-    const start = Date.now();
+  for (const apiKey of provider.keys) {
     try {
-      const res = await fetch(target.url, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, model, stream: true }),
-        signal,
-      });
+      const { signal, cleanup } = makeRequestSignal(opts.tools ? 60000 : 30000, opts.signal);
+      try {
+        const res = await fetch(target.url, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...body, model, stream: true }),
+          signal,
+        });
 
-      if (res.status === 429) {
-        const retryAfter = parseInt(res.headers.get('retry-after') || '5', 10);
-        tried.push(`${target.id}/${model} -> rate limited (retry after ${retryAfter}s)`);
-        logError(label, target.url, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
-        observations.push({ scopeId: target.id, source: 'http-response', observedAt: new Date().toISOString(), retryAfterSeconds: retryAfter });
-        lastOutcome = { kind: 'rate-limit', latencyMs: Date.now() - start, status: 429 };
-        continue;
-      }
-      if (res.status === 401) {
-        tried.push(`${target.id}/${model} -> unauthorized`);
-        lastOutcome = { kind: 'auth-failure', latencyMs: Date.now() - start, status: 401 };
-        continue;
-      }
-      if (res.status === 400 || res.status === 404 || res.status === 413) {
-        const errBody = await res.text().catch(() => '');
-        tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-        logError(label, target.url, res.status, `Model: ${model}\n${errBody}`);
-        if (res.status === 400 && opts.tools) learnedNoToolCalling.add(model);
-        recordRoutingOutcome(lease, 'transient-failure', Date.now() - start, res.status);
-        return null;
-      }
-      if (!res.ok) {
-        tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-        lastOutcome = { kind: 'transient-failure', latencyMs: Date.now() - start, status: res.status };
-        continue;
-      }
+        if (res.status === 429) {
+          tried.push(`${target.id}/${model} -> rate limited (key ${apiKey.slice(-6)})`);
+          logError(label, target.url, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
+          continue;
+        }
+        if (res.status === 401) {
+          tried.push(`${target.id}/${model} -> unauthorized`);
+          continue;
+        }
+        if (res.status === 400 || res.status === 404 || res.status === 413) {
+          const errBody = await res.text().catch(() => '');
+          tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
+          logError(label, target.url, res.status, `Model: ${model}\n${errBody}`);
+          if (res.status === 400 && opts.tools) learnedNoToolCalling.add(model);
+          return null;
+        }
+        if (!res.ok) {
+          tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
+          continue;
+        }
 
-      let fullContent = '';
-      const stripper = new ThinkStripper(opts.onToken, { value: '' });
-      const isGemini = target.id === 'gemini';
+        let fullContent = '';
+        const stripper = new ThinkStripper(opts.onToken, { value: '' });
+        const isGemini = target.id === 'gemini';
 
-      if (!res.body) throw new Error('No response body');
+        if (!res.body) return null;
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || trimmed === 'data: [DONE]') continue;
-          if (trimmed.startsWith('data: ')) {
-            try {
-              const json = JSON.parse(trimmed.slice(6));
-              if (isGemini) {
-                const text = extractDeltaText(json);
-                if (text) { stripper.process(text); fullContent += text; }
-              } else {
-                const delta = json.choices?.[0]?.delta;
-                if (delta?.content) {
-                  const cleaned = stripThinkingTags(delta.content);
-                  if (cleaned) { stripper.process(cleaned); fullContent += cleaned; }
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed === 'data: [DONE]') continue;
+            if (trimmed.startsWith('data: ')) {
+              try {
+                const json = JSON.parse(trimmed.slice(6));
+                if (isGemini) {
+                  const text = extractDeltaText(json);
+                  if (text) { stripper.process(text); fullContent += text; }
+                } else {
+                  const delta = json.choices?.[0]?.delta;
+                  if (delta?.content) {
+                    const cleaned = stripThinkingTags(delta.content);
+                    if (cleaned) { stripper.process(cleaned); fullContent += cleaned; }
+                  }
                 }
-              }
-            } catch { /* skip malformed */ }
+              } catch { /* skip malformed */ }
+            }
           }
         }
-      }
-      stripper.flush();
+        stripper.flush();
 
-      recordRoutingOutcome(lease, 'success', Date.now() - start, 200);
-      return { data: null, fullContent, provider: target.id, model };
-    } catch (err: any) {
-      if (err.name === 'AbortError') throw err;
-      tried.push(`${target.id}/${model} -> ${err.message}`);
-      lastOutcome = { kind: 'transient-failure', latencyMs: Date.now() - start };
+        return { data: null, fullContent, provider: target.id, model };
+      } finally {
+        cleanup();
+      }
+    } catch {
+      tried.push(`${target.id}/${model} -> request failed`);
     }
-  }
-  if (lastOutcome) {
-    recordRoutingOutcome(lease, lastOutcome.kind, lastOutcome.latencyMs, lastOutcome.status, observations.length > 0 ? observations : undefined);
   }
   return null;
 }
@@ -399,54 +343,28 @@ export async function callLLM(opts: LLMOptions): Promise<LLMResult> {
   const label = opts.label || 'callLLM';
   const { uniqTargets, tried } = resolveTargets(opts.role, label, opts.signal);
   const body = buildLLMRequestBody(opts);
-  try {
-    const maxGlobalAttempts = opts.role === 'deep' ? 5 : 1;
-    for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
-      if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
-      for (const target of uniqTargets) {
-        const { signal, cleanup } = makeRequestSignal(30000, opts.signal);
-        let lease: RouteLease | undefined;
-        try {
-          const candidate = buildCandidates([target])[0];
-          lease = routingEngine.selectRoute({ candidates: [candidate] })?.lease;
-        } catch { /* routing error — ignore */ }
-        try {
-          const result = await tryProvider(target, opts, body, label, signal, tried, lease);
-          if (result) return result;
-        } finally {
-          cleanup();
-        }
-      }
+  const maxGlobalAttempts = opts.role === 'deep' ? 5 : 1;
+  for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
+    if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
+    for (const target of uniqTargets) {
+      const result = await tryProvider(target, opts, body, label, tried);
+      if (result) return result;
     }
-    throw new Error(`${label} — all targets failed after ${maxGlobalAttempts} global attempt(s).\n${tried.map(r => `  • ${r}`).join('\n')}`);
-  } finally {
   }
+  throw new Error(`${label} — all targets failed after ${maxGlobalAttempts} global attempt(s).\n${tried.map(r => `  • ${r}`).join('\n')}`);
 }
 
 export async function callLLMStream(opts: LLMOptions): Promise<LLMResult> {
   const label = opts.label || 'callLLMStream';
   const { uniqTargets, tried } = resolveTargets(opts.role, label, opts.signal);
   const body = buildLLMRequestBody(opts);
-  try {
-    const maxGlobalAttempts = opts.role === 'deep' ? 5 : 1;
-    for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
-      if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
-      for (const target of uniqTargets) {
-        const { signal, cleanup } = makeRequestSignal(opts.tools ? 60000 : 30000, opts.signal);
-        let lease: RouteLease | undefined;
-        try {
-          const candidate = buildCandidates([target])[0];
-          lease = routingEngine.selectRoute({ candidates: [candidate] })?.lease;
-        } catch { /* routing error — ignore */ }
-        try {
-          const result = await tryProviderStream(target, opts, body, label, signal, tried, lease);
-          if (result) return result;
-        } finally {
-          cleanup();
-        }
-      }
+  const maxGlobalAttempts = opts.role === 'deep' ? 5 : 1;
+  for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
+    if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
+    for (const target of uniqTargets) {
+      const result = await tryProviderStream(target, opts, body, label, tried);
+      if (result) return result;
     }
-    throw new Error(`${label} — all targets failed after ${maxGlobalAttempts} global attempt(s).\n${tried.map(r => `  • ${r}`).join('\n')}`);
-  } finally {
   }
+  throw new Error(`${label} — all targets failed after ${maxGlobalAttempts} global attempt(s).\n${tried.map(r => `  • ${r}`).join('\n')}`);
 }
