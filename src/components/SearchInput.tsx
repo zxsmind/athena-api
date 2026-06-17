@@ -220,8 +220,8 @@ export default function SearchInput({
       )}
 
       <div className="glass-input" style={{
-        display: 'flex', alignItems: 'center', gap: 10,
-        padding: compact ? '10px 16px' : '13px 18px',
+        display: 'flex', alignItems: 'center', gap: compact ? 8 : 10,
+        padding: compact ? '8px 14px' : '13px 18px',
         borderRadius: showSuggestions ? (dropdownUp ? '0 0 16px 16px' : '16px 16px 0 0') : 16,
         borderTopColor: showSuggestions && dropdownUp ? 'transparent' : undefined,
         borderBottomColor: showSuggestions && !dropdownUp ? 'transparent' : undefined,
@@ -275,7 +275,7 @@ export default function SearchInput({
 
         <button onClick={() => handleSubmit()} disabled={!value.trim() || disabled}
           style={{
-            width: compact ? 30 : 34, height: compact ? 30 : 34, borderRadius: 10, border: 'none',
+            width: compact ? 30 : 34, height: compact ? 30 : 34, borderRadius: compact ? 8 : 10, border: 'none',
             cursor: (!value.trim() || disabled) ? 'default' : 'pointer',
             background: (!value.trim() || disabled) ? 'var(--athena-text-3)' : 'var(--athena-text)',
             color: 'var(--athena-bg)', display: 'flex', alignItems: 'center', justifyContent: 'center',
