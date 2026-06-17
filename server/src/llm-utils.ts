@@ -11,7 +11,7 @@ export function resolveTargets(
 
   if (optsSignal?.aborted) throw new Error(`${label} cancelled`);
 
-  const targetList = [...roleTargets, ...Array.from(iterateProviderReferences())];
+  const targetList = roleTargets.length > 0 ? roleTargets : Array.from(iterateProviderReferences());
 
   const uniqTargets: TargetReference[] = [];
   const seenTargets = new Set<string>();

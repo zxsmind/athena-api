@@ -26,7 +26,7 @@ function buildCandidates(targets: TargetReference[]): RouteCandidate[] {
     sortKey: `${t.id}::${t.model}`,
     rotationGroupId: t.id,
     rotationIndex: 0,
-    scopes: [{ scopeId: 'llm', limits: { rpm: null, tpm: null, rpd: null, budgetMode: 'requests' as const, budgetLimit: null } }],
+    scopes: [{ scopeId: t.id, limits: { rpm: null, tpm: null, rpd: null, budgetMode: 'requests' as const, budgetLimit: null } }],
   }));
 }
 
@@ -226,7 +226,7 @@ async function tryProvider(
         const retryAfter = parseInt(res.headers.get('retry-after') || '5', 10);
         tried.push(`${target.id}/${model} -> rate limited (retry after ${retryAfter}s, key ${apiKey.slice(-6)})`);
         logError(label, target.url, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
-        observations.push({ scopeId: 'llm', source: 'http-response', observedAt: new Date().toISOString(), retryAfterSeconds: retryAfter });
+        observations.push({ scopeId: target.id, source: 'http-response', observedAt: new Date().toISOString(), retryAfterSeconds: retryAfter });
         lastOutcome = { kind: 'rate-limit', latencyMs: Date.now() - start, status: 429 };
         continue;
       }
@@ -308,7 +308,7 @@ async function tryProviderStream(
         const retryAfter = parseInt(res.headers.get('retry-after') || '5', 10);
         tried.push(`${target.id}/${model} -> rate limited (retry after ${retryAfter}s)`);
         logError(label, target.url, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
-        observations.push({ scopeId: 'llm', source: 'http-response', observedAt: new Date().toISOString(), retryAfterSeconds: retryAfter });
+        observations.push({ scopeId: target.id, source: 'http-response', observedAt: new Date().toISOString(), retryAfterSeconds: retryAfter });
         lastOutcome = { kind: 'rate-limit', latencyMs: Date.now() - start, status: 429 };
         continue;
       }
