@@ -282,7 +282,10 @@ async function generateTitle(conversationId: string, query: string) {
       role: 'title',
       label: 'title-gen',
     });
-    const title = (data as { choices: { message: { content: string } }[] } | undefined)?.choices?.[0]?.message?.content?.trim().replace(/^["'\s]+|["'\s]+$/g, '') || query;
+    const result = data as { choices?: { message?: { content?: string } }[]; model?: string } | undefined;
+    const rawContent = result?.choices?.[0]?.message?.content;
+    console.log(`[title-gen] response model=${result?.model} content=${JSON.stringify(rawContent)}`);
+    const title = rawContent?.trim().replace(/^["'\s]+|["'\s]+$/g, '') || query;
     if (title) {
       await updateConversationTitle(conversationId, title.slice(0, 60));
     }
