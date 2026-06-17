@@ -235,6 +235,9 @@ async function toolCallingRound(
     }
   }
 
+  const finalStep: AgentStep = { type: 'answer', context: JSON.stringify(messages, null, 2) };
+  steps.push(finalStep);
+  onEvent({ type: 'step', data: finalStep });
   messages.push({ role: msg.role, content: msg.content });
   return false;
 }

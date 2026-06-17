@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
+import fs from 'fs';
 import { getPublicConfig, getPort } from './config.js';
 import { callLLM, callLLMStream } from './llm.js';
 import { getSettings, saveSettings } from './settings.js';
@@ -60,8 +62,9 @@ function applyAPISettingsFromStore() {
 
 const app = express();
 
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:5174,http://localhost:5175').split(',');
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175'],
+  origin: allowedOrigins,
   credentials: true,
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -568,6 +571,17 @@ app.post('/test-llm', async (req, res) => {
 });
 
 applyAPISettingsFromStore();
+
+/* ── Serve built frontend (dist/) in production ── */
+const distPath = path.resolve('../dist');
+if (fs.existsSync(distPath)) {
+  app.use(express.static(distPath));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+  console.log(`[static] serving frontend from ${distPath}`);
+}
+
 app.listen(getPort(), () => {
   console.log(`ATHENA-001 server running on http://localhost:${getPort()}`);
 });

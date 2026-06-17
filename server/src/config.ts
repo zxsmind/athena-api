@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { loadSettings, getEnabledProviders } from './settings-store.js';
 
 export function getPublicConfig() {
@@ -17,7 +18,7 @@ export const config = {
 let _port = 3001;
 export function initPort() {
   const store = loadSettings();
-  _port = store.port || 3001;
+  _port = parseInt(process.env.PORT || '', 10) || store.port || 3001;
 }
 
 export function getPort(): number {

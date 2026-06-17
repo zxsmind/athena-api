@@ -111,7 +111,7 @@ export interface ResearchBatchRecord {
   items: ResearchBatchItem[];
 }
 
-const BASE = '/api';
+const BASE = import.meta.env.VITE_SERVER_URL || '/api';
 
 async function checkResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {

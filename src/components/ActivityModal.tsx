@@ -45,6 +45,7 @@ const STEP_LABELS: Record<string, string> = {
   'deep-analyze': 'Deep Analysis',
   'follow-up': 'Follow-up',
   webpage: 'Page',
+  answer: 'Answer',
 };
 
 function stepDisplay(step: AgentStep): { icon: string; label: string } {
