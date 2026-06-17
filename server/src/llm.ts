@@ -137,7 +137,14 @@ const GEMINI_CONTENT_FIELDS = ['content', 'text', 'message.content'];
 function extractDeltaText(delta: unknown): string {
   if (!delta) return '';
   const d = delta as Record<string, unknown>;
-  if (d.reasoning_content || d.reasoning || d.thought) return '';
+  if (d.reasoning_content || d.reasoning || d.thought) {
+    // only skip if there's no content at all (thought-only delta)
+    for (const path of GEMINI_CONTENT_FIELDS) {
+      const val = path.split('.').reduce((o: Record<string, unknown> | undefined, k: string) => o?.[k] as Record<string, unknown> | undefined, d);
+      if (val) return String(val);
+    }
+    return '';
+  }
   for (const path of GEMINI_CONTENT_FIELDS) {
     const val = path.split('.').reduce((o: Record<string, unknown> | undefined, k: string) => o?.[k] as Record<string, unknown> | undefined, d);
     if (val) return String(val);
@@ -175,6 +182,12 @@ async function tryProvider(
     return null;
   }
 
+  const reqBody: Record<string, unknown> = { ...body, model, stream: false };
+  if (provider.reasoningEffort) reqBody.reasoning_effort = provider.reasoningEffort;
+  if (target.id === 'gemini' && provider.includeThoughts !== undefined) {
+    reqBody.thinkingConfig = { includeThoughts: provider.includeThoughts };
+  }
+
   for (const apiKey of provider.keys) {
     try {
       const { signal, cleanup } = makeRequestSignal(30000, opts.signal);
@@ -182,7 +195,7 @@ async function tryProvider(
         const res = await fetch(target.url, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...body, model, stream: false }),
+          body: JSON.stringify(reqBody),
           signal,
         });
 
@@ -203,7 +216,9 @@ async function tryProvider(
           return null; // Hard error, skip remaining keys
         }
         if (!res.ok) {
+          const errBody = await res.text().catch(() => '');
           tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
+          logError(label, target.url, res.status, `Model: ${model}\n${errBody}`);
           continue;
         }
 
@@ -215,8 +230,9 @@ async function tryProvider(
       } finally {
         cleanup();
       }
-    } catch {
+    } catch (err: unknown) {
       tried.push(`${target.id}/${model} -> request failed`);
+      logError(label, target.url, 0, `Model: ${model}\n${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return null;
@@ -242,6 +258,12 @@ async function tryProviderStream(
     return null;
   }
 
+  const reqBody: Record<string, unknown> = { ...body, model, stream: true };
+  if (provider.reasoningEffort) reqBody.reasoning_effort = provider.reasoningEffort;
+  if (target.id === 'gemini' && provider.includeThoughts !== undefined) {
+    reqBody.thinkingConfig = { includeThoughts: provider.includeThoughts };
+  }
+
   for (const apiKey of provider.keys) {
     try {
       const { signal, cleanup } = makeRequestSignal(opts.tools ? 60000 : 30000, opts.signal);
@@ -249,7 +271,7 @@ async function tryProviderStream(
         const res = await fetch(target.url, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ...body, model, stream: true }),
+          body: JSON.stringify(reqBody),
           signal,
         });
 
@@ -270,7 +292,9 @@ async function tryProviderStream(
           return null;
         }
         if (!res.ok) {
+          const errBody = await res.text().catch(() => '');
           tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
+          logError(label, target.url, res.status, `Model: ${model}\n${errBody}`);
           continue;
         }
 
@@ -317,8 +341,9 @@ async function tryProviderStream(
       } finally {
         cleanup();
       }
-    } catch {
+    } catch (err: unknown) {
       tried.push(`${target.id}/${model} -> request failed`);
+      logError(label, target.url, 0, `Model: ${model}\n${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return null;

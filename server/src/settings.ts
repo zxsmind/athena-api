@@ -25,6 +25,8 @@ export interface ProviderConfig {
   models: string[];
   url: string;
   label: string;
+  reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
+  includeThoughts?: boolean;
 }
 
 export interface ApiSettingsData {
@@ -74,6 +76,8 @@ export function getSettings(): SettingsData {
       models: p.models,
       url: p.url,
       label: providerLabels[id] || id,
+      reasoningEffort: p.reasoningEffort,
+      includeThoughts: p.includeThoughts,
     };
   }
 
@@ -119,6 +123,8 @@ export function saveSettings(data: SettingsData): void {
       models: p.models,
       url: p.url,
       name: p.name,
+      reasoningEffort: p.reasoningEffort,
+      includeThoughts: p.includeThoughts,
     };
   }
 

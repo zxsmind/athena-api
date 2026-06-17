@@ -276,9 +276,12 @@ async function generateTitle(conversationId: string, query: string) {
 
   try {
     const { data } = await callLLM({
-      messages: [{ role: 'user', content: prompt }],
+      messages: [
+        { role: 'system', content: 'You generate concise titles.' },
+        { role: 'user', content: prompt },
+      ],
       temperature: 0.3,
-      maxTokens: 30,
+      maxTokens: 1000,
       role: 'title',
       label: 'title-gen',
     });
