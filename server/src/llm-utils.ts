@@ -88,21 +88,4 @@ export function buildLLMRequestBody(opts: LLMOptions): Record<string, any> {
   return body;
 }
 
-export function makeRequestSignal(timeoutMs: number = 30000, signal?: AbortSignal): AbortSignal {
-  if (signal) return signal;
-  return AbortSignal.timeout(timeoutMs);
-}
 
-export function recordOutcome(
-  target: TargetReference,
-  success: boolean,
-  durationMs: number,
-  status?: number,
-) {
-  try {
-    /* This is a no-op stub — calls to the smart routing engine were removed
-       because the engine instance lives in llm.ts and we cannot import it
-       here without creating a circular dependency. Outcomes are tracked
-       inline in tryProvider/tryProviderStream instead. */
-  } catch { /* silently fail */ }
-}
