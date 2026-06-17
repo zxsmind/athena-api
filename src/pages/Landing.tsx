@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react';
+import { useState } from 'react';
 import SearchInput from '../components/SearchInput';
 import { getDefaultMode } from '../hooks/useDefaultMode';
 
@@ -345,12 +345,11 @@ export default function Landing({ onSearch }: LandingProps) {
   const defaultMode = getDefaultMode();
   const [exiting, setExiting] = useState(false);
   const [shatter, setShatter] = useState(0);
-  const filterId = useRef(`shatter-${Math.random().toString(36).slice(2, 9)}`).current;
-
-  const headline = useMemo(() => HEADLINES[Math.floor(Math.random() * HEADLINES.length)], []);
-  const subtitle = useMemo(() => SUBTITLES[Math.floor(Math.random() * SUBTITLES.length)], []);
-  const footer = useMemo(() => FOOTER_QUOTES[Math.floor(Math.random() * FOOTER_QUOTES.length)], []);
-  const placeholder = useMemo(() => PLACEHOLDERS[Math.floor(Math.random() * PLACEHOLDERS.length)], []);
+  const [filterId] = useState(() => `shatter-${Math.random().toString(36).slice(2, 9)}`);
+  const [headline] = useState(() => HEADLINES[Math.floor(Math.random() * HEADLINES.length)]);
+  const [subtitle] = useState(() => SUBTITLES[Math.floor(Math.random() * SUBTITLES.length)]);
+  const [footer] = useState(() => FOOTER_QUOTES[Math.floor(Math.random() * FOOTER_QUOTES.length)]);
+  const [placeholder] = useState(() => PLACEHOLDERS[Math.floor(Math.random() * PLACEHOLDERS.length)]);
 
   const handleSearch = (query: string, mode?: 'quick' | 'deep') => {
     setExiting(true);

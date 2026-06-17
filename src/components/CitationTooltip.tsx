@@ -1,5 +1,5 @@
 import type { CitationTooltipItem, CitationTooltipPosition } from '../lib/chat-utils';
-import { FAVICON_URL, FALLBACK_FAVICON } from '../lib/chat-utils';
+import { FALLBACK_FAVICON } from '../lib/chat-utils';
 
 export default function CitationTooltip({
   items,

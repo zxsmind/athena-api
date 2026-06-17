@@ -3,14 +3,20 @@ import { Section, InputRow, ListSection, InfoPanel, CapabilityGrid } from './set
 import { ModelRouteEditor } from './settings/ModelEditor';
 import { PromptDialog } from './settings/PromptDialog';
 import type { SettingsData, ModelRouting, ModelRoute, ProviderConfig, TabKey } from './settings/types';
-import { PROVIDER_KEYS, PROVIDER_LABELS, ROLE_LABELS, TABS } from './settings/types';
+import { PROVIDER_KEYS, ROLE_LABELS, TABS } from './settings/types';
 
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
 }
 
-const SETTINGS_ICONS: Record<string, any> = {};
+const SETTINGS_ICONS: Record<string, React.ReactNode> = {
+  general: <span>⚙</span>,
+  providers: <span>🔑</span>,
+  models: <span>💻</span>,
+  advanced: <span>⚡</span>,
+  api: <span>🖥</span>,
+};
 
 export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [data, setData] = useState<SettingsData | null>(null);
@@ -39,8 +45,8 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
       });
       if (!res.ok) throw new Error('Save failed');
       setDirty(false); setMessage(null);
-    } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Save failed' });
+    } catch (err: unknown) {
+      setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Save failed' });
     } finally { setSaving(false); }
   }, []);
 

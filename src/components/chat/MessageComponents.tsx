@@ -4,7 +4,7 @@ import { renderMarkdown } from '../markdown';
 import SearchItem from '../SearchItem';
 import type { Source, Message } from '../../lib/api';
 
-function SourcesBadge({ sources, onCopy, copied }: { sources: Source[]; onCopy: () => void; copied: boolean }) {
+function SourcesBadge({ sources }: { sources: Source[] }) {
   return (
     <div style={{
       display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -74,9 +74,9 @@ function ActionButton({ onClick, children, title }: { onClick: () => void; child
 }
 
 export function MessageUser({
-  msg, i, editIndex, editText, editRef, onEditStart, onEditSave, onEditCancel, onEditInput, onEditKeyDown,
+  msg, i, editIndex, editRef, onEditStart, onEditSave, onEditCancel, onEditInput, onEditKeyDown,
 }: {
-  msg: Message; i: number; editIndex: number; editText: string;
+  msg: Message; i: number; editIndex: number;
   editRef: React.RefObject<HTMLParagraphElement | null>;
   onEditStart: () => void; onEditSave: () => void; onEditCancel: () => void;
   onEditInput: (text: string) => void; onEditKeyDown: (e: React.KeyboardEvent) => void;
@@ -135,11 +135,11 @@ export function MessageUser({
 }
 
 export function MessageLoading({
-  msg, i, messages, liveMs, displayMs, onDiagramClick, onOpenModal, onRetry,
+  msg, i, messages, displayMs, onDiagramClick, onOpenModal,
 }: {
-  msg: Message; i: number; messages: Message[]; liveMs: number;
+  msg: Message; i: number; messages: Message[];
   displayMs: number; onDiagramClick: (svg: string) => void;
-  onOpenModal: () => void; onRetry: () => void;
+  onOpenModal: () => void;
 }) {
   return (
     <>
@@ -184,9 +184,9 @@ export function MessageError({ msg, onRetry }: { msg: Message; onRetry: () => vo
 }
 
 export function MessageComplete({
-  msg, i, messages, liveMs, displayMs, copiedIndex, onDiagramClick, onCopy, onOpenModal, onRetry,
+  msg, i, messages, displayMs, copiedIndex, onDiagramClick, onCopy, onOpenModal, onRetry,
 }: {
-  msg: Message; i: number; messages: Message[]; liveMs: number;
+  msg: Message; i: number; messages: Message[];
   displayMs: number; copiedIndex: number; onDiagramClick: (svg: string) => void;
   onCopy: () => void; onOpenModal: () => void; onRetry: () => void;
 }) {
@@ -198,11 +198,7 @@ export function MessageComplete({
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, opacity: 0, transition: 'opacity 0.15s' }}
         className="footer-actions">
         {msg.data && msg.data.sources.length > 0 && (
-          <SourcesBadge
-            sources={msg.data.sources}
-            onCopy={onCopy}
-            copied={copiedIndex === i}
-          />
+          <SourcesBadge sources={msg.data.sources} />
         )}
         <ActionButton onClick={onCopy}>
           {copiedIndex === i ? <Check size={11} /> : <Copy size={11} />}

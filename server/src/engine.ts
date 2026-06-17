@@ -1,18 +1,25 @@
-import { callLLM, type LLMRole } from './llm.js';
+import { callLLM, stripThinkingTags, type LLMRole } from './llm.js';
 import type { LLMResult } from './llm.js';
 import { fetchResults, fetchPageContent } from './search.js';
-import type { SearchResponse, Source, AgentStep } from './schemas.js';
+import type { Source, AgentStep } from './schemas.js';
 import { SYSTEM_PROMPT, DEEP_SYSTEM_PROMPT } from './agent/prompts.js';
 import { loadSettings } from './settings-store.js';
 import { SEARCH_TOOL, FETCH_URL_TOOL, type EngineEvent, type ResearchBudgetState, type ResearchRunOptions, type SourceWithIndex } from './engine/types.js';
-import { temperatureForRound, sanitizeHistory, domain, normalizeContent } from './engine/history.js';
+import { temperatureForRound, sanitizeHistory, domain } from './engine/history.js';
 import { parseInlineToolCall } from './engine/tool-parser.js';
 
 export type { EngineEvent, ResearchRunOptions, ResearchBudgetState } from './engine/types.js';
 
+interface LLMMessage {
+  role: string;
+  content?: string | null;
+  tool_calls?: unknown;
+  tool_call_id?: string;
+}
+
 /* ── Core tool-calling round ── */
 async function toolCallingRound(
-  messages: any[], allSources: Map<string, SourceWithIndex>,
+  messages: LLMMessage[], allSources: Map<string, SourceWithIndex>,
   steps: AgentStep[], round: number, onEvent: (ev: EngineEvent) => void,
   budget: ResearchBudgetState, onProgress?: (state: ResearchBudgetState) => void,
   signal?: AbortSignal, role?: LLMRole,
@@ -43,14 +50,16 @@ async function toolCallingRound(
       onModelSelected: (selectedModel) => { step.model = selectedModel; onEvent({ type: 'step', data: step }); },
       label: `tool-round-${round}`,
     });
-  } catch (err: any) {
-    onEvent({ type: 'error', message: err.message || 'No available model responded' });
+  } catch (err: unknown) {
+    onEvent({ type: 'error', message: (err as Error).message || 'No available model responded' });
     return false;
   }
 
-  const { data, model, provider } = llmResult;
-  const choice = data!.choices[0];
+  const { data, model } = llmResult;
+  const d = data as { choices: { message: { role: string; content: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[]; reasoning?: string }; finish_reason: string }[] } | undefined;
+  const choice = d!.choices[0];
   const msg = choice.message;
+  if (msg.content) msg.content = stripThinkingTags(msg.content);
   const finish = choice.finish_reason;
   const currentModel = model;
 
@@ -64,12 +73,12 @@ async function toolCallingRound(
     const searchTasks: { tcId: string; query: string; type: string; stepIndex: number }[] = [];
     const fetchTasks: { tcId: string; url: string; stepIndex: number }[] = [];
     for (const tc of msg.tool_calls) {
-      let args: any;
+      let args: Record<string, unknown>;
       try { args = JSON.parse(tc.function.arguments); } catch { continue; }
       const tcId = tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
       if (tc.function.name === 'fetch_url') {
-        const url = (args.url || '').trim();
+        const url = String(args.url || '').trim();
         if (url) {
           const s: AgentStep = { type: 'webpage', query: url, model: currentModel };
           const stepIndex = steps.length;
@@ -80,7 +89,7 @@ async function toolCallingRound(
       }
 
       const qs = args.queries || args.search_query || args.query || args.searchquery || args.q;
-      const searchType = args.type || 'search';
+      const searchType = String(args.type || 'search');
       if (Array.isArray(qs)) {
         for (const q of qs) {
           if (typeof q === 'string' && q.trim()) {
@@ -118,7 +127,8 @@ async function toolCallingRound(
 
     const searchTimestamps = allowedSearchTasks.map(() => performance.now());
     const fetchTimestamps = allowedFetchTasks.map(() => performance.now());
-    const resultsByTcId = new Map<string, any[]>();
+    interface IndexedResult { id: number | null; url: string; title: string; snippet: string | null; source_index: number; date: string | null; }
+    const resultsByTcId = new Map<string, IndexedResult[]>();
 
     const searchPromises = allowedSearchTasks.map((s, i) =>
       fetchResults(s.query, s.type, signal, role === 'instant' ? 5 : undefined).then(({ results }) => {
@@ -133,7 +143,7 @@ async function toolCallingRound(
         }
         if (!resultsByTcId.has(s.tcId)) resultsByTcId.set(s.tcId, []);
         resultsByTcId.get(s.tcId)!.push(...results.map(r => ({ ...r, source_index: allSources.get(r.url)?.source_index ?? 0 })));
-        onEvent({ type: 'sources', sources: Array.from(allSources.values()).map(({ source_index, ...s }) => s as Source) });
+        onEvent({ type: 'sources', sources: Array.from(allSources.values()).map(s => s as Source) });
       })
     );
 
@@ -154,7 +164,7 @@ async function toolCallingRound(
         const idx = allSources.get(f.url)?.source_index ?? 0;
         if (!resultsByTcId.has(f.tcId)) resultsByTcId.set(f.tcId, []);
         resultsByTcId.get(f.tcId)!.push({ id: idx, title: title || f.url, url: f.url, source_index: idx, snippet: content.slice(0, 3000), date: null });
-        onEvent({ type: 'sources', sources: Array.from(allSources.values()).map(({ source_index, ...s }) => s as Source) });
+        onEvent({ type: 'sources', sources: Array.from(allSources.values()).map(s => s as Source) });
       })
     );
 
@@ -162,11 +172,13 @@ async function toolCallingRound(
 
     for (const [tcId, indexedResults] of resultsByTcId.entries()) {
       const seenUrls = new Set<string>();
-      const dedupedResults = indexedResults.filter((r: any) => { if (seenUrls.has(r.url)) return false; seenUrls.add(r.url); return true; });
-      const textList = dedupedResults.map((r: any, index: number) =>
+      const dedupedResults = indexedResults.filter((r) => { if (seenUrls.has(r.url)) return false; seenUrls.add(r.url); return true; });
+      const textList = dedupedResults.map((r, index: number) =>
         `${index + 1}. [Source #${r.source_index}] Title: ${r.title}\nURL: ${r.url}\nSnippet: ${r.snippet || 'No content'}`
       ).join('\n\n');
-      messages.push({ role: 'tool', tool_call_id: tcId, content: textList });
+      const remaining = Math.max(0, budget.remainingCredits - allowedCount);
+      const budgetNote = remaining > 0 ? `\n\n[You have ${remaining} search/fetch credits remaining for this research. Use them wisely.]` : '\n\n[Your research budget for this query is exhausted. Write your final answer now using the information above.]';
+      messages.push({ role: 'tool', tool_call_id: tcId, content: textList + budgetNote });
     }
 
     budget.usedCredits += allowedCount;
@@ -184,12 +196,6 @@ async function toolCallingRound(
     if (allQueries.length > 0) {
       console.log(`[inline tool] parsed ${allQueries.length} query(s):`, allQueries);
       messages.push({ role: msg.role, content: content.replace(inlineCall.raw, '').trim() || null });
-
-      if (budget.remainingCredits <= 0) {
-        budget.exhausted = true; onProgress?.(budget);
-        onEvent({ type: 'error', message: 'Research budget exhausted. Cannot execute more inline searches.' });
-        return false;
-      }
 
       const allowedQueries = allQueries.slice(0, budget.remainingCredits);
       if (allowedQueries.length < allQueries.length) budget.exhausted = true;
@@ -224,13 +230,15 @@ async function toolCallingRound(
         const idx = allSources.get(r.url)?.source_index ?? 0;
         return `${index + 1}. [Source #${idx}] Title: ${r.title}\nURL: ${r.url}\nSnippet: ${r.snippet || 'No content'}`;
       }).join('\n\n');
-      messages.push({ role: 'tool', tool_call_id: tcId, content: textList });
+      const rem = Math.max(0, budget.remainingCredits - allowedQueries.length);
+      const note = rem > 0 ? `\n\n[You have ${rem} search/fetch credits remaining.]` : '\n\n[Your research budget is exhausted. Write your final answer now.]';
+      messages.push({ role: 'tool', tool_call_id: tcId, content: textList + note });
 
       budget.usedCredits += allowedQueries.length;
       budget.remainingCredits -= allowedQueries.length;
       if (budget.remainingCredits <= 0) budget.exhausted = true;
       onProgress?.(budget);
-      onEvent({ type: 'sources', sources: Array.from(allSources.values()).map(({ source_index, ...s }) => s as Source) });
+      onEvent({ type: 'sources', sources: Array.from(allSources.values()).map(s => s as Source) });
       return true;
     }
   }
@@ -266,40 +274,65 @@ export async function agenticResearchStream(
   const now = new Date();
   const today = `${now.toLocaleDateString('en-US', { month: 'long' })} ${now.getDate()}, ${now.getFullYear()}`;
   const systemPrompt = (mode === 'deep' ? DEEP_SYSTEM_PROMPT : SYSTEM_PROMPT) + `\n\n**Today's date:** ${today}.`;
-  const messages: any[] = [{ role: 'system', content: systemPrompt }];
+  const messages: LLMMessage[] = [{ role: 'system', content: systemPrompt }];
   const sanitizedHistory = sanitizeHistory(history, query, mode);
   if (sanitizedHistory.length > 0) messages.push(...sanitizedHistory.map(h => ({ role: h.role, content: h.content })));
   messages.push({ role: 'user', content: query });
   const activeRole = mode === 'quick' ? 'instant' : 'deep';
+  const sessionStartIdx = messages.length;
 
   let usedTools = false;
-  let lastRound = 0;
+  let modelAnswered = false;
   for (let round = 0; round < maxRounds; round++) {
     if (options.signal?.aborted) break;
     const more = await toolCallingRound(messages, allSources, steps, round, onEvent, budget, options.onProgress, options.signal, activeRole);
     if (more) usedTools = true;
-    lastRound = round;
-    if (!more) break;
+    if (!more) { modelAnswered = messages.length > sessionStartIdx; break; }
   }
 
-  /* ── If the model gave a direct answer, send it ── */
-  const lastAssistantMsg = messages.filter(m => m.role === 'assistant' && m.content && !parseInlineToolCall(m.content)).pop();
-  if (lastAssistantMsg?.content) {
+  /* ── Helper: stream content tokens then emit done ── */
+  function emitAnswer(answer: string, finalSources: Source[], steps: AgentStep[], results_count: number) {
     const elapsed = Math.round(performance.now() - start);
-    onEvent({ type: 'done', response: { query, answer: lastAssistantMsg.content, sources: Array.from(allSources.values()).map(({ source_index, ...s }) => s as Source), steps, results_count: allSources.size, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted } } });
-    return;
+    onEvent({ type: 'token', text: answer });
+    onEvent({ type: 'done', response: { query, answer, sources: finalSources, steps, results_count, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted } } });
+  }
+
+  /* ── If the model gave a direct answer during this session, send it ── */
+  if (modelAnswered) {
+    const sessionMessages = messages.slice(sessionStartIdx);
+    const lastAssistantMsg = sessionMessages.filter(m => m.role === 'assistant' && m.content && !parseInlineToolCall(m.content)).pop();
+    if (lastAssistantMsg?.content) {
+      emitAnswer(lastAssistantMsg.content, Array.from(allSources.values()).map(s => s as Source), steps, allSources.size);
+      return;
+    }
+  }
+
+  /* ── Model used tools but never answered → force a synthesis round ── */
+  if (usedTools) {
+    messages.push({ role: 'system', content: 'Research complete. Now write your final answer based on the information gathered above. Every claim must be backed by [N]. Reply in the user\'s language.' });
+    try {
+      const llmResult = await callLLM({ messages, temperature: 0.1, tools: undefined, toolChoice: 'none' as const, role: activeRole, label: 'synthesis' });
+      const content = llmResult.data && typeof llmResult.data === 'object' && 'choices' in llmResult.data
+        ? stripThinkingTags((llmResult.data as { choices: { message: { content: string | null } }[] }).choices?.[0]?.message?.content || '')
+        : null;
+      if (content) {
+        const finalStep: AgentStep = { type: 'answer', model: llmResult.model };
+        steps.push(finalStep);
+        emitAnswer(content, Array.from(allSources.values()).map(s => s as Source), steps, allSources.size);
+        return;
+      }
+    } catch { /* fall through to error */ }
   }
 
   if (!usedTools && allSources.size === 0) {
     const lastMsg = messages[messages.length - 1];
     if (lastMsg?.role === 'assistant' && lastMsg.content && !parseInlineToolCall(lastMsg.content)) {
-      onEvent({ type: 'done', response: { query, answer: lastMsg.content, sources: [], steps, results_count: 0, elapsed_ms: Math.round(performance.now() - start) } });
+      emitAnswer(lastMsg.content, [], steps, 0);
       return;
     }
   }
 
   /* ── No answer → best-effort ── */
-  const elapsed = Math.round(performance.now() - start);
   if (budget.exhausted) {
     const budgetStep: AgentStep = { type: 'budget', note: `Research budget used ${budget.usedCredits}/${budget.usedCredits + budget.remainingCredits}` };
     steps.push(budgetStep);

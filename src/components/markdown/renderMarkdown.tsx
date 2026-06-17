@@ -99,6 +99,12 @@ export function renderMarkdown(text: string, sources?: Source[], onDiagramClick?
       continue;
     }
 
+    if (/^(\*{3,}|-{3,}|_{3,})\s*$/.test(trimmed)) {
+      nodes.push(<hr key={key++} style={{ border: 'none', borderTop: '0.5px solid var(--athena-border)', margin: '16px 0' }} />);
+      i++;
+      continue;
+    }
+
     if (/^[-*]\s/.test(trimmed)) {
       const items: React.ReactNode[] = [];
       while (i < lines.length && /^[-*]\s/.test(lines[i].trim())) {

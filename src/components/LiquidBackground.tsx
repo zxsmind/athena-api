@@ -64,15 +64,24 @@ export default function LiquidBackground({ triggerRef }: LiquidBackgroundProps) 
     transition: 0,
   });
 
-  darkRef.current = dark;
+  useEffect(() => {
+    darkRef.current = dark;
+  }, [dark]);
 
-  if (triggerRef) {
-    triggerRef.current = {
-      setActive: (active: boolean) => {
-        stateRef.current.activeMode = active ? 'B' : 'A';
-      },
+  useEffect(() => {
+    if (triggerRef) {
+      triggerRef.current = {
+        setActive: (active: boolean) => {
+          stateRef.current.activeMode = active ? 'B' : 'A';
+        },
+      };
+    }
+    return () => {
+      if (triggerRef) {
+        triggerRef.current = null;
+      }
     };
-  }
+  }, [triggerRef]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

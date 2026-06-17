@@ -81,7 +81,7 @@ Authentication is not implemented. The server is designed for local/trusted-netw
 | `DELETE` | `/conversations/:id` | Delete conversation |
 | `GET` | `/health` | Server health check |
 | `GET` | `/config` | Public configuration (key count, provider count) |
-| `GET` | `/autocomplete` | DuckDuckGo search suggestions |
+| `GET` | `/autocomplete` | Google search suggestions proxy |
 | `GET` | `/ping` | Version info |
 | `POST` | `/test-llm` | Test LLM connectivity |
 
@@ -118,34 +118,30 @@ Interactive research query with real-time SSE streaming. Best for single-turn qu
 
 ```
 event: step
-data: {"type":"plan","query":"...","model":"...","note":"..."}
+data: {"type":"plan-analyze","query":"...","model":"...","note":"..."}
 
 event: step
 data: {"type":"search","query":"...","result_count":5}
-
-event: token
-data: {"text":"Partial answer text..."}
-
-event: step
-data: {"type":"synthesize","note":"Generating final answer"}
 
 event: done
 data: {"query":"...","answer":"...","sources":[...],"steps":[...],"results_count":5,"elapsed_ms":4230,"research_budget":{"used":3,"limit":20,"exhausted":false}}
 ```
 
+> **Note:** The engine currently does not emit `token` events. The full answer is delivered in the `done` event.
+
 **Possible events:**
 
 | Event | Data Shape | Description |
 |-------|-----------|-------------|
-| `step` | `AgentStep` | Research phase update (plan, search, analyze, synthesize) |
-| `token` | `{ text: string }` | Streaming answer token |
+| `step` | `AgentStep` | Research phase update (`plan-analyze`, `analyze`, `search`, `webpage`, `budget`) |
+| `sources` | `{ sources: Source[] }` | Updated source list after a search/fetch |
 | `done` | `SearchResponse` | Final result with complete answer and sources |
 | `error` | `{ message: string }` | Error occurred, stream ended |
 
 **Modes:**
 
-- **`quick`**: Single-pass research. Model can call `web_search` tool up to ~3 rounds. Faster, uses fewer credits.
-- **`deep`**: Multi-pass research. After initial search+analyze, a critical review phase generates follow-up queries, then searches again before synthesis. Uses `general.deepIterations + 2` search rounds.
+- **`quick`**: Single-pass research. Model can call `web_search` tool up to 3 rounds. Faster, uses fewer credits; quick-mode budget is capped at 6 credits.
+- **`deep`**: Multi-pass research. The same tool-calling loop runs for up to 50 rounds. Uses `research.maxCreditsPerQuery` credits (default 20).
 
 **Client timeout:** 3 minutes (180,000 ms). The frontend `searchStream()` function in `src/lib/api.ts` automatically aborts after this duration.
 
@@ -238,6 +234,8 @@ Poll for job status and result.
 | `completed` | Research finished successfully, `result` is populated |
 | `failed` | Research failed, `error` field contains reason |
 | `cancelled` | Cancelled by user via cancel endpoint |
+
+> **Note:** The engine currently emits step types `plan-analyze`, `analyze`, `search`, `webpage`, and `budget`. Therefore, runtime job statuses will typically be `planning` or `searching`. `reviewing` and `synthesizing` are mapped from `review` and `synthesize` step types but are not emitted by the current engine.
 
 ### `GET /research-jobs/:id/events`
 
@@ -415,7 +413,7 @@ Cancel all running and pending items in a batch.
 
 ### `GET /settings`
 
-Returns the full settings object. Keys are masked in the response.
+Returns the full settings object. Keys are returned as-is in the response; masking is done in the UI (`SettingsModal.tsx`).
 
 **Response (200):**
 
@@ -439,12 +437,9 @@ Returns the full settings object. Keys are masked in the response.
   "research": { "maxCreditsPerQuery": 20, "maxFollowUpQueries": 3 },
   "modelRouting": {
     "title": { "primary": { "providerId": "groq", "model": "llama-3.3-70b-versatile" }, "fallback": [] },
-    "fast": { "primary": { "providerId": "groq", "model": "llama-3.3-70b-versatile" }, "fallback": [] },
-    "wide": { ... },
-    "reasoning": { ... },
-    "synthesis": { ... },
-    "deepResearch": { ... },
-    "fallback": { ... }
+    "reasoning": { "primary": { "providerId": "gemini", "model": "gemini-3.1-flash-lite" }, "fallback": [] },
+    "instant": { "primary": { "providerId": "groq", "model": "openai/gpt-oss-120b" }, "fallback": [] },
+    "deep": { "primary": { "providerId": "gemini", "model": "gemini-3.1-flash-lite" }, "fallback": [] }
   },
   "api": {
     "defaultMaxConcurrent": 2,
@@ -481,7 +476,7 @@ Update settings. Pass the full settings object (GET first, modify, PUT back).
 |---------|-------------|
 | `providers` | Provider credentials and enabled state |
 | `providerOrder` | Priority order for provider cycling |
-| `modelRouting` | Task-specific model assignments (7 roles) |
+| `modelRouting` | Task-specific model assignments (4 roles: `title`, `reasoning`, `instant`, `deep`) |
 | `research` | Budget: `maxCreditsPerQuery`, `maxFollowUpQueries` |
 | `api` | API behavior: concurrency, retention, limits |
 | `serper` | Search API credentials |
@@ -566,18 +561,19 @@ Delete a conversation.
 
 ```json
 {
-  "groqKeyCount": 1,
-  "geminiKeyCount": 0,
+  "keyCount": 1,
   "serperKeyCount": 1,
-  "providerCount": 5
+  "providerCount": 1
 }
 ```
+
+`keyCount` is the number of Groq API keys configured.
 
 Exposed publicly (no auth) for the frontend to show configuration status.
 
 ### `GET /autocomplete?q=search+term`
 
-Proxies DuckDuckGo autocomplete. Requires minimum 2 characters.
+Proxies Google search suggestions (`suggestqueries.google.com`). Requires minimum 2 characters.
 
 ```json
 { "suggestions": ["search term meaning", "search term definition", ...] }
@@ -670,7 +666,7 @@ interface Source {
 
 ```typescript
 interface AgentStep {
-  type: string;       // "plan" | "search" | "analyze" | "synthesize" | "review"
+  type: string;       // e.g. "plan-analyze", "analyze", "search", "webpage", "budget"
   query?: string;
   result_count?: number;
   note?: string;
@@ -753,9 +749,11 @@ Every research query consumes **research credits**. The budget prevents runaway 
 
 ### How Credits Are Consumed
 
-- Each tool call (search) consumes 1 credit
-- Each LLM call (analyze, synthesize, review) consumes 1 credit
-- When budget is exhausted, the engine stops making new tool calls and proceeds directly to synthesis
+- Each tool call (`web_search` or `fetch_url`) consumes 1 credit.
+- LLM calls (planning, analysis, final answer) do **not** consume credits.
+- When the budget is exhausted, the engine stops making new tool calls and returns the last assistant message if available.
+
+### Budget Reporting
 
 ### Budget Reporting
 
@@ -792,12 +790,9 @@ The system assigns models to tasks through `modelRouting`:
 | Role | Purpose | Temperature |
 |------|---------|-------------|
 | `title` | Conversation title generation | 0.3 |
-| `fast` | Quick responses, simple queries | 0.1 (round 0) / 0.3 (planning) |
-| `wide` | Context-heavy prompts, large token output | 0.1 |
-| `reasoning` | Complex reasoning tasks | 0.1 |
-| `synthesis` | Final answer synthesis | 0 |
-| `deepResearch` | Deep research agent loop | 0.1 |
-| `fallback` | Default fallback when others fail | 0.1 |
+| `reasoning` | Defined for future reasoning tasks; currently unused | 0.1 |
+| `instant` | Quick / Instant mode research loop | 0.1 |
+| `deep` | Deep research loop | 0.1 |
 
 ### Fallback Chain
 
@@ -819,11 +814,13 @@ key[0]+model[0] → key[1]+model[0] → key[2]+model[0] → key[0]+model[1] → 
 | Event | Emitted By | Description |
 |-------|-----------|-------------|
 | `step` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Agent step update |
-| `token` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Streaming token |
+| `sources` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Updated source list |
 | `done` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Final result |
 | `error` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Error |
 | `status` | `/research-jobs/:id/events`, `/research-batches/:id/events` | Status transition |
 | `item` | `/research-batches/:id/events` | Per-item status update |
+
+> **Note:** The engine does not currently emit `token` events. The final answer is delivered in the `done` event. Frontend streaming is not yet implemented in the research loop.
 
 ### SSE Wire Format
 

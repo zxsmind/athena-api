@@ -4,10 +4,11 @@ interface InlineToolCall {
   queries?: string[];
 }
 
-function extractQuery(obj: any): string | null {
+function extractQuery(obj: unknown): string | null {
   if (!obj || typeof obj !== 'object') return null;
-  const params = obj.parameters || obj;
-  return params.search_query || params.query || params.searchquery || params.q || null;
+  const o = obj as Record<string, unknown>;
+  const params = (o.parameters || o) as Record<string, unknown>;
+  return (params.search_query || params.query || params.searchquery || params.q) as string | null;
 }
 
 export function parseInlineToolCall(content: string): InlineToolCall | null {
@@ -33,7 +34,7 @@ export function parseInlineToolCall(content: string): InlineToolCall | null {
   while ((xmlMatch = xmlToolCallRegex.exec(content)) !== null) {
     const block = xmlMatch[0];
     const paramRegex = /<parameter=(\w+)>([\s\S]*?)<\/parameter>/g;
-    const params: Record<string, any> = {};
+    const params: Record<string, unknown> = {};
     let paramMatch: RegExpExecArray | null;
     while ((paramMatch = paramRegex.exec(block)) !== null) {
       const [, key, value] = paramMatch;
@@ -42,8 +43,28 @@ export function parseInlineToolCall(content: string): InlineToolCall | null {
     }
     const query = extractQuery(params);
     if (query) return { raw: block, query };
-    if (Array.isArray(params.queries) && params.queries.length > 0) {
-      const validQueries = params.queries.filter((q: any) => typeof q === 'string' && q.trim());
+    if (Array.isArray(params.queries) && (params.queries as unknown[]).length > 0) {
+      const validQueries = (params.queries as unknown[]).filter((q): q is string => typeof q === 'string' && q.trim() !== '');
+      if (validQueries.length > 0) return { raw: block, query: validQueries[0], queries: validQueries };
+    }
+  }
+
+  /* Fallback: unclosed <tool_call> (some models omit </tool_call>) */
+  const unclosedMatch = content.match(/<tool_call>([\s\S]*)$/);
+  if (unclosedMatch) {
+    const block = '<tool_call>' + unclosedMatch[1];
+    const paramRegex = /<parameter=(\w+)>([\s\S]*?)<\/parameter>/g;
+    const params: Record<string, unknown> = {};
+    let paramMatch: RegExpExecArray | null;
+    while ((paramMatch = paramRegex.exec(block)) !== null) {
+      const [, key, value] = paramMatch;
+      try { params[key] = JSON.parse(value.trim()); }
+      catch { params[key] = value.trim(); }
+    }
+    const query = extractQuery(params);
+    if (query) return { raw: block, query };
+    if (Array.isArray(params.queries) && (params.queries as unknown[]).length > 0) {
+      const validQueries = (params.queries as unknown[]).filter((q): q is string => typeof q === 'string' && q.trim() !== '');
       if (validQueries.length > 0) return { raw: block, query: validQueries[0], queries: validQueries };
     }
   }

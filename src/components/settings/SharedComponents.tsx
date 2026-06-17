@@ -173,6 +173,7 @@ export function CapabilityGrid({ items }: { items: [string, string][] }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const inputStyle: React.CSSProperties = {
   minWidth: 0,
   padding: '6px 8px',
@@ -185,6 +186,7 @@ export const inputStyle: React.CSSProperties = {
   outline: 'none',
 };
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const selectStyle: React.CSSProperties = {
   ...inputStyle,
   appearance: 'none',

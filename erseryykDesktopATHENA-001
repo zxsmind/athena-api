@@ -1,0 +1,348 @@
+warning: in the working copy of 'docs/API.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'server/package-lock.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'smart-routing-core/package.json', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/docs/API.md b/docs/API.md[m
+[1mindex 8b65d79..7983adb 100644[m
+[1m--- a/docs/API.md[m
+[1m+++ b/docs/API.md[m
+[36m@@ -81,7 +81,7 @@[m [mAuthentication is not implemented. The server is designed for local/trusted-netw[m
+ | `DELETE` | `/conversations/:id` | Delete conversation |[m
+ | `GET` | `/health` | Server health check |[m
+ | `GET` | `/config` | Public configuration (key count, provider count) |[m
+[31m-| `GET` | `/autocomplete` | DuckDuckGo search suggestions |[m
+[32m+[m[32m| `GET` | `/autocomplete` | Google search suggestions proxy |[m
+ | `GET` | `/ping` | Version info |[m
+ | `POST` | `/test-llm` | Test LLM connectivity |[m
+ [m
+[36m@@ -118,34 +118,30 @@[m [mInteractive research query with real-time SSE streaming. Best for single-turn qu[m
+ [m
+ ```[m
+ event: step[m
+[31m-data: {"type":"plan","query":"...","model":"...","note":"..."}[m
+[32m+[m[32mdata: {"type":"plan-analyze","query":"...","model":"...","note":"..."}[m
+ [m
+ event: step[m
+ data: {"type":"search","query":"...","result_count":5}[m
+ [m
+[31m-event: token[m
+[31m-data: {"text":"Partial answer text..."}[m
+[31m-[m
+[31m-event: step[m
+[31m-data: {"type":"synthesize","note":"Generating final answer"}[m
+[31m-[m
+ event: done[m
+ data: {"query":"...","answer":"...","sources":[...],"steps":[...],"results_count":5,"elapsed_ms":4230,"research_budget":{"used":3,"limit":20,"exhausted":false}}[m
+ ```[m
+ [m
+[32m+[m[32m> **Note:** The engine currently does not emit `token` events. The full answer is delivered in the `done` event.[m
+[32m+[m
+ **Possible events:**[m
+ [m
+ | Event | Data Shape | Description |[m
+ |-------|-----------|-------------|[m
+[31m-| `step` | `AgentStep` | Research phase update (plan, search, analyze, synthesize) |[m
+[31m-| `token` | `{ text: string }` | Streaming answer token |[m
+[32m+[m[32m| `step` | `AgentStep` | Research phase update (`plan-analyze`, `analyze`, `search`, `webpage`, `budget`) |[m
+[32m+[m[32m| `sources` | `{ sources: Source[] }` | Updated source list after a search/fetch |[m
+ | `done` | `SearchResponse` | Final result with complete answer and sources |[m
+ | `error` | `{ message: string }` | Error occurred, stream ended |[m
+ [m
+ **Modes:**[m
+ [m
+[31m-- **`quick`**: Single-pass research. Model can call `web_search` tool up to ~3 rounds. Faster, uses fewer credits.[m
+[31m-- **`deep`**: Multi-pass research. After initial search+analyze, a critical review phase generates follow-up queries, then searches again before synthesis. Uses `general.deepIterations + 2` search rounds.[m
+[32m+[m[32m- **`quick`**: Single-pass research. Model can call `web_search` tool up to 3 rounds. Faster, uses fewer credits; quick-mode budget is capped at 6 credits.[m
+[32m+[m[32m- **`deep`**: Multi-pass research. The same tool-calling loop runs for up to 50 rounds. Uses `research.maxCreditsPerQuery` credits (default 20).[m
+ [m
+ **Client timeout:** 3 minutes (180,000 ms). The frontend `searchStream()` function in `src/lib/api.ts` automatically aborts after this duration.[m
+ [m
+[36m@@ -239,6 +235,8 @@[m [mPoll for job status and result.[m
+ | `failed` | Research failed, `error` field contains reason |[m
+ | `cancelled` | Cancelled by user via cancel endpoint |[m
+ [m
+[32m+[m[32m> **Note:** The engine currently emits step types `plan-analyze`, `analyze`, `search`, `webpage`, and `budget`. Therefore, runtime job statuses will typically be `planning` or `searching`. `reviewing` and `synthesizing` are mapped from `review` and `synthesize` step types but are not emitted by the current engine.[m
+[32m+[m
+ ### `GET /research-jobs/:id/events`[m
+ [m
+ SSE stream of job events in real time.[m
+[36m@@ -415,7 +413,7 @@[m [mCancel all running and pending items in a batch.[m
+ [m
+ ### `GET /settings`[m
+ [m
+[31m-Returns the full settings object. Keys are masked in the response.[m
+[32m+[m[32mReturns the full settings object. Keys are returned as-is in the response; masking is done in the UI (`SettingsModal.tsx`).[m
+ [m
+ **Response (200):**[m
+ [m
+[36m@@ -439,12 +437,9 @@[m [mReturns the full settings object. Keys are masked in the response.[m
+   "research": { "maxCreditsPerQuery": 20, "maxFollowUpQueries": 3 },[m
+   "modelRouting": {[m
+     "title": { "primary": { "providerId": "groq", "model": "llama-3.3-70b-versatile" }, "fallback": [] },[m
+[31m-    "fast": { "primary": { "providerId": "groq", "model": "llama-3.3-70b-versatile" }, "fallback": [] },[m
+[31m-    "wide": { ... },[m
+[31m-    "reasoning": { ... },[m
+[31m-    "synthesis": { ... },[m
+[31m-    "deepResearch": { ... },[m
+[31m-    "fallback": { ... }[m
+[32m+[m[32m    "reasoning": { "primary": { "providerId": "gemini", "model": "gemini-3.1-flash-lite" }, "fallback": [] },[m
+[32m+[m[32m    "instant": { "primary": { "providerId": "groq", "model": "openai/gpt-oss-120b" }, "fallback": [] },[m
+[32m+[m[32m    "deep": { "primary": { "providerId": "gemini", "model": "gemini-3.1-flash-lite" }, "fallback": [] }[m
+   },[m
+   "api": {[m
+     "defaultMaxConcurrent": 2,[m
+[36m@@ -481,7 +476,7 @@[m [mUpdate settings. Pass the full settings object (GET first, modify, PUT back).[m
+ |---------|-------------|[m
+ | `providers` | Provider credentials and enabled state |[m
+ | `providerOrder` | Priority order for provider cycling |[m
+[31m-| `modelRouting` | Task-specific model assignments (7 roles) |[m
+[32m+[m[32m| `modelRouting` | Task-specific model assignments (4 roles: `title`, `reasoning`, `instant`, `deep`) |[m
+ | `research` | Budget: `maxCreditsPerQuery`, `maxFollowUpQueries` |[m
+ | `api` | API behavior: concurrency, retention, limits |[m
+ | `serper` | Search API credentials |[m
+[36m@@ -566,18 +561,19 @@[m [mDelete a conversation.[m
+ [m
+ ```json[m
+ {[m
+[31m-  "groqKeyCount": 1,[m
+[31m-  "geminiKeyCount": 0,[m
+[32m+[m[32m  "keyCount": 1,[m
+   "serperKeyCount": 1,[m
+[31m-  "providerCount": 5[m
+[32m+[m[32m  "providerCount": 1[m
+ }[m
+ ```[m
+ [m
+[32m+[m[32m`keyCount` is the number of Groq API keys configured.[m
+[32m+[m
+ Exposed publicly (no auth) for the frontend to show configuration status.[m
+ [m
+ ### `GET /autocomplete?q=search+term`[m
+ [m
+[31m-Proxies DuckDuckGo autocomplete. Requires minimum 2 characters.[m
+[32m+[m[32mProxies Google search suggestions (`suggestqueries.google.com`). Requires minimum 2 characters.[m
+ [m
+ ```json[m
+ { "suggestions": ["search term meaning", "search term definition", ...] }[m
+[36m@@ -670,7 +666,7 @@[m [minterface Source {[m
+ [m
+ ```typescript[m
+ interface AgentStep {[m
+[31m-  type: string;       // "plan" | "search" | "analyze" | "synthesize" | "review"[m
+[32m+[m[32m  type: string;       // e.g. "plan-analyze", "analyze", "search", "webpage", "budget"[m
+   query?: string;[m
+   result_count?: number;[m
+   note?: string;[m
+[36m@@ -753,9 +749,11 @@[m [mEvery research query consumes **research credits**. The budget prevents runaway[m
+ [m
+ ### How Credits Are Consumed[m
+ [m
+[31m-- Each tool call (search) consumes 1 credit[m
+[31m-- Each LLM call (analyze, synthesize, review) consumes 1 credit[m
+[31m-- When budget is exhausted, the engine stops making new tool calls and proceeds directly to synthesis[m
+[32m+[m[32m- Each tool call (`web_search` or `fetch_url`) consumes 1 credit.[m
+[32m+[m[32m- LLM calls (planning, analysis, final answer) do **not** consume credits.[m
+[32m+[m[32m- When the budget is exhausted, the engine stops making new tool calls and returns the last assistant message if available.[m
+[32m+[m
+[32m+[m[32m### Budget Reporting[m
+ [m
+ ### Budget Reporting[m
+ [m
+[36m@@ -792,12 +790,9 @@[m [mThe system assigns models to tasks through `modelRouting`:[m
+ | Role | Purpose | Temperature |[m
+ |------|---------|-------------|[m
+ | `title` | Conversation title generation | 0.3 |[m
+[31m-| `fast` | Quick responses, simple queries | 0.1 (round 0) / 0.3 (planning) |[m
+[31m-| `wide` | Context-heavy prompts, large token output | 0.1 |[m
+[31m-| `reasoning` | Complex reasoning tasks | 0.1 |[m
+[31m-| `synthesis` | Final answer synthesis | 0 |[m
+[31m-| `deepResearch` | Deep research agent loop | 0.1 |[m
+[31m-| `fallback` | Default fallback when others fail | 0.1 |[m
+[32m+[m[32m| `reasoning` | Defined for future reasoning tasks; currently unused | 0.1 |[m
+[32m+[m[32m| `instant` | Quick / Instant mode research loop | 0.1 |[m
+[32m+[m[32m| `deep` | Deep research loop | 0.1 |[m
+ [m
+ ### Fallback Chain[m
+ [m
+[36m@@ -819,12 +814,14 @@[m [mkey[0]+model[0] → key[1]+model[0] → key[2]+model[0] → key[0]+model[1] →[m
+ | Event | Emitted By | Description |[m
+ |-------|-----------|-------------|[m
+ | `step` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Agent step update |[m
+[31m-| `token` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Streaming token |[m
+[32m+[m[32m| `sources` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Updated source list |[m
+ | `done` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Final result |[m
+ | `error` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Error |[m
+ | `status` | `/research-jobs/:id/events`, `/research-batches/:id/events` | Status transition |[m
+ | `item` | `/research-batches/:id/events` | Per-item status update |[m
+ [m
+[32m+[m[32m> **Note:** The engine does not currently emit `token` events. The final answer is delivered in the `done` event. Frontend streaming is not yet implemented in the research loop.[m
+[32m+[m
+ ### SSE Wire Format[m
+ [m
+ ```[m
+[1mdiff --git a/server/package-lock.json b/server/package-lock.json[m
+[1mindex c225430..40dc57f 100644[m
+[1m--- a/server/package-lock.json[m
+[1m+++ b/server/package-lock.json[m
+[36m@@ -31,696 +31,10 @@[m
+         "typescript": "^5.9.3"[m
+       }[m
+     },[m
+[31m-    "node_modules/@emnapi/core": {[m
+[31m-      "version": "1.10.0",[m
+[31m-      "resolved": "https://registry.npmjs.org/@emnapi/core/-/core-1.10.0.tgz",[m
+[31m-      "integrity": "sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw==",[m
+[31m-      "dev": true,[m
+[31m-      "license": "MIT",[m
+[31m-      "optional": true,[m
+[31m-      "dependencies": {[m
+[31m-        "@emnapi/wasi-threads": "1.2.1",[m
+[31m-        "tslib": "^2.4.0"[m
+[31m-      }[m
+[31m-    },[m
+[31m-    "node_modules/@emnapi/runtime": {[m
+[31m-      "version": "1.10.0",[m
+[31m-      "resolved": "https://registry.npmjs.org/@emnapi/runtime/-/runtime-1.10.0.tgz",[m
+[31m-      "integrity": "sha512-ewvYlk86xUoGI0zQRNq/mC+16R1QeDlKQy21Ki3oSYXNgLb45GV1P6A0M+/s6nyCuNDqe5VpaY84BzXGwVbwFA==",[m
+[31m-      "dev": true,[m
+[31m-      "license": "MIT",[m
+[31m-      "optional": true,[m
+[31m-      "dependencies": {[m
+[31m-        "tslib": "^2.4.0"[m
+[31m-      }[m
+[31m-    },[m
+[31m-    "node_modules/@emnapi/wasi-threads": {[m
+[31m-      "version": "1.2.1",[m
+[31m-      "resolved": "https://registry.npmjs.org/@emnapi/wasi-threads/-/wasi-threads-1.2.1.tgz",[m
+[31m-      "integrity": "sha512-uTII7OYF+/Mes/MrcIOYp5yOtSMLBWSIoLPpcgwipoiKbli6k322tcoFsxoIIxPDqW01SQGAgko4EzZi2BNv2w==",[m
+[31m-      "dev": true,[m
+[31m-      "license": "MIT",[m
+[31m-      "optional": true,[m
+[31m-      "dependencies": {[m
+[31m-        "tslib": "^2.4.0"[m
+[31m-      }[m
+[31m-    },[m
+[31m-    "node_modules/@esbuild/aix-ppc64": {[m
+[31m-      "version": "0.28.1",[m
+[31m-      "resolved": "https://registry.npmjs.org/@esbuild/aix-ppc64/-/aix-ppc64-0.28.1.tgz",[m
+[31m-      "integrity": "sha512-Svl7tq8k/08+p6CXPpRjQ1fKX+1odH/BQbb48fV6fj3CWHhsoIOoY87w1oHXm0qEpkIK3ZfVgp0hed3XBXzXMQ==",[m
+[31m-      "cpu": [[m
+[31m-        "ppc64"[m
+[31m-      ],[m
+[31m-      "dev": true,[m
+[31m-      "license": "MIT",[m
+[31m-      "optional": true,[m
+[31m-      "os": [[m
+[31m-        "aix"[m
+[31m-      ],[m
+[31m-      "engines": {[m
+[31m-        "node": ">=18"[m
+[31m-      }[m
+[31m-    },[m
+[31m-    "node_modules/@esbuild/android-arm": {[m
+[31m-      "version": "0.28.1",[m
+[31m-      "resolved": "https://registry.npmjs.org/@esbuild/android-arm/-/android-arm-0.28.1.tgz",[m
+[31m-      "integrity": "sha512-0k2F129Xdio1TdJfzJ8sy1Q47vUD2NnwdhiAf7drUN1EBTfPf4hsFCtmMgu/6m8JSzsBrlmVjudMBQqOfG8usQ==",[m
+[31m-      "cpu": [[m
+[31m-        "arm"[m
+[31m-      ],[m
+[31m-      "dev": true,[m
+[31m-      "license": "MIT",[m
+[31m-      "optional": true,[m
+[31m-      "os": [[m
+[31m-        "android"[m
+[31m-      ],[m
+[31m-      "engines": {[m
+[31m-        "node": ">=18"[m
+[31m-      }[m
+[31m-    },[m
+[31m-    "node_modules/@esbuild/android-arm64": {[m
+[31m-      "version": "0.28.1",[m
+[31m-      "resolved": "https://registry.npmjs.org/@esbuild/android-arm64/-/android-arm64-0.28.1.tgz",[m
+[31m-      "integrity": "sha512-34EGEbCIAgosYz6goLcopX6Mo7NyGv9tfwEM2/7Ce2VcVRk568iSvniGWcUXIy7wEDR1wzolcxcriFVrWYcwBg==",[m
+[31m-      "cpu": [[m
+[31m-        "arm64"[m
+[31m-      ],[m
+[31m-      "dev": true,[m
+[31m-      "license": "MIT",[m
+[31m-      "optional": true,[m
+[31m-      "os": [[m
+[31m-        "android"[m
+[31m-      ],[m
+[31m-      "engines": {[m
+[31m-        "node": ">=18"[m
+[31m-      }[m
+[31m-    },[m
+[31m-    "node_modules/@esbuild/android-x64": {[m
+[31m-      "version": "0.28.1",[m
+[31m-      "resolved": "https://registry.npmjs.org/@esbuild/android-x64/-/android-x64-0.28.1.tgz",[m
+[31m-      "integrity": "sha512-dbwY7ltSMDWsRatcRpCnES4F+im88OCUgGZjy52shC7GqHRE/cYlxNbB4Z4UpJswpcc4Qxd2oE/ufM0p61IKng==",[m
+[31m-      "cpu": [[m
+[31m-        "x64"[m
+[31m-      ],[m
+[31m-      "dev": true,[m
+[31m-      "license": "MIT",[m
+[31m-      "optional": true,[m
+[31m-      "os": [[m
+[31m-        "android"[m
+[31m-      ],[m
+[31m-      "engines": {[m
+[31m-        "node": ">=18"[m
+[31m-      }[m
+[31m-    },[m
+[31m-    "node_modules/@esbuild/darwin-arm64": {[m
+[31m-      "version": "0.28.1",[m
+[31m-      "resolved": "https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-0.28.1.tgz",[m
+[31m-      "integrity": "sha512-TZbWkQY7kvTAXbXUT7uVACR5cMHsDiSz9z7ZKAX/RTq/WJEk3QyRr0wZpNhBDX+/0CtdqUIJlOiodQcta6tY3Q==",[m
+[31m-      "cpu": [[m
+[31m-        "arm64"[m
+[31m-      ],[m
+[31m-      "dev": true,[m
+[31m-      "license": "MIT",[m
+[31m-      "optional": true,[m
+[31m-      "os": [[m
+[31m-        "darwin"[m
+[31m-      ],[m
+[31m-      "engines": {[m
+[31m-        "node": ">=18"[m
+[31m-      }[m
+[31m-    },[m
+[31m-    "node_modules/@esbuild/darwin-x64": {[m
+[31m-      "version": "0.28.1",[m
+[31m-      "resolved": "https://registry.npmjs.org/@esbuild/darwin-x64/-/darwin-x64-0.28.1.tgz",[m
+[31m-      "integrity": "sha512-zfdzgK9ACBNZLI/CyHTOx81SyNbM6YXn7rxSgX97VjyiPl9W1i4Ka4fgKECEoFCKGpvBj5qArWIGgQjOwkgskQ==",[m
+[31m-      "cpu": [[m
+[31m-        "x64"[m
+[31m-      ],[m
+[31m-      "dev": true,[m
+[31m-      "license": "MIT",[m
+[31m-      "optional": true,[m
+[31m-      "os": [[m
+[31m-        "darwin"[m
+[31m-      ],[m
+[31m-      "engines": {[m
+[31m-        "node": ">=18"[m
+[31m-      }[m
+[31m-    },[m
+[31m-    "node_modules/@esbuild/freebsd-arm64": {[m
+[31m-      "version": "0.28.1",[m
+[31m-      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-arm64/-/freebsd-arm64-0.28.1.tgz",[m
+[31m-      "integrity": "sha512-wG2EA8ENdEI0qhkSZMjfqrdY+ziCYCPMmtZjjIwOmXFjmyzEHn+UUxk5of+SYsjtfs3VpnlC7QLzSI5hY/rOAw==",[m
+[31m-      "cpu": [[m
+[31m-        "arm64"[m
+[31m-      ],[m
+[31m-      "dev": true,[m
+[31m-      "license": "MIT",[m
+[31m-      "optional": true,[m
+[31m-      "os": [[m
+[31m-        "freebsd"[m
+[31m-      ],[m
+[31m-      "engines": {[m
+[31m-        "node": ">=18"[m
+[31m-      }[m
+[31m-    },[m
+[31m-    "node_modules/@esbuild/freebsd-x64": {[m
+[31m-      "version": "0.28.1",[m
+[31m-      "resolved": "https://registry.npmjs.org/@esbuild/freebsd-x64/-/freebsd-x64-0.28.1.tgz",[m
+[31m-      "integrity": "sha512-i7dZ9vQgnvSCzi/rYCXNgtF/U+eKZNJBzu3eTQbRgHnM7tNSizLOkRFAl3qzVc/Op/u5YkHHa4pf/3DOYHthLQ==",[m
+[31m-      "cpu": [[m
+[31m-        "x64"[

@@ -20,8 +20,6 @@ interface DbData {
   messages: Record<string, Message[]>;
 }
 
-const DEFAULT: DbData = { conversations: [], messages: {} };
-
 /* ── Simple async lock: all read-modify-write operations serialize on dbLock ── */
 let dbLock: Promise<unknown> = Promise.resolve();
 

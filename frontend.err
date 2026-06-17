@@ -1,0 +1,24 @@
+[2m18:01:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /conversations/ae0b7d9a-83fc-4384-8e67-98725eff77bf/messages[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m18:01:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /conversations[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m18:01:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /conversations/ae0b7d9a-83fc-4384-8e67-98725eff77bf/messages[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m18:01:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /conversations[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m18:01:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /search[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)
+[2m18:01:25[22m [31m[1m[vite][22m[39m [31mhttp proxy error: /conversations/ae0b7d9a-83fc-4384-8e67-98725eff77bf/messages[39m
+AggregateError [ECONNREFUSED]: 
+    at internalConnectMultiple (node:net:1134:18)
+    at afterConnectMultiple (node:net:1715:7)

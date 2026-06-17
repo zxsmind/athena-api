@@ -1,4 +1,4 @@
-import { loadSettings, type SettingsStore } from './settings-store.js';
+import { loadSettings } from './settings-store.js';
 import type { LLMRole, LLMOptions, TargetReference } from './llm.js';
 
 export function resolveTargets(
@@ -76,8 +76,8 @@ export function modelSupportsTools(model: string): boolean {
   return !NO_TOOL_CALLING_MODELS.has(model) && !learnedNoToolCalling.has(model);
 }
 
-export function buildLLMRequestBody(opts: LLMOptions): Record<string, any> {
-  const body: Record<string, any> = {
+export function buildLLMRequestBody(opts: LLMOptions): Record<string, unknown> {
+  const body: Record<string, unknown> = {
     messages: opts.messages,
     temperature: opts.temperature ?? 0.7,
     max_completion_tokens: opts.maxTokens ?? 3200,

@@ -20,6 +20,7 @@ const CtxMenuContext = createContext<CtxMenuCtx>({
   hide: () => {},
 });
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useContextMenu() {
   return useContext(CtxMenuContext);
 }
@@ -84,7 +85,7 @@ export default function ContextMenuProvider({ children }: { children: ReactNode 
 
     document.addEventListener('contextmenu', handleContext);
     return () => document.removeEventListener('contextmenu', handleContext);
-  }, [show, navigate, toggle]);
+  }, [show, navigate, toggle, openSettings]);
 
   /* Close on outside click / Escape */
   useEffect(() => {

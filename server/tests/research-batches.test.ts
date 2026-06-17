@@ -5,7 +5,6 @@ import { describe, it, expect, beforeEach } from 'vitest';
 // We import via dynamic import pattern since the module has module-level state
 import {
   createResearchBatch,
-  getResearchBatch,
   markResearchBatchRunning,
   markResearchBatchDone,
   markResearchBatchFailed,
@@ -16,7 +15,6 @@ import {
   subscribeResearchBatch,
   listResearchBatches,
   type ResearchBatchRequest,
-  type ResearchBatchRecord,
 } from '../src/research-batches.js';
 
 function sampleRequest(overrides: Partial<ResearchBatchRequest> = {}): ResearchBatchRequest {
@@ -144,7 +142,7 @@ describe('ResearchBatches', () => {
 
   it('should emit events through subscription', () => {
     const batch = createResearchBatch(sampleRequest());
-    const events: any[] = [];
+    const events: string[] = [];
 
     const unsub = subscribeResearchBatch(batch.id, (b) => {
       events.push(b.status);

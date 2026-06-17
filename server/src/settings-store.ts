@@ -129,27 +129,29 @@ function normalizeProviderState(id: string, value: Partial<ProviderState> | unde
   };
 }
 
-function normalizeReference(value: any, fallbackProviderId = '', fallbackModel = ''): ModelReference {
+function normalizeReference(value: unknown, fallbackProviderId = '', fallbackModel = ''): ModelReference {
   if (!value || typeof value !== 'object') return createReference(fallbackProviderId, fallbackModel);
-  const providerId = typeof value.providerId === 'string' ? value.providerId.trim() : fallbackProviderId;
-  const model = typeof value.model === 'string' ? value.model.trim() : fallbackModel;
+  const v = value as Record<string, unknown>;
+  const providerId = typeof v.providerId === 'string' ? (v.providerId as string).trim() : fallbackProviderId;
+  const model = typeof v.model === 'string' ? (v.model as string).trim() : fallbackModel;
   return createReference(providerId, model);
 }
 
-function normalizeRoute(value: any, fallbackProviderId = '', fallbackModel = ''): ModelRoute {
+function normalizeRoute(value: unknown, fallbackProviderId = '', fallbackModel = ''): ModelRoute {
   if (!value || typeof value !== 'object') return createRoute(fallbackProviderId, fallbackModel);
-  const primary = normalizeReference(value.primary, fallbackProviderId, fallbackModel);
-  const fallback = Array.isArray(value.fallback)
-    ? value.fallback
-        .map((item: any) => normalizeReference(item))
+  const v = value as Record<string, unknown>;
+  const primary = normalizeReference(v.primary, fallbackProviderId, fallbackModel);
+  const fallback = Array.isArray(v.fallback)
+    ? (v.fallback as unknown[])
+        .map((item: unknown) => normalizeReference(item))
         .filter((item: ModelReference) => item.model.length > 0 || item.providerId.length > 0)
     : [];
   return { primary, fallback };
 }
 
-function normalizeModelRouting(raw: any, providerFallbackId: string, titleFallback: string): ModelRouting {
+function normalizeModelRouting(raw: unknown, providerFallbackId: string, titleFallback: string): ModelRouting {
   const base = createModelRouting();
-  const source = raw && typeof raw === 'object' ? raw : {};
+  const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   return {
     title: normalizeRoute(source.title, providerFallbackId, titleFallback || base.title.primary.model),
     reasoning: normalizeRoute(source.reasoning, providerFallbackId, base.reasoning.primary.model),
@@ -176,41 +178,46 @@ function normalizeProviderOrder(
   return Array.from(merged);
 }
 
-function normalizeSettings(raw: any): SettingsStore {
+function normalizeSettings(raw: unknown): SettingsStore {
   const merged = cloneDefaults();
   const providers = Object.keys(merged.providers);
-  const sourceProviders = raw && typeof raw.providers === 'object' ? raw.providers : {};
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const sourceProviders = (r.providers && typeof r.providers === 'object' ? r.providers : {}) as Record<string, unknown>;
   for (const id of providers) {
-    merged.providers[id] = normalizeProviderState(id, sourceProviders[id]);
+    merged.providers[id] = normalizeProviderState(id, sourceProviders[id] as Partial<ProviderState> | undefined);
   }
-  const titleFallback = typeof raw?.general?.titleModel === 'string' ? raw.general.titleModel : '';
+  const general = (r.general && typeof r.general === 'object' ? r.general : {}) as Record<string, unknown>;
+  const titleFallback = typeof general?.titleModel === 'string' ? general.titleModel as string : '';
   merged.version = SETTINGS_VERSION;
-  merged.port = typeof raw?.port === 'number' ? raw.port : merged.port;
-  merged.host = typeof raw?.host === 'string' ? raw.host : merged.host;
-  merged.providerOrder = normalizeProviderOrder(raw?.providerOrder, merged.providers, Object.keys(sourceProviders));
+  merged.port = typeof r?.port === 'number' ? r.port as number : merged.port;
+  merged.host = typeof r?.host === 'string' ? r.host as string : merged.host;
+  merged.providerOrder = normalizeProviderOrder(r?.providerOrder, merged.providers, Object.keys(sourceProviders));
+  const serperRaw = (r.serper && typeof r.serper === 'object' ? r.serper : {}) as Record<string, unknown>;
   merged.serper = {
-    keys: Array.isArray(raw?.serper?.keys) ? raw.serper.keys.filter((k: any) => typeof k === 'string') : [...merged.serper.keys],
-    url: typeof raw?.serper?.url === 'string' ? raw.serper.url : merged.serper.url,
+    keys: Array.isArray(serperRaw?.keys) ? (serperRaw.keys as unknown[]).filter((k: unknown) => typeof k === 'string') as string[] : [...merged.serper.keys],
+    url: typeof serperRaw?.url === 'string' ? serperRaw.url as string : merged.serper.url,
   };
+  const researchRaw = (r.research && typeof r.research === 'object' ? r.research : {}) as Record<string, unknown>;
   merged.research = {
-    maxCreditsPerQuery: typeof raw?.research?.maxCreditsPerQuery === 'number' ? raw.research.maxCreditsPerQuery : merged.research.maxCreditsPerQuery,
-    maxFollowUpQueries: typeof raw?.research?.maxFollowUpQueries === 'number' ? raw.research.maxFollowUpQueries : merged.research.maxFollowUpQueries,
+    maxCreditsPerQuery: typeof researchRaw?.maxCreditsPerQuery === 'number' ? researchRaw.maxCreditsPerQuery as number : merged.research.maxCreditsPerQuery,
+    maxFollowUpQueries: typeof researchRaw?.maxFollowUpQueries === 'number' ? researchRaw.maxFollowUpQueries as number : merged.research.maxFollowUpQueries,
   };
   merged.general = {
-    maxSources: typeof raw?.general?.maxSources === 'number' ? raw.general.maxSources : merged.general.maxSources,
-    deepIterations: typeof raw?.general?.deepIterations === 'number' ? raw.general.deepIterations : merged.general.deepIterations,
-    thinkingStripPatterns: typeof raw?.general?.thinkingStripPatterns === 'string' ? raw.general.thinkingStripPatterns : merged.general.thinkingStripPatterns,
+    maxSources: typeof general?.maxSources === 'number' ? general.maxSources as number : merged.general.maxSources,
+    deepIterations: typeof general?.deepIterations === 'number' ? general.deepIterations as number : merged.general.deepIterations,
+    thinkingStripPatterns: typeof general?.thinkingStripPatterns === 'string' ? general.thinkingStripPatterns as string : merged.general.thinkingStripPatterns,
     titleModel: titleFallback,
   };
-  merged.modelRouting = normalizeModelRouting(raw?.modelRouting, merged.providerOrder[0] || 'groq', titleFallback);
-  merged.api = raw?.api && typeof raw.api === 'object' ? {
-    defaultMaxConcurrent: typeof raw.api.defaultMaxConcurrent === 'number' ? raw.api.defaultMaxConcurrent : apiDefaults.defaultMaxConcurrent,
-    maxActiveJobs: typeof raw.api.maxActiveJobs === 'number' ? raw.api.maxActiveJobs : apiDefaults.maxActiveJobs,
-    maxActiveBatches: typeof raw.api.maxActiveBatches === 'number' ? raw.api.maxActiveBatches : apiDefaults.maxActiveBatches,
-    maxEventsPerJob: typeof raw.api.maxEventsPerJob === 'number' ? raw.api.maxEventsPerJob : apiDefaults.maxEventsPerJob,
-    maxEventsPerBatch: typeof raw.api.maxEventsPerBatch === 'number' ? raw.api.maxEventsPerBatch : apiDefaults.maxEventsPerBatch,
-    maxRetentionMinutes: typeof raw.api.maxRetentionMinutes === 'number' ? raw.api.maxRetentionMinutes : apiDefaults.maxRetentionMinutes,
-    defaultMode: raw.api.defaultMode === 'quick' || raw.api.defaultMode === 'deep' ? raw.api.defaultMode : apiDefaults.defaultMode,
+  merged.modelRouting = normalizeModelRouting(r?.modelRouting, merged.providerOrder[0] || 'groq', titleFallback);
+  const apiRaw = r.api && typeof r.api === 'object' ? r.api as Record<string, unknown> : null;
+  merged.api = apiRaw ? {
+    defaultMaxConcurrent: typeof apiRaw.defaultMaxConcurrent === 'number' ? apiRaw.defaultMaxConcurrent as number : apiDefaults.defaultMaxConcurrent,
+    maxActiveJobs: typeof apiRaw.maxActiveJobs === 'number' ? apiRaw.maxActiveJobs as number : apiDefaults.maxActiveJobs,
+    maxActiveBatches: typeof apiRaw.maxActiveBatches === 'number' ? apiRaw.maxActiveBatches as number : apiDefaults.maxActiveBatches,
+    maxEventsPerJob: typeof apiRaw.maxEventsPerJob === 'number' ? apiRaw.maxEventsPerJob as number : apiDefaults.maxEventsPerJob,
+    maxEventsPerBatch: typeof apiRaw.maxEventsPerBatch === 'number' ? apiRaw.maxEventsPerBatch as number : apiDefaults.maxEventsPerBatch,
+    maxRetentionMinutes: typeof apiRaw.maxRetentionMinutes === 'number' ? apiRaw.maxRetentionMinutes as number : apiDefaults.maxRetentionMinutes,
+    defaultMode: apiRaw.defaultMode === 'quick' || apiRaw.defaultMode === 'deep' ? apiRaw.defaultMode as 'quick' | 'deep' : apiDefaults.defaultMode,
   } : { ...apiDefaults };
   return merged;
 }

@@ -5,7 +5,7 @@ import { callLLM, callLLMStream } from './llm.js';
 import { getSettings, saveSettings } from './settings.js';
 import type { SettingsData } from './settings.js';
 import { agenticResearchStream } from './engine.js';
-import type { SearchRequest, SearchResponse } from './schemas.js';
+import type { SearchRequest } from './schemas.js';
 import type { EngineEvent } from './engine.js';
 import { loadSettings } from './settings-store.js';
 import {
@@ -21,7 +21,7 @@ import {
   subscribeResearchJob,
   applyAPISettings as applyJobAPISettings,
   type ResearchJobRequest,
-  type ResearchJobRecord,
+  type ResearchJobStatus,
 } from './research-jobs.js';
 import {
   createResearchBatch,
@@ -39,7 +39,6 @@ import {
   appendResearchBatchEvent,
   applyAPISettings as applyBatchAPISettings,
   type ResearchBatchRequest,
-  type ResearchBatchRecord,
 } from './research-batches.js';
 import {
   getConversations,
@@ -79,8 +78,8 @@ app.get('/settings', (_req, res) => {
   try {
     const settings = getSettings();
     res.json(settings);
-  } catch (err: any) {
-    res.status(500).json({ detail: err.message });
+  } catch (err: unknown) {
+    res.status(500).json({ detail: (err as Error).message });
   }
 });
 
@@ -90,8 +89,8 @@ app.put('/settings', (req, res) => {
     saveSettings(data);
     applyAPISettingsFromStore();
     res.json({ ok: true });
-  } catch (err: any) {
-    res.status(500).json({ detail: err.message });
+  } catch (err: unknown) {
+    res.status(500).json({ detail: (err as Error).message });
   }
 });
 
@@ -122,7 +121,7 @@ app.get('/research-jobs/:id', (req, res) => {
   res.json(job);
 });
 
-function createSSEEndpoint<T extends { events: any[]; status: string }>(
+function createSSEEndpoint<T extends { events: { type: string }[]; status: string }>(
   getRecord: (id: string) => T | undefined,
   subscribe: (id: string, cb: (record: T) => void) => () => void,
 ) {
@@ -140,7 +139,7 @@ function createSSEEndpoint<T extends { events: any[]; status: string }>(
       Connection: 'keep-alive',
     });
 
-    const sentEvents = new Set<any>();
+    const sentEvents = new Set<unknown>();
     const send = (event: string, data: object) => {
       try {
         res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -152,7 +151,7 @@ function createSSEEndpoint<T extends { events: any[]; status: string }>(
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
     const resetIdle = () => {
       if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => { try { res.end(); } catch {} }, 30000);
+      idleTimer = setTimeout(() => { try { res.end(); } catch { /* client may have disconnected */ } }, 30000);
     };
 
     const flush = (current: T) => {
@@ -264,7 +263,7 @@ app.post('/conversations', async (req, res) => {
     res.status(400).json({ detail: 'id and query required' });
     return;
   }
-  const list = await createConversation(id, query);
+  await createConversation(id, query);
 
   await generateTitle(id, query);
 
@@ -283,7 +282,7 @@ async function generateTitle(conversationId: string, query: string) {
       role: 'title',
       label: 'title-gen',
     });
-    const title = data?.choices?.[0]?.message?.content?.trim().replace(/^["'\s]+|["'\s]+$/g, '') || query;
+    const title = (data as { choices: { message: { content: string } }[] } | undefined)?.choices?.[0]?.message?.content?.trim().replace(/^["'\s]+|["'\s]+$/g, '') || query;
     if (title) {
       await updateConversationTitle(conversationId, title.slice(0, 60));
     }
@@ -317,7 +316,7 @@ async function runResearchJob(jobId: string) {
           case 'step': {
             appendResearchJobEvent(jobId, { type: 'step', data: event.data, timestamp: new Date().toISOString() });
             const granular = STEP_TO_STATUS[event.data.type];
-            if (granular) setResearchJobStatus(jobId, granular as any);
+            if (granular) setResearchJobStatus(jobId, granular as ResearchJobStatus);
             break;
           }
           case 'token':
@@ -340,12 +339,12 @@ async function runResearchJob(jobId: string) {
         onProgress: () => {},
       },
     );
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (controller.signal.aborted) {
       cancelResearchJob(jobId);
       return;
     }
-    markResearchJobFailed(jobId, err?.message || 'Research job failed');
+    markResearchJobFailed(jobId, (err as Error)?.message || 'Research job failed');
   }
 }
 
@@ -432,9 +431,9 @@ async function runResearchBatch(batchId: string) {
           });
         }
       }
-    }).catch((err: any) => {
+    }).catch((err: unknown) => {
       if (controller.signal.aborted) return;
-      failResearchBatchItem(batchId, item.id, err?.message || 'Batch item failed');
+      failResearchBatchItem(batchId, item.id, (err as Error)?.message || 'Batch item failed');
     }).finally(() => {
       active.delete(task);
     });
@@ -462,12 +461,12 @@ async function runResearchBatch(batchId: string) {
       return;
     }
     markResearchBatchDone(batchId);
-  } catch (err: any) {
+  } catch (err: unknown) {
     if (controller.signal.aborted) {
       cancelResearchBatch(batchId);
       return;
     }
-    markResearchBatchFailed(batchId, err?.message || 'Batch research failed');
+    markResearchBatchFailed(batchId, (err as Error)?.message || 'Batch research failed');
   }
 }
 
@@ -478,8 +477,8 @@ app.get('/conversations/:id/messages', async (req, res) => {
 });
 
 app.put('/conversations/:id/messages', async (req, res) => {
-  const { messages } = req.body as { messages: any[] };
-  await saveMessages(req.params.id, messages);
+  const { messages } = req.body as { messages: unknown[] };
+  await saveMessages(req.params.id, messages as import('./schemas.js').Message[]);
   res.json({ ok: true });
 });
 
@@ -528,8 +527,9 @@ app.get('/autocomplete', async (req, res) => {
     const resp = await fetch(`https://suggestqueries.google.com/complete/search?client=firefox&q=${encodeURIComponent(q)}`, {
       headers: { 'User-Agent': 'Mozilla/5.0' },
     });
-    const data: any = await resp.json();
-    const suggestions = Array.isArray(data[1]) ? data[1] : [];
+    const data: unknown = await resp.json();
+    const arr = data as unknown[];
+    const suggestions = Array.isArray(arr[1]) ? arr[1] as unknown[] : [];
     res.json({ suggestions: suggestions.slice(0, 6) });
   } catch {
     res.json({ suggestions: [] });
@@ -553,7 +553,7 @@ app.post('/test-llm', async (req, res) => {
   try {
     const result = await callLLM({ messages, temperature: 0.1, maxTokens: 100, label: `test-nostream-${stepLabel}` });
     res.json({ ok: true, mode: 'non-streaming', data: result.data, model: result.model, provider: result.provider });
-  } catch (err: any) {
+  } catch (err: unknown) {
     /* Fallback: try streaming */
     try {
       let content = '';
@@ -562,8 +562,8 @@ app.post('/test-llm', async (req, res) => {
         onToken: (t) => { content += t; },
       });
       res.json({ ok: true, mode: 'streaming', fullContent: content || result.fullContent, model: result.model, provider: result.provider });
-    } catch (err2: any) {
-      res.json({ ok: false, error: err.message, error2: err2.message });
+    } catch (err2: unknown) {
+      res.json({ ok: false, error: (err as Error).message, error2: (err2 as Error).message });
     }
   }
 });

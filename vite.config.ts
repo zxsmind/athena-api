@@ -12,7 +12,7 @@ export default defineConfig({
         timeout: 0,
         proxyTimeout: 0,
         rewrite: (path) => path.replace(/^\/api/, ''),
-        configure: (proxy, _options) => {
+        configure: (proxy) => {
           proxy.on('error', (err) => {
             console.log('proxy error', err);
           });

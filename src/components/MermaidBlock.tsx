@@ -61,9 +61,9 @@ export default function MermaidBlock({ chart, onExpand }: { chart: string; onExp
           setSvgHtml(svgEl.outerHTML);
           setError(null);
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (!cancelled) {
-          setError(err?.message || 'Mermaid diagram could not be rendered.');
+          setError(err instanceof Error ? err.message : 'Mermaid diagram could not be rendered.');
         }
       }
     }

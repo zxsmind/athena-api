@@ -1,5 +1,4 @@
 import { loadSettings } from './settings-store.js';
-import { config } from './config.js';
 import type { SearchResult } from './schemas.js';
 
 let serperCycle: string[] = [];
@@ -40,11 +39,12 @@ function serperEndpoint(type: string): string {
   return TYPE_ENDPOINTS[type] || TYPE_ENDPOINTS.search;
 }
 
-function extractOrganic(data: any): any[] {
-  if (data.organic) return data.organic;
-  if (data.results) return data.results;
-  if (data.articles) return data.articles;
-  if (data.items) return data.items;
+function extractOrganic(data: unknown): unknown[] {
+  const d = data as Record<string, unknown>;
+  if (d.organic) return d.organic as unknown[];
+  if (d.results) return d.results as unknown[];
+  if (d.articles) return d.articles as unknown[];
+  if (d.items) return d.items as unknown[];
   if (Array.isArray(data)) return data;
   return [];
 }
@@ -64,7 +64,7 @@ export async function fetchResults(
   }
 
   const endpoint = serperEndpoint(type);
-  const body: Record<string, any> = { q: query, gl: 'us', hl: 'en', num: maxSources };
+  const body: Record<string, unknown> = { q: query, gl: 'us', hl: 'en', num: maxSources };
 
   const res = await fetch(endpoint, {
     method: 'POST',
@@ -80,20 +80,20 @@ export async function fetchResults(
     throw new Error(`Serper API error (${type}): ${res.status} ${res.statusText}`);
   }
 
-  const data: any = await res.json();
+  const data: unknown = await res.json();
 
   const organic = extractOrganic(data);
   const results: SearchResult[] = organic
     .slice(0, maxSources)
-    .map((item: any, i: number) => ({
-      id: item.position ?? i + 1,
-      title: item.title || '',
-      url: item.link || item.url || '',
-      snippet: item.snippet || item.description || null,
-      date: item.date || null,
-    }));
+    .map((item: unknown, i: number) => { const it = item as Record<string, unknown>; return ({
+      id: (it.position as number) ?? i + 1,
+      title: String(it.title || ''),
+      url: String(it.link || it.url || ''),
+      snippet: (it.snippet || it.description || null) as string | null,
+      date: (it.date || null) as string | null,
+    }); });
 
-  const queryText = data.searchParameters?.q || query;
+  const queryText = ((data as Record<string, unknown>)?.searchParameters as Record<string, unknown>)?.q as string || query;
   return { results, queryText };
 }
 
@@ -151,13 +151,13 @@ export async function fetchPageContent(
       .slice(0, 3000);
 
     return { title, content: text };
-  } catch (err: any) {
+  } catch (err: unknown) {
     // AbortError should still propagate so the agent can be cancelled cleanly
-    if (err.name === 'AbortError') throw err;
+    if ((err as Error).name === 'AbortError') throw err;
     return {
       title: url,
       content: '',
-      error: err.message,
+      error: (err as Error).message,
     };
   }
 }

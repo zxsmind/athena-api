@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useLocation } from 'react-router-dom';
-import { MoreHorizontal } from 'lucide-react';
 import SearchInput from '../components/SearchInput';
 import { getDefaultMode } from '../hooks/useDefaultMode';
 import ActivityModal from '../components/ActivityModal';
@@ -9,11 +8,11 @@ import DiagramOverlay from '../components/DiagramOverlay';
 import CitationTooltip from '../components/CitationTooltip';
 import SourcesPanel from '../components/chat/SourcesPanel';
 import { MessageUser, MessageLoading, MessageError, MessageComplete, MessageSearches } from '../components/chat/MessageComponents';
-import { search, subscribeToJobEvents, fetchMessages, saveMessages, type Message, type Source } from '../lib/api';
+import { search, subscribeToJobEvents, fetchMessages, saveMessages, type Message, type Source, type SearchResponse } from '../lib/api';
 import {
-  STEP_LABELS, formatTime, normalizeSearchQuery, getSourcesForMessage,
+  normalizeSearchQuery,
   computeCitationTooltipPosition, estimateCitationTooltipSize,
-  CITATION_TOOLTIP_MAX_HEIGHT, ABORT_TIMEOUT_MS,
+  ABORT_TIMEOUT_MS,
   type CitationTooltipItem, type CitationTooltipPosition,
 } from '../lib/chat-utils';
 
@@ -41,7 +40,6 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
   const [liveMs, setLiveMs] = useState(0);
   const [editIndex, setEditIndex] = useState(-1);
   const [editText, setEditText] = useState('');
-  const [sourceExpanded, setSourceExpanded] = useState(false);
   const [panelOpacity, setPanelOpacity] = useState(0);
   const [panelSources, setPanelSources] = useState<Source[]>([]);
   const panelFadeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -97,16 +95,18 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
   }, []);
 
   useEffect(() => {
-    const msg = activeMsgIdx >= 0 && activeMsgIdx < messages.length ? messages[activeMsgIdx] : null;
-    const srcs = msg?.type === 'assistant' && msg.data ? msg.data.sources : [];
-    if (srcs.length > 0) {
-      if (panelFadeTimer.current) clearTimeout(panelFadeTimer.current);
-      setPanelSources(srcs);
-      setPanelOpacity(1);
-    } else {
-      setPanelOpacity(0);
-      panelFadeTimer.current = setTimeout(() => setPanelSources([]), 200);
-    }
+    queueMicrotask(() => {
+      const msg = activeMsgIdx >= 0 && activeMsgIdx < messages.length ? messages[activeMsgIdx] : null;
+      const srcs = msg?.type === 'assistant' && msg.data ? msg.data.sources : [];
+      if (srcs.length > 0) {
+        if (panelFadeTimer.current) clearTimeout(panelFadeTimer.current);
+        setPanelSources(srcs);
+        setPanelOpacity(1);
+      } else {
+        setPanelOpacity(0);
+        panelFadeTimer.current = setTimeout(() => setPanelSources([]), 200);
+      }
+    });
     return () => { if (panelFadeTimer.current) clearTimeout(panelFadeTimer.current); };
   }, [activeMsgIdx, messages]);
 
@@ -148,8 +148,10 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
     if (!convId) return;
     const existing = chatMessages[convId];
     if (existing && existing.length > 0) {
-      setMessages(existing);
-      setLoaded(true);
+      queueMicrotask(() => {
+        setMessages(existing);
+        setLoaded(true);
+      });
     } else {
       fetchMessages(convId).then(msgs => {
         if (msgs.length > 0) {
@@ -159,7 +161,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
         setLoaded(true);
       }).catch(() => setLoaded(true));
     }
-  }, [convId]);
+  }, [convId, chatMessages, onUpdateMessages]);
 
   const persist = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
@@ -255,14 +257,16 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
 
   useLayoutEffect(() => {
     if (!citationTooltip.visible || !tooltipRef.current) return;
-    const box = tooltipRef.current.getBoundingClientRect();
-    const next = computeCitationTooltipPosition(citationTooltip.rect, {
-      width: box.width || estimateCitationTooltipSize(citationTooltip.items).width,
-      height: box.height || estimateCitationTooltipSize(citationTooltip.items).height,
+    queueMicrotask(() => {
+      const box = tooltipRef.current!.getBoundingClientRect();
+      const next = computeCitationTooltipPosition(citationTooltip.rect, {
+        width: box.width || estimateCitationTooltipSize(citationTooltip.items).width,
+        height: box.height || estimateCitationTooltipSize(citationTooltip.items).height,
+      });
+      setCitationTooltipPos(prev =>
+        prev.left === next.left && prev.top === next.top ? prev : next
+      );
     });
-    setCitationTooltipPos(prev =>
-      prev.left === next.left && prev.top === next.top ? prev : next
-    );
   }, [citationTooltip.visible, citationTooltip.rect, citationTooltip.items]);
 
   useEffect(() => {
@@ -469,8 +473,10 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
 
   useEffect(() => {
     if (!initialQuery || !loaded || messages.length > 0) return;
-    setMessages([{ type: 'user', content: initialQuery }, { type: 'assistant', content: '', loading: true }]);
-    runSearch(initialQuery, undefined, conversationMode.current);
+    queueMicrotask(() => {
+      setMessages([{ type: 'user', content: initialQuery }, { type: 'assistant', content: '', loading: true }]);
+      runSearch(initialQuery, undefined, initialMode);
+    });
   }, [initialQuery, loaded, messages.length, runSearch]);
 
   useLayoutEffect(() => {
@@ -570,7 +576,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
               )}
               {msg.type === 'user' ? (
                 <MessageUser
-                  msg={msg} i={i} editIndex={editIndex} editText={editText}
+                  msg={msg} i={i} editIndex={editIndex}
                   editRef={editRef}
                   onEditStart={() => { setEditIndex(i); setEditText(msg.content); }}
                   onEditSave={() => handleEditSave(i)}
@@ -584,17 +590,16 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
               ) : msg.loading ? (
                 <MessageLoading
                   msg={msg} i={i} messages={messages}
-                  liveMs={liveMs} displayMs={displayMs}
+                  displayMs={displayMs}
                   onDiagramClick={setDiagramSvg}
                   onOpenModal={() => setModalOpen(true)}
-                  onRetry={retryLast}
                 />
               ) : msg.error ? (
                 <MessageError msg={msg} onRetry={retryLast} />
               ) : (
                 <MessageComplete
                   msg={msg} i={i} messages={messages}
-                  liveMs={liveMs} displayMs={displayMs}
+                  displayMs={displayMs}
                   copiedIndex={copiedIndex}
                   onDiagramClick={setDiagramSvg}
                   onCopy={() => {
@@ -616,8 +621,8 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
           onSubmit={handleFollowUp}
           compact
           dropdownUp
-          autoFocus
-          initialMode={conversationMode.current}
+autoFocus
+          initialMode={initialMode}
           disabled={isSearching}
         />
       </div>

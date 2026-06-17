@@ -194,7 +194,7 @@ export default function SearchInput({
         inputRef.current?.blur();
       }
     },
-    [suggestions, activeIdx, ghostText, ghostSuffix, fillGhost, handleSubmit]
+    [suggestions, activeIdx, ghostSuffix, fillGhost, handleSubmit]
   );
 
   const showSuggestions = focused && value.trim().length >= 2 && suggestions.length > 0;

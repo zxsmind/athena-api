@@ -5,12 +5,12 @@ let storedContent: string | null = null;
 let storedWritePath = '';
 
 vi.mock('fs', () => ({
-  readFileSync: (path: string) => {
+  readFileSync: () => {
     if (storedContent === null) throw new Error('ENOENT');
     return storedContent;
   },
-  writeFileSync: (path: string, data: string) => {
-    storedWritePath = path;
+  writeFileSync: (filePath: string, data: string) => {
+    storedWritePath = filePath;
     storedContent = data;
   },
   existsSync: () => storedContent !== null,
@@ -18,7 +18,7 @@ vi.mock('fs', () => ({
 
 import { loadSettings, saveSettings, resetSettingsCache, type SettingsStore, type ApiSettings } from '../src/settings-store.js';
 
-function makeMinimalV1(): any {
+function makeMinimalV1(): Record<string, unknown> {
   return {
     providers: {
       groq: { enabled: true, keys: ['gsk_abc'], models: ['llama-3.3-70b-versatile'], url: 'https://api.groq.com/openai/v1/chat/completions' },
@@ -28,7 +28,7 @@ function makeMinimalV1(): any {
   };
 }
 
-function writeSettings(raw: any) {
+function writeSettings(raw: Record<string, unknown>) {
   storedContent = JSON.stringify(raw);
 }
 

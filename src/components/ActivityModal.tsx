@@ -350,7 +350,7 @@ export default function ActivityModal({ open, onClose, steps, sources }: Activit
                           {(() => {
                             let displayQ = step.query!;
                             if (step.type === 'webpage') {
-                              try { displayQ = new URL(step.query!).hostname; } catch {}
+                              try { displayQ = new URL(step.query!).hostname; } catch { /* empty */ }
                             }
                             return `"${displayQ}"`;
                           })()}

@@ -26,6 +26,7 @@ export function SettingsModalProvider({ children }: { children: ReactNode }) {
   );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useSettingsModal() {
   return useContext(SettingsModalContext);
 }

@@ -22,10 +22,10 @@ export interface TargetReference {
 }
 
 export interface LLMOptions {
-  messages: any[];
+  messages: unknown[];
   temperature?: number;
   maxTokens?: number;
-  tools?: any[];
+  tools?: unknown[];
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   stream?: boolean;
   onToken?: (text: string) => void;
@@ -33,42 +33,46 @@ export interface LLMOptions {
   label?: string;
   role?: LLMRole;
   signal?: AbortSignal;
-  responseFormat?: any;
+  responseFormat?: unknown;
 }
 
 export interface LLMResult {
-  data?: any;
+  data?: unknown;
   fullContent?: string;
   model: string;
   provider: string;
 }
 
-function normalizeGeminiResponse(data: any, model: string): any {
-  const candidates = data.candidates || [];
+function normalizeGeminiResponse(data: unknown, model: string): unknown {
+  const d = data as Record<string, unknown>;
+  const candidates = (d.candidates || []) as unknown[];
   if (candidates.length === 0) return data;
-  const c = candidates[0];
-  const parts = c.content?.parts || [];
-  const text = parts.map((p: any) => p.text || '').join('');
-  const finish = c.finishReason || 'stop';
-  const toolCalls: any[] = [];
+  const c = candidates[0] as Record<string, unknown>;
+  const content = c.content as Record<string, unknown> | undefined;
+  const parts = (content?.parts || []) as Record<string, unknown>[];
+  const text = parts.map(p => String(p.text || '')).join('');
+  const finish = String(c.finishReason || 'stop');
+  const toolCalls: Record<string, unknown>[] = [];
   for (const p of parts) {
-    if (p.functionCall) {
+    const pp = p as Record<string, unknown>;
+    if (pp.functionCall) {
+      const fc = pp.functionCall as Record<string, unknown>;
       toolCalls.push({
         id: `call_${Date.now()}_${toolCalls.length}`,
         type: 'function',
-        function: { name: p.functionCall.name, arguments: JSON.stringify(p.functionCall.args || {}) },
+        function: { name: fc.name, arguments: JSON.stringify(fc.args || {}) },
       });
     }
   }
-  const msg: any = { role: 'assistant', content: text || null };
+  const msg: Record<string, unknown> = { role: 'assistant', content: text || null };
   if (toolCalls.length > 0) msg.tool_calls = toolCalls;
   return {
-    id: data.id || 'gemini-response',
+    id: d.id || 'gemini-response',
     object: 'chat.completion',
     created: Date.now(),
     model,
-    choices: [{ index: 0, message: msg, finish_reason: finish === 'STOP' ? 'stop' : finish?.toLowerCase() || 'stop' }],
-    usage: data.usage || {},
+    choices: [{ index: 0, message: msg, finish_reason: finish === 'STOP' ? 'stop' : (finish?.toLowerCase() || 'stop') }],
+    usage: d.usage || {},
   };
 }
 
@@ -130,12 +134,13 @@ export function stripThinkingTags(text: string): string {
 }
 
 const GEMINI_CONTENT_FIELDS = ['content', 'text', 'message.content'];
-function extractDeltaText(delta: any): string {
+function extractDeltaText(delta: unknown): string {
   if (!delta) return '';
-  if (delta.reasoning_content || delta.reasoning || delta.thought) return '';
+  const d = delta as Record<string, unknown>;
+  if (d.reasoning_content || d.reasoning || d.thought) return '';
   for (const path of GEMINI_CONTENT_FIELDS) {
-    const val = path.split('.').reduce((o, k) => o?.[k], delta);
-    if (val) return val;
+    const val = path.split('.').reduce((o: Record<string, unknown> | undefined, k: string) => o?.[k] as Record<string, unknown> | undefined, d);
+    if (val) return String(val);
   }
   return '';
 }
@@ -153,10 +158,10 @@ function makeRequestSignal(timeoutMs: number, external?: AbortSignal): { signal:
 async function tryProvider(
   target: TargetReference,
   opts: LLMOptions,
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   label: string,
   tried: string[],
-): Promise<{ data: any; provider: string; model: string } | null> {
+): Promise<{ data: unknown; provider: string; model: string } | null> {
   const model = target.model;
   if (opts.tools && !modelSupportsTools(model)) {
     tried.push(`${target.id}/${model} -> skipped (no tool calling support)`);
@@ -171,7 +176,6 @@ async function tryProvider(
   }
 
   for (const apiKey of provider.keys) {
-    const start = Date.now();
     try {
       const { signal, cleanup } = makeRequestSignal(30000, opts.signal);
       try {
@@ -203,8 +207,8 @@ async function tryProvider(
           continue;
         }
 
-        let data: any = await res.json();
-        if (target.id === 'gemini' || data.candidates) {
+        let data: unknown = await res.json();
+        if (target.id === 'gemini' || (data as Record<string, unknown>)?.candidates) {
           data = normalizeGeminiResponse(data, model);
         }
         return { data, provider: target.id, model };
@@ -221,10 +225,10 @@ async function tryProvider(
 async function tryProviderStream(
   target: TargetReference,
   opts: LLMOptions,
-  body: Record<string, any>,
+  body: Record<string, unknown>,
   label: string,
   tried: string[],
-): Promise<{ data: any; fullContent: string; provider: string; model: string } | null> {
+): Promise<{ data: unknown; fullContent: string; provider: string; model: string } | null> {
   const model = target.model;
   if (opts.tools && !modelSupportsTools(model)) {
     tried.push(`${target.id}/${model} -> skipped (no tool calling support)`);

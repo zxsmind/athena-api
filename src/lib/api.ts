@@ -166,7 +166,7 @@ export function subscribeToJobEvents(
   const source = new EventSource(url);
   let done = false;
 
-  const terminal = (type: string) => {
+  const terminal = () => {
     if (done) return;
     done = true;
     source.close();
@@ -179,8 +179,8 @@ export function subscribeToJobEvents(
       try {
         const data = JSON.parse(e.data) as ResearchJobEvent;
         switch (data.type) {
-          case 'done': terminal('done'); callbacks.onDone?.(data.response); break;
-          case 'error': terminal('error'); callbacks.onError?.(data.message); break;
+          case 'done': terminal(); callbacks.onDone?.(data.response); break;
+          case 'error': terminal(); callbacks.onError?.(data.message); break;
           case 'token': callbacks.onToken?.(data.text); break;
           case 'step': callbacks.onStep?.(data.data); break;
           case 'sources': callbacks.onSources?.(data.sources); break;
