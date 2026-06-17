@@ -350,7 +350,8 @@ export default function Sidebar({ conversations, onNewChat, onRename, onDelete, 
           onClick={onClose}
           style={{
             position: 'fixed', inset: 0, zIndex: 998,
-            background: dark ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.25)',
+            background: dark ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.15)',
+            backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
             opacity: open ? 1 : 0,
             pointerEvents: open ? 'auto' : 'none',
             transition: 'opacity 300ms var(--ease-out)',

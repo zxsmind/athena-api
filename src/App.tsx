@@ -106,7 +106,7 @@ function Layout() {
         />
 
         <main style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
-          {isMobile && (
+          {isMobile && location.pathname === '/' && (
             <button
               onClick={() => setSidebarOpen(true)}
               title="Open sidebar"
@@ -132,6 +132,7 @@ function Layout() {
                   chatMessages={chatMessages}
                   onUpdateMessages={setChatMessages}
                   conversations={conversations}
+                  onOpenSidebar={() => setSidebarOpen(true)}
                 />
               }
             />

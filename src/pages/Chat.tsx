@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react
 import { createPortal } from 'react-dom';
 import { useParams, useLocation } from 'react-router-dom';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import { MoreHorizontal } from 'lucide-react';
+import { MoreHorizontal, Menu } from 'lucide-react';
 import SearchInput from '../components/SearchInput';
 import { getDefaultMode } from '../hooks/useDefaultMode';
 import ActivityModal from '../components/ActivityModal';
@@ -22,9 +22,10 @@ interface ChatProps {
   chatMessages: Record<string, Message[]>;
   onUpdateMessages: React.Dispatch<React.SetStateAction<Record<string, Message[]>>>;
   conversations: { id: string; title: string | null; query: string; timestamp: Date }[];
+  onOpenSidebar?: () => void;
 }
 
-export default function Chat({ chatMessages, onUpdateMessages, conversations }: ChatProps) {
+export default function Chat({ chatMessages, onUpdateMessages, conversations, onOpenSidebar }: ChatProps) {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -550,7 +551,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {title && (
+      {!isMobile && title && (
         <span data-ctx="title" style={{
           position: 'absolute', top: 14, right: 'var(--chat-pad-x, 28px)',
           fontSize: 13, fontWeight: 400, color: 'var(--athena-text-3)',
@@ -558,6 +559,40 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
         }}>
           {title}
         </span>
+      )}
+
+      {isMobile && (
+        <div style={{
+          display: 'flex', alignItems: 'center', height: 48, flexShrink: 0,
+          padding: '0 var(--chat-pad-x, 28px)',
+          borderBottom: '0.5px solid var(--athena-border)',
+          background: 'var(--athena-bg)',
+          position: 'relative', zIndex: 10,
+        }}>
+          <button
+            onClick={onOpenSidebar}
+            title="Open sidebar"
+            style={{
+              width: 32, height: 32, borderRadius: 8, border: 'none',
+              background: 'none', cursor: 'pointer', padding: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'var(--athena-text-2)',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--athena-border)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
+          >
+            <Menu size={18} />
+          </button>
+          <span style={{
+            flex: 1, textAlign: 'center',
+            fontSize: 12.5, fontWeight: 500, color: 'var(--athena-text-2)',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            padding: '0 8px',
+          }}>
+            {title}
+          </span>
+          <div style={{ width: 32 }} />
+        </div>
       )}
 
       <div ref={scrollRef} style={{
