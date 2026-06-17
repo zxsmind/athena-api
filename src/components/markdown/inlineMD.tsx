@@ -19,6 +19,12 @@ export function inlineMD(t: string, sources?: Source[]) {
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => `<a href="${sanitizeUrl(url)}" target="_blank" rel="noopener noreferrer">${text}</a>`);
 
   if (sources && sources.length > 0) {
+    let prev: string;
+    do {
+      prev = html;
+      html = html.replace(/(?:\[|【)(\d+(?:\s*,\s*\d+)*)(?:\]|】)\s*(?:\[|【)(\d+(?:\s*,\s*\d+)*)(?:\]|】)/g, (_, a, b) => `[${a},${b}]`);
+    } while (prev !== html);
+
     html = html.replace(/(?:\[|【)(\d+(?:\s*,\s*\d+)*)(†[^\]】]*)?(?:\]|】)/g, (match, nums) => {
       const indices = nums.split(/\s*,\s*/).map((n: string) => parseInt(n, 10) - 1);
       const valid = indices.filter((i: number) => i >= 0 && i < sources.length);
