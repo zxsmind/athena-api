@@ -1,3 +1,4 @@
+import React from 'react';
 import katex from 'katex';
 import MermaidBlock from '../MermaidBlock';
 import { inlineMD } from './inlineMD';
@@ -9,6 +10,70 @@ export function renderMarkdown(text: string, sources?: Source[], onDiagramClick?
   const nodes: React.ReactNode[] = [];
   let key = 0;
   let i = 0;
+
+  function parseNestedList(start: number, ordered: boolean): { items: React.ReactNode[], next: number } {
+    const items: React.ReactNode[] = [];
+    const baseIndent = lines[start].length - lines[start].trimStart().length;
+    let idx = start;
+
+    while (idx < lines.length) {
+      const line = lines[idx];
+      const trimmed = line.trim();
+      const indent = line.length - line.trimStart().length;
+
+      if (!trimmed) { idx++; continue; }
+      const marker = ordered ? /^\d+\.\s/ : /^[-*]\s/;
+      if (!marker.test(trimmed)) break;
+      if (idx > start && indent !== baseIndent) break;
+
+      let content = trimmed.replace(ordered ? /^\d+\.\s+/ : /^[-*]\s+/, '');
+      let taskChecked: boolean | null = null;
+      const taskMatch = content.match(/^\[( |x|X)\]\s+(.*)/);
+      if (taskMatch) {
+        taskChecked = taskMatch[1] !== ' ';
+        content = taskMatch[2];
+      }
+
+      idx++;
+
+      let nested: React.ReactNode = null;
+      while (idx < lines.length) {
+        const nl = lines[idx];
+        const nt = nl.trim();
+        const ni = nl.length - nl.trimStart().length;
+        if (!nt) { idx++; continue; }
+        if (ni <= indent) break;
+        if (/^[-*]\s/.test(nt)) {
+          const sub = parseNestedList(idx, false);
+          nested = <ul key={`n${idx}`} style={{ marginTop: 4, marginBottom: 4 }}>{sub.items}</ul>;
+          idx = sub.next;
+        } else if (/^\d+\.\s/.test(nt)) {
+          const sub = parseNestedList(idx, true);
+          nested = <ol key={`n${idx}`} style={{ marginTop: 4, marginBottom: 4 }}>{sub.items}</ol>;
+          idx = sub.next;
+        } else break;
+      }
+
+      if (taskChecked !== null) {
+        items.push(
+          <li key={items.length} style={{ listStyle: 'none' }}>
+            <input type="checkbox" checked={taskChecked} readOnly disabled
+              style={{ marginRight: 6, accentColor: 'var(--athena-accent)', transform: 'scale(0.85)', verticalAlign: 'middle' }} />
+            <span dangerouslySetInnerHTML={{ __html: inlineMD(content, sources) }} />
+            {nested}
+          </li>
+        );
+      } else {
+        items.push(
+          <li key={items.length}>
+            <span dangerouslySetInnerHTML={{ __html: inlineMD(content, sources) }} />
+            {nested}
+          </li>
+        );
+      }
+    }
+    return { items, next: idx };
+  }
 
   while (i < lines.length) {
     const trimmed = lines[i].trim();
@@ -80,7 +145,9 @@ export function renderMarkdown(text: string, sources?: Source[], onDiagramClick?
 
     if (/^#{1,6}\s/.test(trimmed)) {
       const level = trimmed.match(/^#+/)![0].length;
-      const Tag = `h${Math.min(level + 1, 6)}` as keyof JSX.IntrinsicElements;
+      const tagName = `h${Math.min(level + 1, 6)}`;
+      const map: Record<string, React.ElementType> = { h2: 'h2', h3: 'h3', h4: 'h4', h5: 'h5', h6: 'h6' };
+      const Tag = map[tagName] || 'h6';
       nodes.push(<Tag key={key++} dangerouslySetInnerHTML={{ __html: inlineMD(trimmed.replace(/^#+\s*/, ''), sources) }} />);
       i++;
       continue;
@@ -105,23 +172,12 @@ export function renderMarkdown(text: string, sources?: Source[], onDiagramClick?
       continue;
     }
 
-    if (/^[-*]\s/.test(trimmed)) {
-      const items: React.ReactNode[] = [];
-      while (i < lines.length && /^[-*]\s/.test(lines[i].trim())) {
-        items.push(<li key={items.length} dangerouslySetInnerHTML={{ __html: inlineMD(lines[i].trim().replace(/^[-*]\s+/, ''), sources) }} />);
-        i++;
-      }
-      nodes.push(<ul key={key++}>{items}</ul>);
-      continue;
-    }
-
-    if (/^\d+\.\s/.test(trimmed)) {
-      const items: React.ReactNode[] = [];
-      while (i < lines.length && /^\d+\.\s/.test(lines[i].trim())) {
-        items.push(<li key={items.length} dangerouslySetInnerHTML={{ __html: inlineMD(lines[i].trim().replace(/^\d+\.\s+/, ''), sources) }} />);
-        i++;
-      }
-      nodes.push(<ol key={key++}>{items}</ol>);
+    const listMarker = trimmed.match(/^[-*]\s/) ? 'ul' : trimmed.match(/^\d+\.\s/) ? 'ol' : null;
+    if (listMarker) {
+      const result = parseNestedList(i, listMarker === 'ol');
+      const Tag = listMarker === 'ol' ? 'ol' : 'ul';
+      nodes.push(<Tag key={key++} style={{ margin: '4px 0' }}>{result.items}</Tag>);
+      i = result.next;
       continue;
     }
 

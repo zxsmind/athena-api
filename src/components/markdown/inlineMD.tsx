@@ -16,6 +16,8 @@ export function inlineMD(t: string, sources?: Source[]) {
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/(\*\*|__)(.+?)\1/g, '<strong>$2</strong>')
     .replace(/(\*|_)(.+?)\1/g, '<em>$2</em>')
+    .replace(/~~(.+?)~~/g, '<del>$1</del>')
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => `<img src="${sanitizeUrl(url)}" alt="${alt}" loading="lazy" style="max-width:100%;border-radius:8px;margin:8px 0" />`)
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => `<a href="${sanitizeUrl(url)}" target="_blank" rel="noopener noreferrer">${text}</a>`);
 
   if (sources && sources.length > 0) {
