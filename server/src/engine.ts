@@ -98,7 +98,13 @@ function sanitizeHistory(
       typeof h.content === 'string' &&
       h.content.trim().length > 0 &&
       !h.content.startsWith('[Search result')
-    );
+    )
+    .map(h => {
+      if (h.role === 'assistant') {
+        return { ...h, content: h.content.replace(/\s*\[\d+\]\s*/g, ' ').trim() };
+      }
+      return h;
+    });
 
   // Defensive guard: older clients accidentally included the current turn in history
   // while also sending it as `query`, which makes the model answer the turn twice.
@@ -218,13 +224,20 @@ async function toolCallingRound(
   signal?: AbortSignal,
   role?: LLMRole,
 ): Promise<boolean> {
-  if (signal?.aborted || budget.remainingCredits <= 0) {
-    budget.exhausted = budget.remainingCredits <= 0;
+  if (signal?.aborted) return false;
+
+  const budgetExhausted = budget.remainingCredits <= 0;
+  if (budgetExhausted) {
+    budget.exhausted = true;
     onProgress?.(budget);
-    return false;
+    messages.push({
+      role: 'system',
+      content: '[Budget exhausted: No more searches or page fetches allowed. Answer with the information already gathered.]',
+    });
   }
+
   const stepType = round === 0 ? 'plan-analyze' : 'analyze';
-  const step: AgentStep = { type: stepType, note: round === 0 ? 'Analyzing question...' : 'Thinking...', context: JSON.stringify(messages, null, 2) };
+  const step: AgentStep = { type: stepType, note: budgetExhausted ? 'Budget exhausted — generating final answer...' : (round === 0 ? 'Analyzing question...' : 'Thinking...'), context: JSON.stringify(messages, null, 2) };
   steps.push(step);
   onEvent({ type: 'step', data: step });
 
@@ -232,15 +245,15 @@ async function toolCallingRound(
   const { data, model, provider } = await callLLM({
     messages,
     temperature: temp,
-    tools: [SEARCH_TOOL, FETCH_URL_TOOL],
-    toolChoice: 'auto',
+    tools: budgetExhausted ? undefined : [SEARCH_TOOL, FETCH_URL_TOOL],
+    toolChoice: budgetExhausted ? 'none' : 'auto',
     role,
     signal,
     onModelSelected: (selectedModel) => {
       step.model = selectedModel;
       onEvent({ type: 'step', data: step });
     },
-    label: `tool-round-${round}`,
+    label: budgetExhausted ? `tool-round-${round}-final` : `tool-round-${round}`,
   });
 
   const choice = data!.choices[0];
@@ -312,9 +325,7 @@ async function toolCallingRound(
     if (budget.remainingCredits <= 0) {
       budget.exhausted = true;
       onProgress?.(budget);
-      const step: AgentStep = { type: 'budget', note: 'Research budget exhausted before executing tasks.' };
-      steps.push(step);
-      onEvent({ type: 'step', data: step });
+      onEvent({ type: 'error', message: 'Research budget exhausted. Cannot execute more searches or fetches.' });
       return false;
     }
 
@@ -602,7 +613,7 @@ export async function agenticResearchStream(
   let usedTools = false;
   let lastRound = 0;
   for (let round = 0; round < maxRounds; round++) {
-    if (options.signal?.aborted || budget.remainingCredits <= 0) break;
+    if (options.signal?.aborted) break;
     const more = await toolCallingRound(messages, allSources, steps, round, onEvent, budget, options.onProgress, options.signal, activeRole);
     if (more) usedTools = true;
     lastRound = round;
