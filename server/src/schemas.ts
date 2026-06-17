@@ -2,6 +2,7 @@ export interface SearchRequest {
   query: string;
   mode?: string;
   history?: { role: string; content: string }[];
+  conversationId?: string;
 }
 
 export interface Source {

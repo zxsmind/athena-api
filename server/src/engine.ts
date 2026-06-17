@@ -2,7 +2,7 @@ import { callLLM, type LLMRole } from './llm.js';
 import type { LLMResult } from './llm.js';
 import { fetchResults, fetchPageContent } from './search.js';
 import type { SearchResponse, Source, AgentStep } from './schemas.js';
-import { SYSTEM_PROMPT, DEEP_SYSTEM_PROMPT } from './agent/prompts.js';
+import { SYSTEM_PROMPT, DEEP_SYSTEM_PROMPT, SYNTHESIS_PROMPT } from './agent/prompts.js';
 import { loadSettings } from './settings-store.js';
 import { SEARCH_TOOL, FETCH_URL_TOOL, type EngineEvent, type ResearchBudgetState, type ResearchRunOptions, type SourceWithIndex } from './engine/types.js';
 import { temperatureForRound, sanitizeHistory, domain, normalizeContent } from './engine/history.js';
@@ -14,7 +14,7 @@ export type { EngineEvent, ResearchRunOptions, ResearchBudgetState } from './eng
 async function toolCallingRound(
   messages: any[], allSources: Map<string, SourceWithIndex>,
   steps: AgentStep[], round: number, onEvent: (ev: EngineEvent) => void,
-  budget: ResearchBudgetState, onProgress?: (state: ResearchBudgetState) => void,
+  budget: ResearchBudgetState, maxRounds: number, onProgress?: (state: ResearchBudgetState) => void,
   signal?: AbortSignal, role?: LLMRole,
 ): Promise<boolean> {
   if (signal?.aborted) return false;
@@ -33,6 +33,20 @@ async function toolCallingRound(
     messages.push({ role: 'system', content: warning });
     steps.push({ type: 'budget', note: 'Budget exhausted — model will answer from existing data.' });
     onEvent({ type: 'step', data: steps[steps.length - 1] });
+  } else {
+    const remainingRoundBudget = maxRounds - round;
+    const remainingCredits = budget.remainingCredits;
+    if (remainingCredits <= 2) {
+      const msg = `⚠️ **Low budget.** Only ${remainingCredits} credit(s) remain. Use them carefully. If you search, be prepared to answer immediately after.`;
+      messages.push({ role: 'system', content: msg });
+    }
+    if (remainingRoundBudget <= 1) {
+      const msg = `⚠️ **Last round.** After this round the connection closes. If you still need information, search now — then answer immediately. If you have enough, skip searching and write your answer.`;
+      messages.push({ role: 'system', content: msg });
+    } else if (remainingRoundBudget <= 2) {
+      const msg = `⚠️ **${remainingRoundBudget} rounds remaining.** Plan accordingly.`;
+      messages.push({ role: 'system', content: msg });
+    }
   }
 
   const temp = temperatureForRound(round);
@@ -173,6 +187,7 @@ async function toolCallingRound(
     budget.remainingCredits -= allowedCount;
     if (budget.remainingCredits <= 0) budget.exhausted = true;
     onProgress?.(budget);
+    messages.push({ role: 'system', content: `[Budget: ${budget.remainingCredits} credits remaining | Round ${round + 1}/${maxRounds}]` });
     return true;
   }
 
@@ -230,6 +245,7 @@ async function toolCallingRound(
       budget.remainingCredits -= allowedQueries.length;
       if (budget.remainingCredits <= 0) budget.exhausted = true;
       onProgress?.(budget);
+      messages.push({ role: 'system', content: `[Budget: ${budget.remainingCredits} credits remaining | Round ${round + 1}/${maxRounds}]` });
       onEvent({ type: 'sources', sources: Array.from(allSources.values()).map(({ source_index, ...s }) => s as Source) });
       return true;
     }
@@ -265,7 +281,8 @@ export async function agenticResearchStream(
   };
   const now = new Date();
   const today = `${now.toLocaleDateString('en-US', { month: 'long' })} ${now.getDate()}, ${now.getFullYear()}`;
-  const systemPrompt = (mode === 'deep' ? DEEP_SYSTEM_PROMPT : SYSTEM_PROMPT) + `\n\n**Today's date:** ${today}.`;
+  const constraintsBlock = `\n\n**Research constraints:** You have ${budget.remainingCredits} search/fetch credits and a maximum of ${maxRounds} rounds. Each search or fetch costs 1 credit. Plan your research — when credits or rounds run low, stop searching and write your answer using what you have.`;
+  const systemPrompt = (mode === 'deep' ? DEEP_SYSTEM_PROMPT : SYSTEM_PROMPT) + `\n\n**Today's date:** ${today}.` + constraintsBlock;
   const messages: any[] = [{ role: 'system', content: systemPrompt }];
   const sanitizedHistory = sanitizeHistory(history, query, mode);
   if (sanitizedHistory.length > 0) messages.push(...sanitizedHistory.map(h => ({ role: h.role, content: h.content })));
@@ -276,7 +293,7 @@ export async function agenticResearchStream(
   let lastRound = 0;
   for (let round = 0; round < maxRounds; round++) {
     if (options.signal?.aborted) break;
-    const more = await toolCallingRound(messages, allSources, steps, round, onEvent, budget, options.onProgress, options.signal, activeRole);
+    const more = await toolCallingRound(messages, allSources, steps, round, onEvent, budget, maxRounds, options.onProgress, options.signal, activeRole);
     if (more) usedTools = true;
     lastRound = round;
     if (!more) break;
@@ -298,6 +315,30 @@ export async function agenticResearchStream(
     }
   }
 
+  /* ── Safety net: force synthesis if model ran out of rounds mid-research ── */
+  if (allSources.size > 0) {
+    const synthesisStep: AgentStep = { type: 'synthesize', note: 'Compiling final answer from gathered sources...' };
+    steps.push(synthesisStep);
+    onEvent({ type: 'step', data: synthesisStep });
+    messages.push({ role: 'system', content: SYNTHESIS_PROMPT });
+    try {
+      const { data: synData } = await callLLM({
+        messages, temperature: 0, toolChoice: 'none', signal: options.signal,
+        label: 'synthesis-fallback',
+      });
+      const synContent = synData?.choices?.[0]?.message?.content;
+      if (synContent?.trim()) {
+        const elapsed = Math.round(performance.now() - start);
+        steps.push({ type: 'answer', note: 'Answer synthesized from research.' });
+        onEvent({ type: 'step', data: steps[steps.length - 1] });
+        onEvent({ type: 'done', response: { query, answer: synContent, sources: Array.from(allSources.values()).map(({ source_index, ...s }) => s as Source), steps, results_count: allSources.size, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted } } });
+        return;
+      }
+    } catch (err: any) {
+      console.error('[synthesis-fallback] LLM call failed:', err?.message || err);
+    }
+  }
+
   /* ── No answer → best-effort ── */
   const elapsed = Math.round(performance.now() - start);
   if (budget.exhausted) {
@@ -306,7 +347,7 @@ export async function agenticResearchStream(
     onEvent({ type: 'step', data: budgetStep });
   }
   if (allSources.size > 0) {
-    onEvent({ type: 'error', message: 'Araştırma bütçesi doldu ancak model cevap üretemedi.' });
+    onEvent({ type: 'error', message: budget.exhausted ? 'Araştırma bütçesi doldu ancak model cevap üretemedi.' : 'Model kaynakları topladı ancak cevap üretemedi.' });
   } else {
     onEvent({ type: 'error', message: 'Model could not produce an answer.' });
   }

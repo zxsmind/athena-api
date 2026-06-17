@@ -7,6 +7,7 @@ export interface ResearchJobRequest {
   query: string;
   history?: { role: string; content: string }[];
   mode?: 'quick' | 'deep';
+  conversationId?: string;
 }
 
 export type ResearchJobEvent =
@@ -33,6 +34,7 @@ export interface ResearchJobRecord {
   controller?: AbortController;
   steps: AgentStep[];
   events: ResearchJobEvent[];
+  conversationId?: string;
 }
 
 const jobs = new Map<string, ResearchJobRecord>();
@@ -95,6 +97,7 @@ export function createResearchJob(req: ResearchJobRequest): ResearchJobRecord {
     cancelled: false,
     steps: [],
     events: [],
+    conversationId: req.conversationId,
   };
   jobs.set(id, job);
   pushEvent(job, { type: 'status', status: 'queued', timestamp: nowIso() });
