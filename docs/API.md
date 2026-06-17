@@ -61,7 +61,7 @@ Authentication is not implemented. The server is designed for local/trusted-netw
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/search` | Interactive search with SSE streaming |
+| `POST` | `/search` | Create a research job, returns `{ id }` — frontend then polls `/research-jobs/:id/events` for SSE |
 | `POST` | `/research-jobs` | Create a long-running research job |
 | `GET` | `/research-jobs/:id` | Get job status and result |
 | `GET` | `/research-jobs/:id/events` | SSE stream of job events |
@@ -81,17 +81,19 @@ Authentication is not implemented. The server is designed for local/trusted-netw
 | `DELETE` | `/conversations/:id` | Delete conversation |
 | `GET` | `/health` | Server health check |
 | `GET` | `/config` | Public configuration (key count, provider count) |
-| `GET` | `/autocomplete` | Google search suggestions proxy |
+| `GET` | `/autocomplete` | Google Suggest-based search suggestions |
 | `GET` | `/ping` | Version info |
 | `POST` | `/test-llm` | Test LLM connectivity |
 
 ---
 
-## Search API (SSE Streaming)
+## Search API
+
+Interactive research via a two-step pattern: create a job, then subscribe to its SSE event stream.
 
 ### `POST /search`
 
-Interactive research query with real-time SSE streaming. Best for single-turn queries where the client waits for the full response.
+Create a research job. Returns immediately with the job ID. The frontend then subscribes to `GET /research-jobs/:id/events` for real-time SSE streaming.
 
 **Request Body:**
 
@@ -112,38 +114,55 @@ Interactive research query with real-time SSE streaming. Best for single-turn qu
 | `history` | `Array<{role, content}>` | No | `[]` | Conversation history for context |
 | `mode` | `"quick" \| "deep"` | No | `"quick"` | Research depth |
 
-**Response:** SSE stream (`text/event-stream`).
+**Response (202):**
 
-**Events emitted (in order):**
+```json
+{ "id": "550e8400-e29b-41d4-a716-446655440000" }
+```
+
+### `GET /research-jobs/:id/events`
+
+SSE stream of job events in real time.
+
+**Response:** `text/event-stream`.
+
+**Events:**
 
 ```
 event: step
-data: {"type":"plan-analyze","query":"...","model":"...","note":"..."}
+data: {"type":"step","data":{"type":"plan","query":"...","model":"...","note":"..."},"timestamp":"..."}
 
-event: step
-data: {"type":"search","query":"...","result_count":5}
+event: sources
+data: {"type":"sources","sources":[{"title":"...","url":"...","domain":"...","snippet":"..."}]}
+
+event: token
+data: {"type":"token","text":"Partial answer text...","timestamp":"..."}
 
 event: done
-data: {"query":"...","answer":"...","sources":[...],"steps":[...],"results_count":5,"elapsed_ms":4230,"research_budget":{"used":3,"limit":20,"exhausted":false}}
+data: {"type":"done","response":{"query":"...","answer":"...","sources":[...],"steps":[...],"results_count":5,"elapsed_ms":4230,"research_budget":{"used":3,"limit":20,"exhausted":false}},"timestamp":"..."}
+
+event: error
+data: {"type":"error","message":"Provider unavailable","timestamp":"..."}
 ```
 
-> **Note:** The engine currently does not emit `token` events. The full answer is delivered in the `done` event.
-
-**Possible events:**
+**Event types:**
 
 | Event | Data Shape | Description |
 |-------|-----------|-------------|
-| `step` | `AgentStep` | Research phase update (`plan-analyze`, `analyze`, `search`, `webpage`, `budget`) |
-| `sources` | `{ sources: Source[] }` | Updated source list after a search/fetch |
-| `done` | `SearchResponse` | Final result with complete answer and sources |
-| `error` | `{ message: string }` | Error occurred, stream ended |
+| `step` | `{ type: "step", data: AgentStep, timestamp }` | Research phase update (plan, search, analyze, synthesize) |
+| `sources` | `{ type: "sources", sources: Source[], timestamp }` | Sources found during search |
+| `token` | `{ type: "token", text: string, timestamp }` | Streaming answer token |
+| `done` | `{ type: "done", response: SearchResponse, timestamp }` | Final result with complete answer and sources |
+| `error` | `{ type: "error", message: string, timestamp }` | Error occurred, stream ended |
+
+The stream stays open until the job reaches a terminal state (`completed`, `failed`, `cancelled`).
 
 **Modes:**
 
-- **`quick`**: Single-pass research. Model can call `web_search` tool up to 3 rounds. Faster, uses fewer credits; quick-mode budget is capped at 6 credits.
-- **`deep`**: Multi-pass research. The same tool-calling loop runs for up to 50 rounds. Uses `research.maxCreditsPerQuery` credits (default 20).
+- **`quick`**: Single-pass research. Model can call `web_search` tool up to ~3 rounds. Faster, uses fewer credits.
+- **`deep`**: Multi-pass research. After initial search+analyze, a critical review phase generates follow-up queries, then searches again before synthesis. Uses `deepIterations + 2` search rounds.
 
-**Client timeout:** 3 minutes (180,000 ms). The frontend `searchStream()` function in `src/lib/api.ts` automatically aborts after this duration.
+**Client timeout:** 3 minutes (180,000 ms). The frontend `search()` function in `src/lib/api.ts` automatically aborts after this duration.
 
 ---
 
@@ -235,25 +254,9 @@ Poll for job status and result.
 | `failed` | Research failed, `error` field contains reason |
 | `cancelled` | Cancelled by user via cancel endpoint |
 
-> **Note:** The engine currently emits step types `plan-analyze`, `analyze`, `search`, `webpage`, and `budget`. Therefore, runtime job statuses will typically be `planning` or `searching`. `reviewing` and `synthesizing` are mapped from `review` and `synthesize` step types but are not emitted by the current engine.
-
 ### `GET /research-jobs/:id/events`
 
-SSE stream of job events in real time.
-
-**Response:** `text/event-stream`.
-
-Same event types as `/search` (`step`, `token`, `done`, `error`) wrapped with job metadata.
-
-```
-event: step
-data: {"type":"step","data":{"type":"plan",...},"timestamp":"..."}
-
-event: done
-data: {"type":"done","response":{...},"timestamp":"..."}
-```
-
-The stream stays open until the job reaches a terminal state (`completed`, `failed`, `cancelled`).
+SSE stream of job events. Same event types as [Search API events](#get-research-jobsidevents) (`step`, `sources`, `token`, `done`, `error`).
 
 ### `POST /research-jobs/:id/cancel`
 
@@ -413,7 +416,7 @@ Cancel all running and pending items in a batch.
 
 ### `GET /settings`
 
-Returns the full settings object. Keys are returned as-is in the response; masking is done in the UI (`SettingsModal.tsx`).
+Returns the full settings object. Keys are masked in the response.
 
 **Response (200):**
 
@@ -437,9 +440,9 @@ Returns the full settings object. Keys are returned as-is in the response; maski
   "research": { "maxCreditsPerQuery": 20, "maxFollowUpQueries": 3 },
   "modelRouting": {
     "title": { "primary": { "providerId": "groq", "model": "llama-3.3-70b-versatile" }, "fallback": [] },
-    "reasoning": { "primary": { "providerId": "gemini", "model": "gemini-3.1-flash-lite" }, "fallback": [] },
-    "instant": { "primary": { "providerId": "groq", "model": "openai/gpt-oss-120b" }, "fallback": [] },
-    "deep": { "primary": { "providerId": "gemini", "model": "gemini-3.1-flash-lite" }, "fallback": [] }
+    "reasoning": { "primary": { "providerId": "groq", "model": "llama-3.3-70b-versatile" }, "fallback": [] },
+    "instant": { "primary": { "providerId": "groq", "model": "llama-3.3-70b-versatile" }, "fallback": [] },
+    "deep": { "primary": { "providerId": "groq", "model": "llama-3.3-70b-versatile" }, "fallback": [] }
   },
   "api": {
     "defaultMaxConcurrent": 2,
@@ -476,7 +479,7 @@ Update settings. Pass the full settings object (GET first, modify, PUT back).
 |---------|-------------|
 | `providers` | Provider credentials and enabled state |
 | `providerOrder` | Priority order for provider cycling |
-| `modelRouting` | Task-specific model assignments (4 roles: `title`, `reasoning`, `instant`, `deep`) |
+| `modelRouting` | Task-specific model assignments (4 roles: title, reasoning, instant, deep) |
 | `research` | Budget: `maxCreditsPerQuery`, `maxFollowUpQueries` |
 | `api` | API behavior: concurrency, retention, limits |
 | `serper` | Search API credentials |
@@ -563,17 +566,21 @@ Delete a conversation.
 {
   "keyCount": 1,
   "serperKeyCount": 1,
-  "providerCount": 1
+  "providerCount": 5
 }
 ```
 
-`keyCount` is the number of Groq API keys configured.
+| Field | Description |
+|-------|-------------|
+| `keyCount` | Number of Groq API keys configured |
+| `serperKeyCount` | Number of Serper API keys configured |
+| `providerCount` | Number of enabled providers |
 
 Exposed publicly (no auth) for the frontend to show configuration status.
 
 ### `GET /autocomplete?q=search+term`
 
-Proxies Google search suggestions (`suggestqueries.google.com`). Requires minimum 2 characters.
+Proxies Google Suggest autocomplete. Requires minimum 2 characters.
 
 ```json
 { "suggestions": ["search term meaning", "search term definition", ...] }
@@ -666,7 +673,7 @@ interface Source {
 
 ```typescript
 interface AgentStep {
-  type: string;       // e.g. "plan-analyze", "analyze", "search", "webpage", "budget"
+  type: string;       // "plan" | "search" | "analyze" | "synthesize" | "review"
   query?: string;
   result_count?: number;
   note?: string;
@@ -749,11 +756,9 @@ Every research query consumes **research credits**. The budget prevents runaway 
 
 ### How Credits Are Consumed
 
-- Each tool call (`web_search` or `fetch_url`) consumes 1 credit.
-- LLM calls (planning, analysis, final answer) do **not** consume credits.
-- When the budget is exhausted, the engine stops making new tool calls and returns the last assistant message if available.
-
-### Budget Reporting
+- Each tool call (search) consumes 1 credit
+- Each LLM call (analyze, synthesize, review) consumes 1 credit
+- When budget is exhausted, the engine stops making new tool calls and proceeds directly to synthesis
 
 ### Budget Reporting
 
@@ -785,14 +790,14 @@ Providers must be OpenAI-compatible (standard chat completions API format).
 
 ### Model Roles
 
-The system assigns models to tasks through `modelRouting`:
+The system assigns models to tasks through `modelRouting` (4 roles):
 
-| Role | Purpose | Temperature |
-|------|---------|-------------|
-| `title` | Conversation title generation | 0.3 |
-| `reasoning` | Defined for future reasoning tasks; currently unused | 0.1 |
-| `instant` | Quick / Instant mode research loop | 0.1 |
-| `deep` | Deep research loop | 0.1 |
+| Role | Used By | Purpose |
+|------|---------|---------|
+| `title` | `POST /conversations` | Conversation title generation |
+| `reasoning` | Tool-calling rounds | Complex reasoning (reserved, currently uses `instant`/`deep` role) |
+| `instant` | `mode: "quick"` | Quick research — tool-calling rounds, synthesize |
+| `deep` | `mode: "deep"` | Deep research — planning, tool-calling, review, iterate, synthesize |
 
 ### Fallback Chain
 
@@ -813,14 +818,13 @@ key[0]+model[0] → key[1]+model[0] → key[2]+model[0] → key[0]+model[1] → 
 
 | Event | Emitted By | Description |
 |-------|-----------|-------------|
-| `step` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Agent step update |
-| `sources` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Updated source list |
-| `done` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Final result |
-| `error` | `/search`, `/research-jobs/:id/events`, `/research-batches/:id/events` | Error |
-| `status` | `/research-jobs/:id/events`, `/research-batches/:id/events` | Status transition |
-| `item` | `/research-batches/:id/events` | Per-item status update |
-
-> **Note:** The engine does not currently emit `token` events. The final answer is delivered in the `done` event. Frontend streaming is not yet implemented in the research loop.
+| `step` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Agent step update (plan, search, analyze, synthesize, review) |
+| `sources` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Sources discovered during search |
+| `token` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Streaming answer token |
+| `done` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Final result |
+| `error` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Error |
+| `status` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Status transition |
+| `item` | `GET /research-batches/:id/events` | Per-item status update |
 
 ### SSE Wire Format
 
@@ -839,6 +843,9 @@ data: {"type":"error","message":"Provider unavailable","timestamp":"..."}
 
 event: status
 data: {"type":"status","status":"running","timestamp":"..."}
+
+event: sources
+data: {"type":"sources","sources":[{"title":"Source title","url":"https://...","domain":"example.com"}],"timestamp":"..."}
 ```
 
 Events are separated by double newlines (`\n\n`). Each event line is prefixed with `event: ` and `data: `.

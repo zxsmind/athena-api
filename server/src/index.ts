@@ -22,6 +22,7 @@ import {
   applyAPISettings as applyJobAPISettings,
   type ResearchJobRequest,
   type ResearchJobStatus,
+  type ResearchJobRecord,
 } from './research-jobs.js';
 import {
   createResearchBatch,
@@ -306,6 +307,39 @@ const STEP_TO_STATUS: Record<string, string> = {
   synthesize: 'synthesizing',
 };
 
+async function syncResearchJobToConversation(job: ResearchJobRecord): Promise<void> {
+  if (!job.conversationId) return;
+  const msgs = await getMessages(job.conversationId);
+  const last = msgs[msgs.length - 1];
+  if (!last || last.type !== 'assistant') return;
+
+  if (job.status === 'completed' && job.result) {
+    msgs[msgs.length - 1] = {
+      type: 'assistant',
+      content: job.result.answer,
+      data: job.result as any,
+      loading: false,
+    };
+  } else if (job.status === 'failed' && job.error) {
+    msgs[msgs.length - 1] = {
+      type: 'assistant',
+      content: last.content || '',
+      error: job.error,
+      loading: false,
+    };
+  } else if (job.status === 'cancelled') {
+    msgs[msgs.length - 1] = {
+      type: 'assistant',
+      content: last.content || '',
+      error: 'Research was cancelled.',
+      loading: false,
+    };
+  } else {
+    return;
+  }
+  await saveMessages(job.conversationId, msgs);
+}
+
 async function runResearchJob(jobId: string) {
   const job = markResearchJobRunning(jobId);
   if (!job) return;
@@ -346,12 +380,19 @@ async function runResearchJob(jobId: string) {
         onProgress: () => {},
       },
     );
-  } catch (err: unknown) {
+    await syncResearchJobToConversation(getResearchJob(jobId)!);
+  } catch (err: any) {
     if (controller.signal.aborted) {
-      cancelResearchJob(jobId);
+      const cancelled = cancelResearchJob(jobId);
+      if (cancelled) await syncResearchJobToConversation(cancelled);
       return;
     }
     markResearchJobFailed(jobId, (err as Error)?.message || 'Research job failed');
+  }
+
+  const finalJob = getResearchJob(jobId);
+  if (finalJob && (finalJob.status === 'failed' || finalJob.status === 'cancelled')) {
+    await syncResearchJobToConversation(finalJob);
   }
 }
 
@@ -507,7 +548,7 @@ app.delete('/conversations/:id', async (req, res) => {
 
 /* ── Search (creates job, returns ID — frontend streams via /research-jobs/:id/events) ── */
 app.post('/search', async (req, res) => {
-  const { query, history, mode } = req.body as SearchRequest;
+  const { query, history, mode, conversationId } = req.body as SearchRequest;
   if (!query || !query.trim()) {
     res.status(400).json({ detail: 'Query is required' });
     return;
@@ -518,6 +559,7 @@ app.post('/search', async (req, res) => {
     query: query.trim(),
     history,
     mode: (mode || settings.api?.defaultMode || 'quick') as 'quick' | 'deep',
+    conversationId,
   });
   runResearchJob(job.id).catch(err => console.error('[research-job]', err));
   res.status(202).json({ id: job.id });

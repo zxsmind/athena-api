@@ -329,7 +329,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
 
     const isStale = () => myGen !== runGenRef.current;
 
-    search(q, history, mode, controller.signal)
+    search(q, history, mode, controller.signal, convId)
       .then(({ id }) => {
         if (isStale()) return;
 

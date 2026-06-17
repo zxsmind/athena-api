@@ -138,11 +138,12 @@ export async function search(
   history?: { role: string; content: string }[],
   mode?: 'quick' | 'deep',
   signal?: AbortSignal,
+  conversationId?: string,
 ): Promise<SearchResult> {
   const res = await fetch(`${BASE}/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, history, mode }),
+    body: JSON.stringify({ query, history, mode, conversationId }),
     signal,
   });
   return checkResponse<SearchResult>(res);
