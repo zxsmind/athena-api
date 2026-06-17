@@ -23,8 +23,19 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
     open: boolean; title: string; placeholder: string; isPassword: boolean;
     value: string; onSubmit: (val: string) => void;
   }>({ open: false, title: '', placeholder: '', isPassword: false, value: '', onSubmit: () => {} });
+  const [closing, setClosing] = useState(false);
 
   const isMobile = useMediaQuery('(max-width: 1023px)');
+
+  const handleClose = useCallback(() => {
+    if (closing) return;
+    setClosing(true);
+    setTimeout(() => { setClosing(false); onClose(); }, 200);
+  }, [closing, onClose]);
+
+  useEffect(() => {
+    if (open) setClosing(false);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -68,7 +79,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
     };
   }, []);
 
-  if (!open) return null;
+  if (!open && !closing) return null;
 
   const patchData = (patch: Partial<SettingsData>) => {
     if (!data) return;
@@ -336,16 +347,17 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   };
 
   return (
-    <div onClick={onClose} style={{
+    <div onClick={handleClose} style={{
       position: 'fixed', inset: 0, zIndex: 1002, display: 'flex', alignItems: 'center', justifyContent: 'center',
       background: 'rgba(0,0,0,0.25)', WebkitBackdropFilter: 'blur(6px)', backdropFilter: 'blur(6px)',
-      animation: 'fade-in 160ms var(--ease-out) both',
+      animation: closing ? 'fade-in 160ms var(--ease-out) reverse both' : 'fade-in 160ms var(--ease-out) both',
+      pointerEvents: closing ? 'none' : 'auto',
     }}>
       <div onClick={e => e.stopPropagation()} className="glass-panel-settings" style={{
         width: isMobile ? '96%' : '94%', maxWidth: isMobile ? '100%' : 880,
         height: isMobile ? '85vh' : 620, maxHeight: '90vh',
         display: 'flex', flexDirection: 'column',
-        animation: 'scale-in 200ms var(--ease-spring) both',
+        animation: closing ? 'scale-out 200ms var(--ease-spring) both' : 'scale-in 200ms var(--ease-spring) both',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: isMobile ? '12px 14px 10px' : '16px 18px 12px', borderBottom: '0.5px solid var(--athena-border)', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -355,7 +367,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               <span style={{ width: 4, height: 4, borderRadius: '50%', backgroundColor: 'var(--athena-accent)', display: 'inline-block' }} /> Saving...
             </span>}
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--athena-text-3)', padding: 4, borderRadius: 6, display: 'flex' }}>
+          <button onClick={handleClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--athena-text-3)', padding: 4, borderRadius: 6, display: 'flex' }}>
             <span>✕</span>
           </button>
         </div>
