@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import useMediaQuery from '@mui/material/useMediaQuery';
 import { Section, InputRow, ListSection, InfoPanel, CapabilityGrid } from './settings/SharedComponents';
 import { ModelRouteEditor } from './settings/ModelEditor';
 import { PromptDialog } from './settings/PromptDialog';
@@ -22,6 +23,8 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
     open: boolean; title: string; placeholder: string; isPassword: boolean;
     value: string; onSubmit: (val: string) => void;
   }>({ open: false, title: '', placeholder: '', isPassword: false, value: '', onSubmit: () => {} });
+
+  const isMobile = useMediaQuery('(max-width: 1023px)');
 
   useEffect(() => {
     if (!open) return;
@@ -334,18 +337,20 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
 
   return (
     <div onClick={onClose} style={{
-      position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      position: 'fixed', inset: 0, zIndex: 1002, display: 'flex', alignItems: 'center', justifyContent: 'center',
       background: 'rgba(0,0,0,0.25)', WebkitBackdropFilter: 'blur(6px)', backdropFilter: 'blur(6px)',
       animation: 'fade-in 160ms var(--ease-out) both',
     }}>
       <div onClick={e => e.stopPropagation()} className="glass-panel-settings" style={{
-        width: '94%', maxWidth: 880, height: 620, maxHeight: '90vh', display: 'flex', flexDirection: 'column',
+        width: isMobile ? '96%' : '94%', maxWidth: isMobile ? '100%' : 880,
+        height: isMobile ? 'auto' : 620, maxHeight: '90vh',
+        display: 'flex', flexDirection: 'column',
         animation: 'scale-in 200ms var(--ease-spring) both',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 18px 12px', borderBottom: '0.5px solid var(--athena-border)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: isMobile ? '12px 14px 10px' : '16px 18px 12px', borderBottom: '0.5px solid var(--athena-border)', flexShrink: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: 'var(--athena-text-2)' }}>⚙</span>
-            <h2 className="font-outfit" style={{ fontSize: 14, fontWeight: 600, margin: 0, color: 'var(--athena-text)' }}>Settings</h2>
+            <h2 className="font-outfit" style={{ fontSize: isMobile ? 13 : 14, fontWeight: 600, margin: 0, color: 'var(--athena-text)' }}>Settings</h2>
             {saving && <span style={{ fontSize: 9.5, color: 'var(--athena-text-3)', marginLeft: 6, fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 4 }}>
               <span style={{ width: 4, height: 4, borderRadius: '50%', backgroundColor: 'var(--athena-accent)', display: 'inline-block' }} /> Saving...
             </span>}
@@ -355,30 +360,27 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
           </button>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '168px minmax(0, 1fr)', minHeight: 0, flex: 1 }}>
-          <nav style={{ padding: 12, borderRight: '0.5px solid var(--athena-border)', display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0 }}>
-            {TABS.map(tab => {
-              const active = activeTab === tab.key;
-              return (
-                <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
-                  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
-                  padding: '8px 10px', borderRadius: 8,
-                  border: active ? '0.5px solid rgba(var(--athena-accent-rgb), 0.22)' : '0.5px solid transparent',
-                  background: active ? 'rgba(var(--athena-accent-rgb), 0.07)' : 'transparent',
-                  color: active ? 'var(--athena-text)' : 'var(--athena-text-2)',
-                  cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
-                  fontWeight: active ? 700 : 600, textAlign: 'left',
-                  transition: 'all 140ms var(--ease-out)',
-                }}>
-                  <span style={{ display: 'flex', color: active ? 'var(--athena-text)' : 'var(--athena-text-3)' }}>{SETTINGS_ICONS[tab.key]}</span>
-                  {tab.label}
-                </button>
-              );
-            })}
-          </nav>
-
-          <div style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ flex: 1, overflow: 'hidden auto', padding: '16px 18px 18px' }}>
+        {isMobile ? (
+          <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
+            <nav style={{ display: 'flex', gap: 4, padding: '8px 12px', overflow: 'auto', flexShrink: 0, borderBottom: '0.5px solid var(--athena-border)' }}>
+              {TABS.map(tab => {
+                const active = activeTab === tab.key;
+                return (
+                  <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
+                    flexShrink: 0, padding: '6px 12px', borderRadius: 8,
+                    border: active ? '0.5px solid rgba(var(--athena-accent-rgb), 0.22)' : '0.5px solid transparent',
+                    background: active ? 'rgba(var(--athena-accent-rgb), 0.07)' : 'transparent',
+                    color: active ? 'var(--athena-text)' : 'var(--athena-text-2)',
+                    cursor: 'pointer', fontFamily: 'inherit', fontSize: 10.5,
+                    fontWeight: active ? 700 : 600,
+                    transition: 'all 140ms var(--ease-out)',
+                  }}>
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </nav>
+            <div style={{ flex: 1, overflow: 'hidden auto', padding: '12px 14px 14px' }}>
               {renderTab()}
               {message && message.type === 'error' && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 10.5, color: '#ef4444' }}>
@@ -387,7 +389,40 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               )}
             </div>
           </div>
-        </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: '168px minmax(0, 1fr)', minHeight: 0, flex: 1 }}>
+            <nav style={{ padding: 12, borderRight: '0.5px solid var(--athena-border)', display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0 }}>
+              {TABS.map(tab => {
+                const active = activeTab === tab.key;
+                return (
+                  <button key={tab.key} onClick={() => setActiveTab(tab.key)} style={{
+                    display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+                    padding: '8px 10px', borderRadius: 8,
+                    border: active ? '0.5px solid rgba(var(--athena-accent-rgb), 0.22)' : '0.5px solid transparent',
+                    background: active ? 'rgba(var(--athena-accent-rgb), 0.07)' : 'transparent',
+                    color: active ? 'var(--athena-text)' : 'var(--athena-text-2)',
+                    cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
+                    fontWeight: active ? 700 : 600, textAlign: 'left',
+                    transition: 'all 140ms var(--ease-out)',
+                  }}>
+                    <span style={{ display: 'flex', color: active ? 'var(--athena-text)' : 'var(--athena-text-3)' }}>{SETTINGS_ICONS[tab.key]}</span>
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </nav>
+            <div style={{ minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+              <div style={{ flex: 1, overflow: 'hidden auto', padding: '16px 18px 18px' }}>
+                {renderTab()}
+                {message && message.type === 'error' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 10.5, color: '#ef4444' }}>
+                    <span>⚠</span> {message.text}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
       <PromptDialog open={promptConfig.open} title={promptConfig.title} placeholder={promptConfig.placeholder} isPassword={promptConfig.isPassword} value={promptConfig.value} onChange={val => setPromptConfig(prev => ({ ...prev, value: val }))} onClose={() => setPromptConfig(prev => ({ ...prev, open: false }))} onSubmit={() => promptConfig.onSubmit(promptConfig.value)} />
     </div>
