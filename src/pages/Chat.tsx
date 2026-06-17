@@ -73,18 +73,19 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
       if (!container) return;
       const els = container.querySelectorAll<HTMLElement>('[data-msg-index]');
       if (els.length === 0) return;
-      const containerRect = container.getBoundingClientRect();
-      const cCenter = containerRect.top + containerRect.height / 2;
+      const cRect = container.getBoundingClientRect();
 
       let best = -1;
-      let bestDist = Infinity;
+      let bestRatio = 0;
       for (const el of els) {
         const idx = parseInt(el.getAttribute('data-msg-index') || '', 10);
         if (isNaN(idx)) continue;
-        const rect = el.getBoundingClientRect();
-        const eCenter = rect.top + rect.height / 2;
-        const dist = Math.abs(eCenter - cCenter);
-        if (dist < bestDist) { bestDist = dist; best = idx; }
+        const r = el.getBoundingClientRect();
+        const visibleTop = Math.max(r.top, cRect.top);
+        const visibleBottom = Math.min(r.bottom, cRect.bottom);
+        const visibleH = Math.max(0, visibleBottom - visibleTop);
+        const ratio = visibleH / r.height;
+        if (ratio > bestRatio) { bestRatio = ratio; best = idx; }
       }
       if (best >= 0) setActiveMsgIdx(best);
     }
