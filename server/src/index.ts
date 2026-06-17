@@ -576,7 +576,7 @@ applyAPISettingsFromStore();
 const distPath = path.resolve('../dist');
 if (fs.existsSync(distPath)) {
   app.use(express.static(distPath));
-  app.get('*', (_req, res) => {
+  app.get('/{*path}', (_req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
   });
   console.log(`[static] serving frontend from ${distPath}`);
