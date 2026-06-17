@@ -30,12 +30,19 @@ async function toolCallingRound(
   onEvent({ type: 'step', data: step });
 
   const temp = temperatureForRound(round);
-  const { data, model, provider } = await callLLM({
-    messages, temperature: temp, tools: [SEARCH_TOOL, FETCH_URL_TOOL], toolChoice: 'auto', role, signal,
-    onModelSelected: (selectedModel) => { step.model = selectedModel; onEvent({ type: 'step', data: step }); },
-    label: `tool-round-${round}`,
-  });
+  let llmResult: { data: any; model: string; provider: string };
+  try {
+    llmResult = await callLLM({
+      messages, temperature: temp, tools: [SEARCH_TOOL, FETCH_URL_TOOL], toolChoice: 'auto', role, signal,
+      onModelSelected: (selectedModel) => { step.model = selectedModel; onEvent({ type: 'step', data: step }); },
+      label: `tool-round-${round}`,
+    });
+  } catch (err: any) {
+    onEvent({ type: 'error', message: err.message || 'No available model responded' });
+    return false;
+  }
 
+  const { data, model, provider } = llmResult;
   const choice = data!.choices[0];
   const msg = choice.message;
   const finish = choice.finish_reason;

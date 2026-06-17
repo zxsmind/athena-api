@@ -350,20 +350,22 @@ export async function callLLM(opts: LLMOptions): Promise<LLMResult> {
   const label = opts.label || 'callLLM';
   const { uniqTargets, tried } = resolveTargets(opts.role, label, opts.signal);
   const body = buildLLMRequestBody(opts);
-  const { signal, cleanup } = makeRequestSignal(30000, opts.signal);
-
   try {
     const maxGlobalAttempts = opts.role === 'deep' ? 5 : 1;
     for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
       if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
       for (const target of uniqTargets) {
-        const result = await tryProvider(target, opts, body, label, signal, tried);
-        if (result) return result;
+        const { signal, cleanup } = makeRequestSignal(30000, opts.signal);
+        try {
+          const result = await tryProvider(target, opts, body, label, signal, tried);
+          if (result) return result;
+        } finally {
+          cleanup();
+        }
       }
     }
     throw new Error(`${label} — all targets failed after ${maxGlobalAttempts} global attempt(s).\n${tried.map(r => `  • ${r}`).join('\n')}`);
   } finally {
-    cleanup();
   }
 }
 
@@ -371,19 +373,21 @@ export async function callLLMStream(opts: LLMOptions): Promise<LLMResult> {
   const label = opts.label || 'callLLMStream';
   const { uniqTargets, tried } = resolveTargets(opts.role, label, opts.signal);
   const body = buildLLMRequestBody(opts);
-  const { signal, cleanup } = makeRequestSignal(opts.tools ? 60000 : 30000, opts.signal);
-
   try {
     const maxGlobalAttempts = opts.role === 'deep' ? 5 : 1;
     for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
       if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
       for (const target of uniqTargets) {
-        const result = await tryProviderStream(target, opts, body, label, signal, tried);
-        if (result) return result;
+        const { signal, cleanup } = makeRequestSignal(opts.tools ? 60000 : 30000, opts.signal);
+        try {
+          const result = await tryProviderStream(target, opts, body, label, signal, tried);
+          if (result) return result;
+        } finally {
+          cleanup();
+        }
       }
     }
     throw new Error(`${label} — all targets failed after ${maxGlobalAttempts} global attempt(s).\n${tried.map(r => `  • ${r}`).join('\n')}`);
   } finally {
-    cleanup();
   }
 }
