@@ -226,8 +226,8 @@ npm test             # smart-routing-core/ dizininde
 2. **Arama Aşaması**: `search.ts` üzerinden Serper.dev çağrılır; sonuçlar toplanır ve kaynaklar `[N]` index'leri atanır.
 3. **Inline Tool Call Parsing**: Bazı modeller (Llama, Qwen) OpenAI `tool_calls` formatı yerine XML/JSON inline çıktı verebilir. `parseInlineToolCall()` bunları yakalar.
 4. **Bütçe Denetimi**: Yalnızca **her araç çağrısı** (search/fetch) 1 kredi harcar. `maxCreditsPerQuery` aşılırsa yeni arama yapılmaz, döngü sonlanır. Sentez/plan için yapılan LLM çağrıları kredi harcamaz. Quick modda bütçe ayrıca sabit 6 ile sınırlandırılır.
-5. **Sonuç Aşaması**: Model, son turda cevap metni ürettiyse bu metin doğrudan `done` olayıyla döner. Ayrı bir sentez/synthesis LLM çağrısı veya `SYNTHESIS_PROMPT` kullanımı yoktur; `SYNTHESIS_PROMPT` dosyada tanımlıdır ancak şu anda kullanılmıyor.
-6. **Chat Modu**: Eğer model hiç araç kullanmadan doğrudan cevap verdiyse (örn. selamlaşma), aynı şekilde `done` olayıyla döner.
+5. **Sentez (Synthesis) Aşaması**: Araç kullanıldıysa (usedTools), `callLLMStream` ile token-by-token stream edilen bir synthesis çağrısı yapılır. Her chunk `{ type: 'token', text }` olayı olarak iletilir. Stream tamamlanınca `{ type: 'done', ... }` gönderilir. Eğer bu sentez başarısız olursa veya model araç kullanmadan döngü bittiyse, `SYNTHESIS_PROMPT` ile bir `synthesis-fallback` çağrısı daha yapılır (yine `callLLMStream` ile stream edilir).
+6. **Chat Modu**: Eğer model hiç araç kullanmadan doğrudan cevap verdiyse (örn. selamlaşma), `emitAnswer()` ile tek `token` olayı ve ardından `done` olayı döner.
 
 Modlar:
 - **quick**: Kullanıcıya "Instant" olarak gösterilir. Dahili model rolü `instant`. Max 3 tur, hızlı cevap.
@@ -235,7 +235,7 @@ Modlar:
 
 > **Dikkat:** Ayarlarda bulunan `general.deepIterations` ve `research.maxFollowUpQueries` alanları şu anda `engine.ts` içinde aktif olarak kullanılmıyor; deep mod tur sayısı sabit 50, follow-up limiti bütçe ve tur sayısı tarafından dolaylı olarak sınırlanıyor. Bu ayarları devreye sokacak bir değişiklik yapmadan önce bu dokümanı ve ilgili kodu güncelleyin.
 
-> **Not:** `engine.ts` artık sondaki yanıtı `{ type: 'token', text: answer }` olayı ve ardından `{ type: 'done', ... }` olayı şeklinde gönderiyor. `emitAnswer()` fonksiyonu, bitmiş yanıtı tek bir `token` olayı olarak yayınlar (kelime kelime stream değil). Frontend `onToken` handler'ı bu şekilde çalışır.
+> **Not:** Synthesis ve synthesis-fallback aşamaları artık `callLLMStream` ile token-by-token stream edilir; her chunk anında `{ type: 'token', text }` olayı olarak iletilir. Tool-calling round'ları ve direkt model yanıtları (`emitAnswer()`) ise hala non-streaming `callLLM` kullanır ve tüm yanıtı tek bir `token` olayı olarak gönderir. Frontend `onToken` handler'ı her iki durumu da işler.
 
 ### 5.2. LLM Yönlendirme (`server/src/llm.ts`)
 

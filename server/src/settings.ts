@@ -55,6 +55,7 @@ export interface SettingsData {
   thinkingStripPatterns: string;
   maxSources: number;
   deepIterations: number;
+  showDebugContext?: boolean;
 }
 
 const providerLabels: Record<string, string> = {
@@ -94,6 +95,7 @@ export function getSettings(): SettingsData {
     thinkingStripPatterns: store.general.thinkingStripPatterns,
     maxSources: store.general.maxSources,
     deepIterations: store.general.deepIterations,
+    showDebugContext: store.general.showDebugContext,
   };
 }
 
@@ -113,6 +115,7 @@ export function saveSettings(data: SettingsData): void {
       deepIterations: data.deepIterations,
       thinkingStripPatterns: data.thinkingStripPatterns,
       titleModel: data.modelRouting?.title?.primary?.model || '',
+      showDebugContext: data.showDebugContext ?? false,
     },
   };
 

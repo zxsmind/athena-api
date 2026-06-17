@@ -38,6 +38,7 @@ export interface SearchResponse {
   steps: AgentStep[];
   results_count: number;
   elapsed_ms: number;
+  finalContext?: string;
   research_budget?: {
     used: number;
     limit: number;

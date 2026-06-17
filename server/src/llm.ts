@@ -183,9 +183,8 @@ async function tryProvider(
   }
 
   const reqBody: Record<string, unknown> = { ...body, model, stream: false };
-  if (provider.reasoningEffort) reqBody.reasoning_effort = provider.reasoningEffort;
-  if (target.id === 'gemini' && provider.includeThoughts !== undefined) {
-    reqBody.thinkingConfig = { includeThoughts: provider.includeThoughts };
+  if (provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+    reqBody.reasoning_effort = provider.reasoningEffort;
   }
 
   for (const apiKey of provider.keys) {
@@ -259,9 +258,8 @@ async function tryProviderStream(
   }
 
   const reqBody: Record<string, unknown> = { ...body, model, stream: true };
-  if (provider.reasoningEffort) reqBody.reasoning_effort = provider.reasoningEffort;
-  if (target.id === 'gemini' && provider.includeThoughts !== undefined) {
-    reqBody.thinkingConfig = { includeThoughts: provider.includeThoughts };
+  if (provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+    reqBody.reasoning_effort = provider.reasoningEffort;
   }
 
   for (const apiKey of provider.keys) {

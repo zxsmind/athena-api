@@ -19,7 +19,7 @@ export type EngineEvent =
   | { type: 'token'; text: string }
   | { type: 'sources'; sources: import('../schemas.js').Source[] }
   | { type: 'done'; response: import('../schemas.js').SearchResponse }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; finalContext?: string };
 
 export const SEARCH_TOOL = {
   type: 'function',

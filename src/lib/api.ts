@@ -24,6 +24,7 @@ export interface SearchResponse {
   steps: AgentStep[];
   results_count: number;
   elapsed_ms: number;
+  finalContext?: string;
   research_budget?: {
     used: number;
     limit: number;
@@ -127,7 +128,7 @@ export type ResearchJobEvent =
   | { type: 'token'; text: string; timestamp: string }
   | { type: 'sources'; sources: Source[]; timestamp: string }
   | { type: 'done'; response: SearchResponse; timestamp: string }
-  | { type: 'error'; message: string; timestamp: string };
+  | { type: 'error'; message: string; finalContext?: string; timestamp: string };
 
 export interface SearchResult {
   id: string;
@@ -154,7 +155,7 @@ export interface JobEventCallbacks {
   onStep?: (step: AgentStep) => void;
   onSources?: (sources: Source[]) => void;
   onDone?: (response: SearchResponse) => void;
-  onError?: (message: string) => void;
+  onError?: (message: string, finalContext?: string) => void;
   onStatus?: (status: ResearchJobStatus) => void;
 }
 
@@ -181,7 +182,7 @@ export function subscribeToJobEvents(
         const data = JSON.parse(e.data) as ResearchJobEvent;
         switch (data.type) {
           case 'done': terminal(); callbacks.onDone?.(data.response); break;
-          case 'error': terminal(); callbacks.onError?.(data.message); break;
+          case 'error': terminal(); callbacks.onError?.(data.message, data.finalContext); break;
           case 'token': callbacks.onToken?.(data.text); break;
           case 'step': callbacks.onStep?.(data.data); break;
           case 'sources': callbacks.onSources?.(data.sources); break;

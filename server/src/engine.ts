@@ -1,4 +1,4 @@
-import { callLLM, stripThinkingTags, type LLMRole } from './llm.js';
+import { callLLM, callLLMStream, stripThinkingTags, type LLMRole } from './llm.js';
 import type { LLMResult } from './llm.js';
 import { fetchResults, fetchPageContent } from './search.js';
 import type { SearchResponse, Source, AgentStep } from './schemas.js';
@@ -29,7 +29,7 @@ async function toolCallingRound(
   const budgetExhausted = budget.remainingCredits <= 0;
 
   const stepType = round === 0 ? 'plan-analyze' : 'analyze';
-  const step: AgentStep = { type: stepType, note: round === 0 ? 'Analyzing question...' : 'Thinking...', context: JSON.stringify(messages, null, 2) };
+  const step: AgentStep = { type: stepType, note: round === 0 ? 'Analyzing question...' : 'Thinking...' };
   steps.push(step);
   onEvent({ type: 'step', data: step });
 
@@ -65,7 +65,7 @@ async function toolCallingRound(
       label: `tool-round-${round}`,
     });
   } catch (err: unknown) {
-    onEvent({ type: 'error', message: (err as Error).message || 'No available model responded' });
+    onEvent({ type: 'error', message: (err as Error).message || 'No available model responded', finalContext: JSON.stringify(messages.map(m => ({ role: m.role, content: m.content })).filter((m): m is { role: string; content: string } => typeof m.content === 'string' && m.content.length > 0), null, 2) });
     return false;
   }
 
@@ -259,7 +259,7 @@ async function toolCallingRound(
     }
   }
 
-  const finalStep: AgentStep = { type: 'answer', context: JSON.stringify(messages, null, 2) };
+  const finalStep: AgentStep = { type: 'answer' };
   steps.push(finalStep);
   onEvent({ type: 'step', data: finalStep });
   messages.push({ role: msg.role, content: msg.content });
@@ -308,10 +308,13 @@ export async function agenticResearchStream(
   }
 
   /* ── Helper: stream content tokens then emit done ── */
+  function finalContextJson(): string {
+    return JSON.stringify(messages.map(m => ({ role: m.role, content: m.content })).filter((m): m is { role: string; content: string } => typeof m.content === 'string' && m.content.length > 0), null, 2);
+  }
   function emitAnswer(answer: string, finalSources: Source[], steps: AgentStep[], results_count: number) {
     const elapsed = Math.round(performance.now() - start);
     onEvent({ type: 'token', text: answer });
-    onEvent({ type: 'done', response: { query, answer, sources: finalSources, steps, results_count, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted } } });
+    onEvent({ type: 'done', response: { query, answer, sources: finalSources, steps, results_count, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted }, finalContext: finalContextJson() } });
   }
 
   /* ── If the model gave a direct answer during this session, send it ── */
@@ -328,14 +331,21 @@ export async function agenticResearchStream(
   if (usedTools) {
     messages.push({ role: 'system', content: 'Research complete. Now write your final answer based on the information gathered above. Every claim must be backed by [N]. Reply in the user\'s language.' });
     try {
-      const llmResult = await callLLM({ messages, temperature: 0.1, tools: undefined, toolChoice: 'none' as const, role: activeRole, label: 'synthesis' });
-      const content = llmResult.data && typeof llmResult.data === 'object' && 'choices' in llmResult.data
-        ? stripThinkingTags((llmResult.data as { choices: { message: { content: string | null } }[] }).choices?.[0]?.message?.content || '')
-        : null;
-      if (content) {
+      let streamedAnswer = '';
+      const llmResult = await callLLMStream({
+        messages, temperature: 0.1, tools: undefined, toolChoice: 'none' as const, role: activeRole, label: 'synthesis',
+        onToken: (text) => {
+          streamedAnswer += text;
+          onEvent({ type: 'token', text });
+        },
+      });
+      const content = stripThinkingTags(streamedAnswer || llmResult.fullContent || '');
+      if (content?.trim()) {
         const finalStep: AgentStep = { type: 'answer', model: llmResult.model };
         steps.push(finalStep);
-        emitAnswer(content, Array.from(allSources.values()).map(s => s as Source), steps, allSources.size);
+        onEvent({ type: 'step', data: finalStep });
+        const elapsed = Math.round(performance.now() - start);
+        onEvent({ type: 'done', response: { query, answer: content, sources: Array.from(allSources.values()).map(s => s as Source), steps, results_count: allSources.size, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted }, finalContext: finalContextJson() } });
         return;
       }
     } catch { /* fall through to error */ }
@@ -356,17 +366,21 @@ export async function agenticResearchStream(
     onEvent({ type: 'step', data: synthesisStep });
     messages.push({ role: 'system', content: SYNTHESIS_PROMPT });
     try {
-      const { data: synData } = await callLLM({
+      let streamedAnswer = '';
+      const llmResult = await callLLMStream({
         messages, temperature: 0, toolChoice: 'none', signal: options.signal,
-        label: 'synthesis-fallback',
+        label: 'synthesis-fallback', role: activeRole,
+        onToken: (text) => {
+          streamedAnswer += text;
+          onEvent({ type: 'token', text });
+        },
       });
-      const synResult = synData as { choices?: { message?: { content?: string } }[] } | undefined;
-      const synContent = synResult?.choices?.[0]?.message?.content;
-      if (synContent?.trim()) {
+      const content = streamedAnswer || llmResult.fullContent || '';
+      if (content?.trim()) {
         const elapsed = Math.round(performance.now() - start);
         steps.push({ type: 'answer', note: 'Answer synthesized from research.' });
         onEvent({ type: 'step', data: steps[steps.length - 1] });
-        onEvent({ type: 'done', response: { query, answer: synContent, sources: Array.from(allSources.values()).map(({ source_index, ...s }) => s as Source), steps, results_count: allSources.size, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted } } });
+        onEvent({ type: 'done', response: { query, answer: content, sources: Array.from(allSources.values()).map(({ source_index, ...s }) => s as Source), steps, results_count: allSources.size, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted }, finalContext: finalContextJson() } });
         return;
       }
     } catch (err: any) {
@@ -381,8 +395,8 @@ export async function agenticResearchStream(
     onEvent({ type: 'step', data: budgetStep });
   }
   if (allSources.size > 0) {
-    onEvent({ type: 'error', message: budget.exhausted ? 'Araştırma bütçesi doldu ancak model cevap üretemedi.' : 'Model kaynakları topladı ancak cevap üretemedi.' });
+    onEvent({ type: 'error', message: budget.exhausted ? 'Araştırma bütçesi doldu ancak model cevap üretemedi.' : 'Model kaynakları topladı ancak cevap üretemedi.', finalContext: finalContextJson() });
   } else {
-    onEvent({ type: 'error', message: 'Model could not produce an answer.' });
+    onEvent({ type: 'error', message: 'Model could not produce an answer.', finalContext: finalContextJson() });
   }
 }

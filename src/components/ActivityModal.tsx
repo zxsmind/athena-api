@@ -7,6 +7,8 @@ interface ActivityModalProps {
   onClose: () => void;
   steps: AgentStep[];
   sources: Source[];
+  finalContext?: string;
+  showDebugContext?: boolean;
 }
 
 const STEP_ICONS: Record<string, typeof Globe> = {
@@ -103,43 +105,60 @@ function ReasoningBlock({ text }: { text: string }) {
 
 function RawContextBlock({ context }: { context: string }) {
   const [open, setOpen] = useState(false);
+  let msgCount = 0;
+  try { const parsed = JSON.parse(context); if (Array.isArray(parsed)) msgCount = parsed.length; } catch { /* */ }
+  const lines = context.split('\n').length;
 
   return (
-    <div style={{ marginTop: 4 }}>
+    <div style={{
+      marginTop: 16,
+      border: '0.5px solid var(--athena-border)',
+      borderRadius: 8,
+      overflow: 'hidden',
+    }}>
       <button
         onClick={() => setOpen(!open)}
         style={{
-          background: 'none',
-          border: '0.5px solid var(--athena-border)',
-          borderRadius: 4,
-          cursor: 'pointer',
-          padding: '2px 6px',
-          fontSize: 8.5,
-          color: 'var(--athena-text-3)',
-          fontFamily: 'inherit',
-          display: 'inline-flex',
+          width: '100%',
+          display: 'flex',
           alignItems: 'center',
-          gap: 2,
+          justifyContent: 'space-between',
+          padding: '8px 10px',
+          border: 'none',
+          background: 'rgba(var(--athena-accent-rgb), 0.03)',
+          cursor: 'pointer',
+          color: 'var(--athena-text-2)',
+          fontFamily: 'inherit',
+          fontSize: 10,
+          fontWeight: 600,
+          transition: 'background 120ms',
         }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(var(--athena-accent-rgb), 0.06)'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(var(--athena-accent-rgb), 0.03)'; }}
       >
-        {open ? <ChevronDown size={8} /> : <ChevronRight size={8} />}
-        {open ? 'Hide Raw Context' : 'Show Raw Context'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ opacity: 0.5 }}>{open ? '▼' : '▶'}</span>
+          <span>Debug: Research Context</span>
+        </div>
+        <div style={{ display: 'flex', gap: 8, fontSize: 9, color: 'var(--athena-text-3)' }}>
+          {msgCount > 0 && <span>{msgCount} messages</span>}
+          <span>{lines} lines</span>
+        </div>
       </button>
       {open && (
         <pre style={{
-          fontSize: 9,
-          background: 'rgba(var(--athena-accent-rgb), 0.02)',
-          border: '0.5px solid var(--athena-border)',
-          borderRadius: 6,
-          padding: 8,
-          marginTop: 4,
+          margin: 0,
+          fontSize: 9.5,
+          lineHeight: 1.4,
+          background: 'rgba(0,0,0,0.03)',
+          color: 'var(--athena-text-2)',
+          padding: 10,
           overflowX: 'auto',
-          maxHeight: 180,
+          overflowY: 'auto',
+          maxHeight: 280,
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-all',
-          color: 'var(--athena-text-2)',
-          fontFamily: 'monospace',
-          lineHeight: 1.3,
+          fontFamily: '"JetBrains Mono", "Cascadia Code", "Fira Code", monospace',
         }}>
           {context}
         </pre>
@@ -148,7 +167,7 @@ function RawContextBlock({ context }: { context: string }) {
   );
 }
 
-export default function ActivityModal({ open, onClose, steps, sources }: ActivityModalProps) {
+export default function ActivityModal({ open, onClose, steps, sources, finalContext, showDebugContext }: ActivityModalProps) {
   if (!open) return null;
 
   const searchSteps = steps.filter(s => s.type.startsWith('search'));
@@ -371,14 +390,16 @@ export default function ActivityModal({ open, onClose, steps, sources }: Activit
                           </div>
                         )}
 
-                        {step.context && (
-                          <RawContextBlock context={step.context} />
-                        )}
                       </div>
                     </div>
                   ))}
               </div>
             </div>
+          )}
+
+          {/* Debug context */}
+          {showDebugContext && finalContext && (
+            <RawContextBlock context={finalContext} />
           )}
 
           {/* Sources section */}

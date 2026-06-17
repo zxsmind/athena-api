@@ -166,6 +166,29 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               <InputRow icon={<span>#</span>} label="Port" value={String(data.port)} onChange={v => patchData({ port: parseInt(v, 10) || 3001 })} placeholder="3001" />
             </div>
           </Section>
+          <Section title="Debug">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+              <button
+                onClick={() => patchData({ showDebugContext: !data.showDebugContext })}
+                style={{
+                  width: 32, height: 18, borderRadius: 10, border: 'none', cursor: 'pointer', position: 'relative',
+                  background: data.showDebugContext ? 'var(--athena-accent)' : 'rgba(var(--athena-accent-rgb), 0.12)',
+                  transition: 'background 180ms var(--ease-out)',
+                  flexShrink: 0,
+                }}
+              >
+                <span style={{
+                  position: 'absolute', top: 2, width: 14, height: 14, borderRadius: '50%',
+                  background: '#fff', transition: 'left 180ms var(--ease-out)',
+                  left: data.showDebugContext ? 16 : 2,
+                }} />
+              </button>
+              <span style={{ fontSize: 10.5, color: 'var(--athena-text-2)' }}>Show Debug Context</span>
+            </div>
+            <div style={{ fontSize: 9.5, color: 'var(--athena-text-3)', lineHeight: 1.5, marginTop: 2 }}>
+              Adds a collapsible "Debug: Research Context" section in the activity modal showing the full LLM message history.
+            </div>
+          </Section>
               <InfoPanel title="General Settings Scope" text="This tab stays for application-wide settings. Provider credentials, task-specific model choices, research behavior, and API capabilities live in their own tabs." />
         </>
       );

@@ -61,6 +61,14 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
   const scrolledRef = useRef(false);
   const [activeMsgIdx, setActiveMsgIdx] = useState(-1);
   const [modalMsgIdx, setModalMsgIdx] = useState(-1);
+  const [debugContextEnabled, setDebugContextEnabled] = useState(false);
+
+  useEffect(() => {
+    if (!modalOpen) return;
+    fetch('/api/settings').then(r => r.json()).then(d => {
+      setDebugContextEnabled(d.showDebugContext ?? false);
+    }).catch(() => {});
+  }, [modalOpen]);
 
   useEffect(() => {
     if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
@@ -432,7 +440,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
               setIsSearching(false);
             }
           },
-          onError: (message) => {
+          onError: (message, finalContext) => {
             if (isStale()) return;
             clearTimeout(flushRef.current);
             flushRef.current = undefined;
@@ -444,7 +452,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
               const updated = [...prev];
               const last = updated[updated.length - 1];
               if (last?.type === 'assistant') {
-                updated[updated.length - 1] = { ...last, error: message, loading: false, timerMs: elapsed };
+                updated[updated.length - 1] = { ...last, error: message, loading: false, timerMs: elapsed, data: last.data ? { ...last.data, finalContext } : finalContext ? { query: '', answer: '', sources: [], steps: [], results_count: 0, elapsed_ms: 0, finalContext } : undefined };
               }
               return updated;
             });
@@ -772,6 +780,8 @@ autoFocus
             onClose={() => setModalOpen(false)}
             steps={modalMsg.activeSteps || modalMsg.data?.steps || []}
             sources={modalMsg.data?.sources || []}
+            finalContext={modalMsg.data?.finalContext}
+            showDebugContext={debugContextEnabled}
           />
         ) : null;
       })()}

@@ -326,6 +326,7 @@ async function syncResearchJobToConversation(job: ResearchJobRecord): Promise<vo
       content: last.content || '',
       error: job.error,
       loading: false,
+      data: last.data ? { ...last.data, finalContext: job.finalContext } : job.finalContext ? { query: '', answer: '', sources: [], steps: [], results_count: 0, elapsed_ms: 0, finalContext: job.finalContext } as any : undefined,
     };
   } else if (job.status === 'cancelled') {
     msgs[msgs.length - 1] = {
@@ -370,7 +371,7 @@ async function runResearchJob(jobId: string) {
             markResearchJobDone(jobId, event.response);
             break;
           case 'error':
-            markResearchJobFailed(jobId, event.message);
+            markResearchJobFailed(jobId, event.message, event.finalContext);
             break;
         }
       },

@@ -54,6 +54,7 @@ export interface SettingsData {
   thinkingStripPatterns: string;
   maxSources: number;
   deepIterations: number;
+  showDebugContext?: boolean;
 }
 
 export const PROVIDER_KEYS = ['groq', 'gemini', 'vercel', 'openrouter', 'custom'] as const;

@@ -62,6 +62,7 @@ export interface SettingsStore {
     deepIterations: number;
     thinkingStripPatterns: string;
     titleModel: string;
+    showDebugContext: boolean;
   };
 }
 
@@ -113,7 +114,7 @@ const defaults: SettingsStore = {
   },
   modelRouting: createModelRouting(),
   api: { ...apiDefaults },
-  general: { maxSources: 8, deepIterations: 3, thinkingStripPatterns: '', titleModel: '' },
+  general: { maxSources: 8, deepIterations: 3, thinkingStripPatterns: '', titleModel: '', showDebugContext: false },
 };
 
 function cloneDefaults(): SettingsStore {
@@ -213,6 +214,7 @@ function normalizeSettings(raw: unknown): SettingsStore {
     deepIterations: typeof general?.deepIterations === 'number' ? general.deepIterations as number : merged.general.deepIterations,
     thinkingStripPatterns: typeof general?.thinkingStripPatterns === 'string' ? general.thinkingStripPatterns as string : merged.general.thinkingStripPatterns,
     titleModel: titleFallback,
+    showDebugContext: typeof general?.showDebugContext === 'boolean' ? general.showDebugContext as boolean : merged.general.showDebugContext,
   };
   merged.modelRouting = normalizeModelRouting(r?.modelRouting, merged.providerOrder[0] || 'groq', titleFallback);
   const apiRaw = r.api && typeof r.api === 'object' ? r.api as Record<string, unknown> : null;

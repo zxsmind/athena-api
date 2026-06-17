@@ -16,7 +16,7 @@ export type ResearchJobEvent =
   | { type: 'token'; text: string; timestamp: string }
   | { type: 'sources'; sources: Source[]; timestamp: string }
   | { type: 'done'; response: SearchResponse; timestamp: string }
-  | { type: 'error'; message: string; timestamp: string };
+  | { type: 'error'; message: string; finalContext?: string; timestamp: string };
 
 export interface ResearchJobRecord {
   id: string;
@@ -28,12 +28,13 @@ export interface ResearchJobRecord {
   updatedAt: string;
   startedAt?: string;
   finishedAt?: string;
-  result?: SearchResponse;
   error?: string;
   cancelled: boolean;
-  controller?: AbortController;
-  steps: AgentStep[];
+  steps?: AgentStep[];
+  result?: SearchResponse;
+  finalContext?: string;
   events: ResearchJobEvent[];
+  controller?: AbortController;
   conversationId?: string;
 }
 
@@ -141,13 +142,14 @@ export function markResearchJobDone(id: string, result: SearchResponse): Researc
   return job;
 }
 
-export function markResearchJobFailed(id: string, message: string): ResearchJobRecord | undefined {
+export function markResearchJobFailed(id: string, message: string, finalContext?: string): ResearchJobRecord | undefined {
   const job = jobs.get(id);
   if (!job) return undefined;
   job.status = job.cancelled ? 'cancelled' : 'failed';
   job.error = message;
+  job.finalContext = finalContext;
   job.finishedAt = nowIso();
-  pushEvent(job, { type: 'error', message, timestamp: nowIso() });
+  pushEvent(job, { type: 'error', message, finalContext, timestamp: nowIso() });
   notify(id);
   return job;
 }
@@ -179,7 +181,7 @@ export function appendResearchJobEvent(id: string, event: ResearchJobEvent): Res
   if (!job) return undefined;
   if (job.cancelled && event.type !== 'status') return job;
   if (event.type === 'step') {
-    job.steps.push(event.data);
+    job.steps!.push(event.data);
   }
   if (event.type === 'error' && job.cancelled) {
     pushEvent(job, { type: 'status', status: 'cancelled', timestamp: nowIso(), detail: 'Cancelled' });
