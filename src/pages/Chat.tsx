@@ -71,7 +71,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
 
     function updateActive() {
       if (!container) return;
-      const els = container.querySelectorAll<HTMLElement>('[data-msg-index]');
+      const els = container.querySelectorAll<HTMLElement>('[data-msg-index]:not([data-msg-type="user"])');
       if (els.length === 0) return;
       const cRect = container.getBoundingClientRect();
 
@@ -98,16 +98,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations }: 
   }, []);
 
   useEffect(() => {
-    let msg: Message | null = null;
-    if (activeMsgIdx >= 0 && activeMsgIdx < messages.length) {
-      msg = messages[activeMsgIdx];
-    }
-    if (!msg || msg.type !== 'assistant' || !msg.data?.sources?.length) {
-      for (let j = messages.length - 1; j >= 0; j--) {
-        const m = messages[j];
-        if (m.type === 'assistant' && m.data?.sources?.length) { msg = m; break; }
-      }
-    }
+    const msg = activeMsgIdx >= 0 && activeMsgIdx < messages.length ? messages[activeMsgIdx] : null;
     const srcs = msg?.type === 'assistant' && msg.data ? msg.data.sources : [];
     if (srcs.length > 0) {
       if (panelFadeTimer.current) clearTimeout(panelFadeTimer.current);
