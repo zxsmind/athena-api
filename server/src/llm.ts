@@ -1,7 +1,7 @@
 import { loadSettings } from './settings-store.js';
 import fs from 'fs';
 import path from 'path';
-import { createSmartRoutingEngine, type RouteCandidate, type CapacityObservation, type RouteLease, type SelectionResult } from '@mindbox/smart-routing-core';
+import { createSmartRoutingEngine, type RouteCandidate, type CapacityObservation, type RouteLease } from '@mindbox/smart-routing-core';
 import { resolveTargets, modelSupportsTools, buildLLMRequestBody, learnedNoToolCalling } from './llm-utils.js';
 
 const LOG_FILE = path.resolve(process.cwd(), 'llm-errors.log');
@@ -404,18 +404,14 @@ export async function callLLM(opts: LLMOptions): Promise<LLMResult> {
     for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
       if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
       for (const target of uniqTargets) {
-        const candidate = buildCandidates([target])[0];
-        let selection: SelectionResult | null = null;
-        try {
-          selection = routingEngine.selectRoute({ candidates: [candidate] });
-        } catch { /* routing failure — try anyway */ }
-        if (!selection) {
-          tried.push(`${target.id}/${target.model} -> blocked (rate-limited)`);
-          continue;
-        }
         const { signal, cleanup } = makeRequestSignal(30000, opts.signal);
+        let lease: RouteLease | undefined;
         try {
-          const result = await tryProvider(target, opts, body, label, signal, tried, selection.lease);
+          const candidate = buildCandidates([target])[0];
+          lease = routingEngine.selectRoute({ candidates: [candidate] })?.lease;
+        } catch { /* routing error — ignore */ }
+        try {
+          const result = await tryProvider(target, opts, body, label, signal, tried, lease);
           if (result) return result;
         } finally {
           cleanup();
@@ -436,18 +432,14 @@ export async function callLLMStream(opts: LLMOptions): Promise<LLMResult> {
     for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
       if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
       for (const target of uniqTargets) {
-        const candidate = buildCandidates([target])[0];
-        let selection: SelectionResult | null = null;
-        try {
-          selection = routingEngine.selectRoute({ candidates: [candidate] });
-        } catch { /* routing failure — try anyway */ }
-        if (!selection) {
-          tried.push(`${target.id}/${target.model} -> blocked (rate-limited)`);
-          continue;
-        }
         const { signal, cleanup } = makeRequestSignal(opts.tools ? 60000 : 30000, opts.signal);
+        let lease: RouteLease | undefined;
         try {
-          const result = await tryProviderStream(target, opts, body, label, signal, tried, selection.lease);
+          const candidate = buildCandidates([target])[0];
+          lease = routingEngine.selectRoute({ candidates: [candidate] })?.lease;
+        } catch { /* routing error — ignore */ }
+        try {
+          const result = await tryProviderStream(target, opts, body, label, signal, tried, lease);
           if (result) return result;
         } finally {
           cleanup();
