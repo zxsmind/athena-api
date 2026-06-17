@@ -3,7 +3,7 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const settingsPath = resolve(__dirname, '..', '..', 'backend', 'settings.json');
+const settingsPath = resolve(__dirname, '..', 'data', 'settings.json');
 
 export const SETTINGS_VERSION = 2;
 
