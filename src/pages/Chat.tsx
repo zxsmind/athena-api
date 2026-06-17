@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react
 import { createPortal } from 'react-dom';
 import { useParams, useLocation } from 'react-router-dom';
 import useMediaQuery from '@mui/material/useMediaQuery';
-import { MoreHorizontal } from 'lucide-react';
 import SearchInput from '../components/SearchInput';
 import { getDefaultMode } from '../hooks/useDefaultMode';
 import ActivityModal from '../components/ActivityModal';
@@ -14,7 +13,7 @@ import { search, subscribeToJobEvents, fetchMessages, saveMessages, type Message
 import {
   normalizeSearchQuery,
   computeCitationTooltipPosition, estimateCitationTooltipSize,
-  CITATION_TOOLTIP_MAX_HEIGHT, ABORT_TIMEOUT_MS, FALLBACK_FAVICON,
+  ABORT_TIMEOUT_MS, FALLBACK_FAVICON,
   type CitationTooltipItem, type CitationTooltipPosition,
 } from '../lib/chat-utils';
 
