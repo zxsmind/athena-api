@@ -1,7 +1,7 @@
 import { loadSettings } from './settings-store.js';
 import fs from 'fs';
 import path from 'path';
-import { createSmartRoutingEngine, type RouteCandidate, type RouteScope, type CapacityObservation, type RouteLease, type SelectionResult } from '@mindbox/smart-routing-core';
+import { createSmartRoutingEngine, type RouteCandidate, type CapacityObservation, type RouteLease, type SelectionResult } from '@mindbox/smart-routing-core';
 import { resolveTargets, modelSupportsTools, buildLLMRequestBody, learnedNoToolCalling } from './llm-utils.js';
 
 const LOG_FILE = path.resolve(process.cwd(), 'llm-errors.log');
@@ -28,10 +28,6 @@ function buildCandidates(targets: TargetReference[]): RouteCandidate[] {
     rotationIndex: 0,
     scopes: [{ scopeId: 'llm', limits: { rpm: null, tpm: null, rpd: null, budgetMode: 'requests' as const, budgetLimit: null } }],
   }));
-}
-
-function findTarget(targets: TargetReference[], routeId: string): TargetReference | undefined {
-  return targets.find(t => `${t.id}::${t.model}` === routeId);
 }
 
 function recordRoutingOutcome(
@@ -403,36 +399,27 @@ export async function callLLM(opts: LLMOptions): Promise<LLMResult> {
   const label = opts.label || 'callLLM';
   const { uniqTargets, tried } = resolveTargets(opts.role, label, opts.signal);
   const body = buildLLMRequestBody(opts);
-  const candidates = buildCandidates(uniqTargets);
   try {
     const maxGlobalAttempts = opts.role === 'deep' ? 5 : 1;
     for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
       if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
-      const remaining = [...candidates];
-      while (remaining.length > 0) {
+      for (const target of uniqTargets) {
+        const candidate = buildCandidates([target])[0];
         let selection: SelectionResult | null = null;
         try {
-          selection = routingEngine.selectRoute({ candidates: remaining });
-        } catch { /* routing failure — fall through to manual iteration */ }
+          selection = routingEngine.selectRoute({ candidates: [candidate] });
+        } catch { /* routing failure — try anyway */ }
         if (!selection) {
-          const fallback = remaining.shift()!;
-          const target = findTarget(uniqTargets, fallback.routeId);
-          if (!target) continue;
-          const { signal, cleanup } = makeRequestSignal(30000, opts.signal);
-          try {
-            const result = await tryProvider(target, opts, body, label, signal, tried);
-            if (result) return result;
-          } finally { cleanup(); }
+          tried.push(`${target.id}/${target.model} -> blocked (rate-limited)`);
           continue;
         }
-        const target = findTarget(uniqTargets, selection.candidate.routeId);
-        if (!target) { remaining.splice(remaining.indexOf(selection.candidate), 1); continue; }
         const { signal, cleanup } = makeRequestSignal(30000, opts.signal);
         try {
           const result = await tryProvider(target, opts, body, label, signal, tried, selection.lease);
           if (result) return result;
-        } finally { cleanup(); }
-        remaining.splice(remaining.indexOf(selection.candidate), 1);
+        } finally {
+          cleanup();
+        }
       }
     }
     throw new Error(`${label} — all targets failed after ${maxGlobalAttempts} global attempt(s).\n${tried.map(r => `  • ${r}`).join('\n')}`);
@@ -444,37 +431,27 @@ export async function callLLMStream(opts: LLMOptions): Promise<LLMResult> {
   const label = opts.label || 'callLLMStream';
   const { uniqTargets, tried } = resolveTargets(opts.role, label, opts.signal);
   const body = buildLLMRequestBody(opts);
-  const candidates = buildCandidates(uniqTargets);
   try {
     const maxGlobalAttempts = opts.role === 'deep' ? 5 : 1;
     for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
       if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
-      const remaining = [...candidates];
-      while (remaining.length > 0) {
+      for (const target of uniqTargets) {
+        const candidate = buildCandidates([target])[0];
         let selection: SelectionResult | null = null;
         try {
-          selection = routingEngine.selectRoute({ candidates: remaining });
-        } catch { /* routing failure — fall through to manual iteration */ }
-        const timeout = opts.tools ? 60000 : 30000;
+          selection = routingEngine.selectRoute({ candidates: [candidate] });
+        } catch { /* routing failure — try anyway */ }
         if (!selection) {
-          const fallback = remaining.shift()!;
-          const target = findTarget(uniqTargets, fallback.routeId);
-          if (!target) continue;
-          const { signal, cleanup } = makeRequestSignal(timeout, opts.signal);
-          try {
-            const result = await tryProviderStream(target, opts, body, label, signal, tried);
-            if (result) return result;
-          } finally { cleanup(); }
+          tried.push(`${target.id}/${target.model} -> blocked (rate-limited)`);
           continue;
         }
-        const target = findTarget(uniqTargets, selection.candidate.routeId);
-        if (!target) { remaining.splice(remaining.indexOf(selection.candidate), 1); continue; }
-        const { signal, cleanup } = makeRequestSignal(timeout, opts.signal);
+        const { signal, cleanup } = makeRequestSignal(opts.tools ? 60000 : 30000, opts.signal);
         try {
           const result = await tryProviderStream(target, opts, body, label, signal, tried, selection.lease);
           if (result) return result;
-        } finally { cleanup(); }
-        remaining.splice(remaining.indexOf(selection.candidate), 1);
+        } finally {
+          cleanup();
+        }
       }
     }
     throw new Error(`${label} — all targets failed after ${maxGlobalAttempts} global attempt(s).\n${tried.map(r => `  • ${r}`).join('\n')}`);
