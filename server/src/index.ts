@@ -283,7 +283,9 @@ async function generateTitle(conversationId: string, query: string) {
       role: 'title',
       label: 'title-gen',
     });
-    const title = data?.choices?.[0]?.message?.content?.trim().replace(/^["'\s]+|["'\s]+$/g, '') || query;
+    const rawContent = data?.choices?.[0]?.message?.content;
+    console.log(`[title-gen] response model=${data?.model} content=${JSON.stringify(rawContent)}`);
+    const title = rawContent?.trim().replace(/^["'\s]+|["'\s]+$/g, '') || query;
     if (title) {
       await updateConversationTitle(conversationId, title.slice(0, 60));
     }
