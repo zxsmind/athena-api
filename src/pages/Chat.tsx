@@ -44,8 +44,9 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
   const [liveMs, setLiveMs] = useState(0);
   const [editIndex, setEditIndex] = useState(-1);
   const [editText, setEditText] = useState('');
-  const [panelOpacity, setPanelOpacity] = useState(0);
+
   const [panelSources, setPanelSources] = useState<Source[]>([]);
+  const [panelClosing, setPanelClosing] = useState(false);
   const panelFadeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [mobileSourcesOpen, setMobileSourcesOpen] = useState(false);
   const [mobileSourcesClosing, setMobileSourcesClosing] = useState(false);
@@ -110,18 +111,16 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
   }, []);
 
   useEffect(() => {
-    queueMicrotask(() => {
-      const msg = activeMsgIdx >= 0 && activeMsgIdx < messages.length ? messages[activeMsgIdx] : null;
-      const srcs = msg?.type === 'assistant' && msg.data ? msg.data.sources : [];
-      if (srcs.length > 0) {
-        if (panelFadeTimer.current) clearTimeout(panelFadeTimer.current);
-        setPanelSources(srcs);
-        setPanelOpacity(1);
-      } else {
-        setPanelOpacity(0);
-        panelFadeTimer.current = setTimeout(() => setPanelSources([]), 200);
-      }
-    });
+    const msg = activeMsgIdx >= 0 && activeMsgIdx < messages.length ? messages[activeMsgIdx] : null;
+    const srcs = msg?.type === 'assistant' && msg.data ? msg.data.sources : [];
+    if (srcs.length > 0) {
+      if (panelFadeTimer.current) clearTimeout(panelFadeTimer.current);
+      setPanelSources(srcs);
+      setPanelClosing(false);
+    } else {
+      setPanelClosing(true);
+      panelFadeTimer.current = setTimeout(() => { setPanelClosing(false); setPanelSources([]); }, 200);
+    }
     return () => { if (panelFadeTimer.current) clearTimeout(panelFadeTimer.current); };
   }, [activeMsgIdx, messages]);
 
@@ -676,12 +675,17 @@ autoFocus
         />
       </div>
 
-      {!isMobile && <div style={{
-        position: 'fixed', zIndex: 999,
-        transition: 'opacity 200ms ease', opacity: panelOpacity,
-        top: '50%', right: 16, transform: 'translateY(-50%)', width: 260,
+      {!isMobile && (panelSources.length > 0 || panelClosing) && <div style={{
+        position: 'fixed', zIndex: 999, pointerEvents: panelClosing ? 'none' : 'auto',
+        top: '50%', right: 16, width: 260,
       }}>
-        {panelSources.length > 0 && <SourcesPanel sources={panelSources} />}
+        <div style={{
+          transform: panelClosing ? 'translateY(-50%) scale(0.95)' : 'translateY(-50%) scale(1)',
+          opacity: panelClosing ? 0 : 1,
+          transition: 'opacity 200ms ease, transform 200ms ease',
+        }}>
+          <SourcesPanel sources={panelSources} />
+        </div>
       </div>}
 
       {isMobile && panelSources.length > 0 && (
