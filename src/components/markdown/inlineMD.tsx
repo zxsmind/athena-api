@@ -58,6 +58,18 @@ export function inlineMD(t: string, sources?: Source[]) {
         <span class="citation-multi-count">+${multiCount}</span>
       </a>`;
     });
+
+    const citationTagRe = /<a\s[^>]*class="citation-badge[^"]*"[^>]*>[\s\S]*?<\/a>/g;
+    let lastIdx = 0;
+    const grouped: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = citationTagRe.exec(html)) !== null) {
+      const before = html.slice(lastIdx, m.index);
+      grouped.push(`<span class="citation-group">${before}${m[0]}</span>`);
+      lastIdx = m.index + m[0].length;
+    }
+    if (lastIdx < html.length) grouped.push(html.slice(lastIdx));
+    html = grouped.join('');
   }
 
   return html;
