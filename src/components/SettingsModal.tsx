@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { Section, InputRow, ListSection, InfoPanel } from './settings/SharedComponents';
+import Dropdown from './Dropdown';
 import { ModelRouteEditor } from './settings/ModelEditor';
 import { PromptDialog } from './settings/PromptDialog';
 import type { SettingsData, ModelRouting, ModelRoute, ProviderConfig, TabKey } from './settings/types';
@@ -246,6 +247,32 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <InputRow label="API URL" value={p.url} onChange={v => updateProvider(key, { url: v })} placeholder="https://api.example.com/v1/chat/completions" />
                   {key === 'custom' && <InputRow label="Display Name" value={p.name} onChange={v => updateProvider(key, { name: v })} placeholder="custom" />}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--athena-text-2)', width: 92 }}>🧠 Thinking</span>
+                    <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--athena-border)', background: 'var(--glass-bg)' }}>
+                      <Dropdown
+                        value={p.reasoningEffort || 'none'}
+                        options={[
+                          { value: 'none', label: 'Off' },
+                          { value: 'minimal', label: 'Minimal' },
+                          { value: 'low', label: 'Low' },
+                          { value: 'medium', label: 'Medium' },
+                          { value: 'high', label: 'High' },
+                        ]}
+                        onChange={v => updateProvider(key, { reasoningEffort: v as ProviderConfig['reasoningEffort'] })}
+                        fontSize={10.5}
+                      />
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: 10, color: 'var(--athena-text-2)', whiteSpace: 'nowrap' }}>
+                        <input
+                          type="checkbox"
+                          checked={!!p.includeThoughts}
+                          onChange={e => updateProvider(key, { includeThoughts: e.target.checked })}
+                          style={{ accentColor: 'var(--athena-accent)', width: 12, height: 12 }}
+                        />
+                        Show thoughts
+                      </label>
+                    </div>
+                  </div>
                   <ListSection label="API Keys" items={p.keys} onAdd={() => addKey(key)} onRemove={i => removeKey(key, i)} emptyText="No API keys configured" maskItems />
                 </div>
               </Section>

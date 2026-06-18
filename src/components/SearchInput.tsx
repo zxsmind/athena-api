@@ -165,7 +165,6 @@ export default function SearchInput({
       setValue('');
       setActiveIdx(-1);
       setFocused(false);
-      setDeepMode(false);
       inputRef.current?.blur();
     },
     [value, deepMode, onSubmit, disabled]

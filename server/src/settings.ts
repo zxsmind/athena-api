@@ -25,7 +25,7 @@ export interface ProviderConfig {
   models: string[];
   url: string;
   label: string;
-  reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
   includeThoughts?: boolean;
 }
 

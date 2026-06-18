@@ -49,14 +49,14 @@ async function toolCallingRound(
     const remainingRoundBudget = maxRounds - round;
     const remainingCredits = budget.remainingCredits;
     if (remainingCredits <= 2) {
-      const msg = `⚠️ **Low budget.** Only ${remainingCredits} credit(s) remain. Use them carefully. If you search, be prepared to answer immediately after.`;
+      const msg = `⚠️ **Low budget.** Only ${remainingCredits} credit(s) remain. Use them for your most important remaining gaps, then write your answer.`;
       messages.push({ role: 'system', content: msg });
     }
     if (remainingRoundBudget <= 1) {
-      const msg = `⚠️ **Last round.** After this round the connection closes. If you still need information, search now — then answer immediately. If you have enough, skip searching and write your answer.`;
+      const msg = `⚠️ **Last round.** If you still have missing information, search now. Otherwise, write your comprehensive answer with citations.`;
       messages.push({ role: 'system', content: msg });
     } else if (remainingRoundBudget <= 2) {
-      const msg = `⚠️ **${remainingRoundBudget} rounds remaining.** Plan accordingly.`;
+      const msg = `⚠️ **${remainingRoundBudget} rounds remaining.** Continue researching any remaining gaps before answering.`;
       messages.push({ role: 'system', content: msg });
     }
   }
@@ -75,14 +75,15 @@ async function toolCallingRound(
   }
 
   const { data, model } = llmResult;
-  const d = data as { choices: { message: { role: string; content: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[]; reasoning?: string }; finish_reason: string }[] } | undefined;
+  const d = data as { choices: { message: { role: string; content: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[]; reasoning?: string; reasoning_content?: string }; finish_reason: string }[] } | undefined;
   const choice = d!.choices[0];
   const msg = choice.message;
   if (msg.content) msg.content = stripThinkingTags(msg.content);
   const finish = choice.finish_reason;
   const currentModel = model;
 
-  if (msg.reasoning?.trim()) step.note = msg.reasoning.trim();
+  const reasoningText = msg.reasoning || msg.reasoning_content;
+  if (reasoningText?.trim()) step.note = reasoningText.trim();
   step.model = currentModel;
   onEvent({ type: 'step', data: step });
 
@@ -139,7 +140,7 @@ async function toolCallingRound(
       budget.exhausted = true; onProgress?.(budget);
       for (const tc of msg.tool_calls) {
         const tcId = tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-        messages.push({ role: 'tool', tool_call_id: tcId, content: 'Research budget exhausted. No results available. Write your final answer now.' });
+        messages.push({ role: 'tool', tool_call_id: tcId, content: 'Research budget exhausted. No results available. Write your final answer now based on the information you already have.' });
       }
       return { kind: 'tools' };
     }
@@ -222,6 +223,11 @@ async function toolCallingRound(
   const content = msg.content || '';
   const inlineCall = parseInlineToolCall(content);
   if (inlineCall) {
+    if (budgetExhausted) {
+      messages.push({ role: msg.role, content: content.replace(inlineCall.raw, '').trim() || null });
+      messages.push({ role: 'tool', tool_call_id: `call_inline_${Date.now()}`, content: 'Research budget exhausted. No results available. Write your final answer now based on the information you already have.' });
+      return { kind: 'tools' };
+    }
     const allQueries = inlineCall.queries?.length ? inlineCall.queries : [(inlineCall.query || '').trim()].filter(Boolean);
     if (allQueries.length > 0) {
       console.log(`[inline tool] parsed ${allQueries.length} query(s):`, allQueries);
@@ -305,7 +311,9 @@ export async function agenticResearchStream(
   };
   const now = new Date();
   const today = `${now.toLocaleDateString('en-US', { month: 'long' })} ${now.getDate()}, ${now.getFullYear()}`;
-  const constraintsBlock = `\n\n**Research constraints:** You have ${budget.remainingCredits} search/fetch credits and a maximum of ${maxRounds} rounds. Each search or fetch costs 1 credit. Plan your research — when credits or rounds run low, stop searching and write your answer using what you have.`;
+  const constraintsBlock = mode === 'deep'
+    ? `\n\n**Research budget:** You have ${budget.remainingCredits} searches available. Use them all — more searches mean more verified data. Do not conserve credits. Do not stop early. Search until you have verified every component of the question or until your budget is fully consumed.`
+    : `\n\n**Research constraints:** You have ${budget.remainingCredits} search/fetch credits and a maximum of ${maxRounds} rounds. Each search or fetch costs 1 credit. Plan your research — when credits or rounds run low, stop searching and write your answer using what you have.`;
   const systemPrompt = (mode === 'deep' ? DEEP_SYSTEM_PROMPT : SYSTEM_PROMPT) + `\n\n**Today's date:** ${today}.` + constraintsBlock;
   const messages: LLMMessage[] = [{ role: 'system', content: systemPrompt }];
   const sanitizedHistory = sanitizeHistory(history, query, mode);
@@ -315,11 +323,15 @@ export async function agenticResearchStream(
   const sessionStartIdx = messages.length;
 
   let hadError = false;
-  for (let round = 0; round < maxRounds; round++) {
+  let round = 0;
+  while (round < maxRounds || (budget.exhausted && !hadError)) {
     if (options.signal?.aborted) break;
     const result = await toolCallingRound(messages, allSources, steps, round, onEvent, budget, maxRounds, options.onProgress, options.signal, activeRole);
     if (result.kind === 'error') { hadError = true; break; }
     if (result.kind === 'answer') break;
+    round++;
+    // Safety: if budget exhausted, cap extra answer attempts to 3 rounds
+    if (budget.exhausted && round >= maxRounds + 3) break;
   }
 
   if (hadError || options.signal?.aborted) return;

@@ -13,7 +13,7 @@ export interface ProviderState {
   models: string[];
   url: string;
   name?: string;
-  reasoningEffort?: 'none' | 'low' | 'medium' | 'high';
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
   includeThoughts?: boolean;
 }
 
@@ -124,7 +124,7 @@ function cloneDefaults(): SettingsStore {
 function normalizeProviderState(id: string, value: Partial<ProviderState> | undefined): ProviderState {
   const def = defaults.providers[id] || { enabled: false, keys: [], models: [], url: '', name: id };
   const rawEffort = value?.reasoningEffort;
-  const validEfforts = ['none', 'low', 'medium', 'high'] as const;
+  const validEfforts = ['none', 'minimal', 'low', 'medium', 'high'] as const;
   return {
     enabled: value?.enabled ?? def.enabled,
     keys: Array.isArray(value?.keys) ? value!.keys.filter((k): k is string => typeof k === 'string') : [...def.keys],

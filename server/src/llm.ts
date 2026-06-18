@@ -50,7 +50,8 @@ function normalizeGeminiResponse(data: unknown, model: string): unknown {
   const c = candidates[0] as Record<string, unknown>;
   const content = c.content as Record<string, unknown> | undefined;
   const parts = (content?.parts || []) as Record<string, unknown>[];
-  const text = parts.map(p => String(p.text || '')).join('');
+  const text = parts.filter(p => !p.thought).map(p => String(p.text || '')).join('');
+  const reasoning = parts.filter(p => p.thought).map(p => String(p.text || '')).join('');
   const finish = String(c.finishReason || 'stop');
   const toolCalls: Record<string, unknown>[] = [];
   for (const p of parts) {
@@ -66,6 +67,7 @@ function normalizeGeminiResponse(data: unknown, model: string): unknown {
   }
   const msg: Record<string, unknown> = { role: 'assistant', content: text || null };
   if (toolCalls.length > 0) msg.tool_calls = toolCalls;
+  if (reasoning) msg.reasoning = reasoning;
   return {
     id: d.id || 'gemini-response',
     object: 'chat.completion',
@@ -183,7 +185,12 @@ async function tryProvider(
   }
 
   const reqBody: Record<string, unknown> = { ...body, model, stream: false };
-  if (provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+  if (target.id === 'gemini' && provider.reasoningEffort && ['minimal', 'low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+    reqBody.thinkingConfig = {
+      thinking_level: provider.reasoningEffort,
+      thinking_summaries: provider.includeThoughts ? 'auto' : 'none',
+    };
+  } else if (provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
     reqBody.reasoning_effort = provider.reasoningEffort;
   }
 
@@ -258,7 +265,12 @@ async function tryProviderStream(
   }
 
   const reqBody: Record<string, unknown> = { ...body, model, stream: true };
-  if (provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+  if (target.id === 'gemini' && provider.reasoningEffort && ['minimal', 'low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+    reqBody.thinkingConfig = {
+      thinking_level: provider.reasoningEffort,
+      thinking_summaries: provider.includeThoughts ? 'auto' : 'none',
+    };
+  } else if (provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
     reqBody.reasoning_effort = provider.reasoningEffort;
   }
 

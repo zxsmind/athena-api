@@ -9,6 +9,8 @@ export interface ProviderConfig {
   models: string[];
   url: string;
   label: string;
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
+  includeThoughts?: boolean;
 }
 
 export interface ModelReference {
