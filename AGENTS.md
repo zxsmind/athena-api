@@ -116,7 +116,7 @@ ATHENA-001/
 ├── server/                       # Node.js / Express backend
 │   ├── src/
 │   │   ├── index.ts              # Express uygulaması, route tanımları, SSE
-│   │   ├── engine.ts             # Agentic araştırma motoru (plan/search/analyze/synthesize)
+│   │   ├── engine.ts             # Agentic araştırma motoru (plan/search/analyze/answer)
 │   │   ├── llm.ts                # LLM çağrıları, fallback, smart routing entegrasyonu
 │   │   ├── search.ts             # Serper API ve web sayfası içeriği çekme
 │   │   ├── settings.ts           # API response için settings dönüştürme katmanı
@@ -208,22 +208,21 @@ npm test             # smart-routing-core/ dizininde
 
 ### 5.1. Agentic Araştırma Akışı (`server/src/engine.ts`)
 
-`agenticResearchStream(query, history, onEvent, mode, options)` fonksiyonu, arama motorunun kalbidir.
+`agenticResearchStream(query, history, onEvent, mode, options)` fonksiyonu, arama motorunun kalbidir. **Tamamen agentic bir döngü** çalışır; ayrı bir "synthesis" fazı yoktur.
 
-1. **Plan / Analyze Aşaması**: LLM'e `web_search` ve `fetch_url` araçları verilir. Model, kullanıcı sorusunu alt sorulara böler ve arama yapar. Ayrı "Plan → Search → Analyze → Review → Synthesize" fazları henüz implemente edilmemiştir; tüm araç çağrısı ve analiz aynı `toolCallingRound` döngüsü içinde çalışır.
+1. **Aracı Araştırma Döngüsü**: LLM'e `web_search` ve `fetch_url` araçları verilir. Model, kullanıcı sorusunu alt sorulara böler, arama yapar, sonuçları analiz eder ve yeterli bilgi topladığında doğrudan cevap yazar. Tek bir `toolCallingRound` döngüsü içinde: tool call → sonuç işle → tekrar model çağrısı.
 2. **Arama Aşaması**: `search.ts` üzerinden Serper.dev çağrılır; sonuçlar toplanır ve kaynaklar `[N]` index'leri atanır.
 3. **Inline Tool Call Parsing**: Bazı modeller (Llama, Qwen) OpenAI `tool_calls` formatı yerine XML/JSON inline çıktı verebilir. `parseInlineToolCall()` bunları yakalar.
-4. **Bütçe Denetimi**: Yalnızca **her araç çağrısı** (search/fetch) 1 kredi harcar. `maxCreditsPerQuery` aşılırsa yeni arama yapılmaz, döngü sonlanır. Sentez/plan için yapılan LLM çağrıları kredi harcamaz. Quick modda bütçe ayrıca sabit 6 ile sınırlandırılır.
-5. **Sentez (Synthesis) Aşaması**: Araç kullanıldıysa (usedTools), `callLLMStream` ile token-by-token stream edilen bir synthesis çağrısı yapılır. Her chunk `{ type: 'token', text }` olayı olarak iletilir. Stream tamamlanınca `{ type: 'done', ... }` gönderilir. Eğer bu sentez başarısız olursa veya model araç kullanmadan döngü bittiyse, `SYNTHESIS_PROMPT` ile bir `synthesis-fallback` çağrısı daha yapılır (yine `callLLMStream` ile stream edilir).
-6. **Chat Modu**: Eğer model hiç araç kullanmadan doğrudan cevap verdiyse (örn. selamlaşma), `emitAnswer()` ile tek `token` olayı ve ardından `done` olayı döner.
+4. **Bütçe Denetimi**: Yalnızca **her araç çağrısı** (search/fetch) 1 kredi harcar. `maxCreditsPerQuery` aşılırsa yeni arama yapılmaz, döngü sonlandırılır ve model "cevap yaz" uyarısı alarak cevap üretir. Quick modda bütçe sabit 6 ile sınırlandırılır.
+5. **Model Cevabı**: Model `tool_calls` döndürmezse (content ile cevap verirse), bu cevap doğrudan kullanıcıya `{ type: 'token', text }` + `{ type: 'done' }` olaylarıyla iletilir. **Ayrı bir "synthesis" veya "synthesis-fallback" fazı YOKTUR.**
 
 Modlar:
-- **quick**: Kullanıcıya "Instant" olarak gösterilir. Dahili model rolü `instant`. Max 3 tur, hızlı cevap.
-- **deep**: Dahili model rolü `deep`. Max 50 tur, daha kapsamlı ve çok kaynaklı araştırma.
+- **quick**: Kullanıcıya "Instant" olarak gösterilir. Dahili model rolü `instant`. Max 3 tur, bütçe 6 kredi.
+- **deep**: Dahili model rolü `deep`. Max 50 tur, bütçe `maxCreditsPerQuery` (varsayılan 20).
 
 > **Dikkat:** Ayarlarda bulunan `general.deepIterations` ve `research.maxFollowUpQueries` alanları şu anda `engine.ts` içinde aktif olarak kullanılmıyor; deep mod tur sayısı sabit 50, follow-up limiti bütçe ve tur sayısı tarafından dolaylı olarak sınırlanıyor. Bu ayarları devreye sokacak bir değişiklik yapmadan önce bu dokümanı ve ilgili kodu güncelleyin.
 
-> **Not:** Synthesis ve synthesis-fallback aşamaları artık `callLLMStream` ile token-by-token stream edilir; her chunk anında `{ type: 'token', text }` olayı olarak iletilir. Tool-calling round'ları ve direkt model yanıtları (`emitAnswer()`) ise hala non-streaming `callLLM` kullanır ve tüm yanıtı tek bir `token` olayı olarak gönderir. Frontend `onToken` handler'ı her iki durumu da işler.
+> **Not:** Cevap modelin kendi `toolCallingRound` yanıtından gelir ve non-streaming `callLLM` ile alınır; tek bir `{ type: 'token', text }` olayı olarak gönderilir. Eski "synthesis" ve "synthesis-fallback" fazları (ve `SYNTHESIS_PROMPT`) kaldırılmıştır.
 
 ### 5.2. LLM Yönlendirme (`server/src/llm.ts`)
 
@@ -356,7 +355,7 @@ Detaylı dokümantasyon: `docs/API.md`.
 ### 8.4. Promptları Değiştirme
 
 - Tüm sistem promptları `server/src/agent/prompts.ts` içindedir.
-- `SYSTEM_PROMPT`, `SYNTHESIS_PROMPT`, `DEEP_SYSTEM_PROMPT`.
+- `SYSTEM_PROMPT`, `DEEP_SYSTEM_PROMPT` (eski `SYNTHESIS_PROMPT` kaldırıldı).
 - Prompt değişikliği yapıldığında hem quick hem deep modda test edilmelidir; citation formatı bozulmamalıdır.
 
 ### 8.5. Frontend CSS / Tema Değişikliği

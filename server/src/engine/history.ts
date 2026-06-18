@@ -36,14 +36,6 @@ export function sanitizeHistory(
   return clean.slice(-12);
 }
 
-export function compactHistoryForSynthesis(history: { role: 'user' | 'assistant'; content: string }[]): string {
-  if (history.length === 0) return 'No prior conversation context.';
-  return history.slice(-6).map(h => {
-    const content = normalizeContent(h.content).slice(0, h.role === 'assistant' ? 700 : 300);
-    return `${h.role.toUpperCase()}: ${content}`;
-  }).join('\n');
-}
-
 export function temperatureForRound(round: number): number {
   return round === 0 ? 0.3 : 0.1;
 }

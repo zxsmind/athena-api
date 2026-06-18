@@ -501,8 +501,9 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     }
   }, [messages]);
 
-  const handleFollowUp = useCallback((q: string) => {
+  const handleFollowUp = useCallback((q: string, mode?: 'quick' | 'deep') => {
     if (searchingRef.current) return;
+    if (mode) conversationMode.current = mode;
     const currentMessages = messagesRef.current;
     const history = [...currentMessages]
       .filter(m => m.content && !m.loading)
