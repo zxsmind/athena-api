@@ -764,24 +764,12 @@ body {
   transition: background 100ms ease;
 }
 .citation-text {
-  position: relative;
-}
-.citation-text::after {
-  content: '';
-  position: absolute;
-  left: -4px;
-  right: -4px;
-  top: -2px;
-  bottom: -2px;
-  background: rgba(66, 133, 244, 0.25);
   border-radius: 3px;
-  z-index: -1;
-  opacity: 0;
-  transition: opacity 100ms ease;
-  pointer-events: none;
+  transition: background 100ms ease;
 }
-.citation-text.highlighted::after {
-  opacity: 1;
+.citation-text.highlighted {
+  background: rgba(66, 133, 244, 0.25);
+  outline: 1px solid rgba(66, 133, 244, 0.06);
 }
 .citation-badge img {
   border-radius: 1px;
