@@ -324,14 +324,12 @@ export async function agenticResearchStream(
 
   let hadError = false;
   let round = 0;
-  while (round < maxRounds || (budget.exhausted && !hadError)) {
+  while (!hadError && round < maxRounds + 3) {
     if (options.signal?.aborted) break;
     const result = await toolCallingRound(messages, allSources, steps, round, onEvent, budget, maxRounds, options.onProgress, options.signal, activeRole);
     if (result.kind === 'error') { hadError = true; break; }
     if (result.kind === 'answer') break;
     round++;
-    // Safety: if budget exhausted, cap extra answer attempts to 3 rounds
-    if (budget.exhausted && round >= maxRounds + 3) break;
   }
 
   if (hadError || options.signal?.aborted) return;
