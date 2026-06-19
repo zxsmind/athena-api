@@ -150,14 +150,6 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const removeKey = (provider: string, idx: number) => updateProvider(provider, { keys: data!.providers[provider].keys.filter((_, i) => i !== idx) });
   const addModel = (provider: string) => showPrompt('Add Model Name', 'Enter model name...', false, (val) => { if (val) updateProvider(provider, { models: [...data!.providers[provider].models, val] }); });
   const removeModel = (provider: string, idx: number) => updateProvider(provider, { models: data!.providers[provider].models.filter((_, i) => i !== idx) });
-  const toggleModelThinking = (provider: string, model: string) => {
-    if (!data) return;
-    const p = data.providers[provider];
-    const disabled = p.disabledThinkingModels || [];
-    const idx = disabled.indexOf(model);
-    const next = idx >= 0 ? disabled.filter(m => m !== model) : [...disabled, model];
-    updateProvider(provider, { disabledThinkingModels: next });
-  };
   const addSerperKey = () => showPrompt('Add Serper API Key', 'Enter Serper API key...', true, (val) => { if (val && data) patchData({ serper: { ...data.serper, keys: [...data.serper.keys, val] } }); });
   const removeSerperKey = (idx: number) => { if (data) patchData({ serper: { ...data.serper, keys: data.serper.keys.filter((_, j) => j !== idx) } }); };
 
@@ -328,15 +320,22 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                         const thinkingOff = disabled.includes(model);
                         return (
                           <>
-                            <button onClick={() => toggleModelThinking(key, model)} title={thinkingOff ? 'Thinking disabled' : 'Thinking enabled'}
-                              style={{
-                                background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', borderRadius: 3,
-                                display: 'flex', flexShrink: 0, fontSize: 10,
-                                color: thinkingOff ? 'var(--athena-text-3)' : 'var(--athena-accent)',
+                            <Dropdown
+                              value={thinkingOff ? 'off' : 'on'}
+                              options={[
+                                { value: 'on', label: 'Think' },
+                                { value: 'off', label: 'No think' },
+                              ]}
+                              onChange={(v) => {
+                                const current = p.disabledThinkingModels || [];
+                                if (v === 'off' && !thinkingOff) {
+                                  updateProvider(key, { disabledThinkingModels: [...current, model] });
+                                } else if (v === 'on' && thinkingOff) {
+                                  updateProvider(key, { disabledThinkingModels: current.filter(m => m !== model) });
+                                }
                               }}
-                            >
-                              {thinkingOff ? '🧠' : '🧠'}
-                            </button>
+                              accent={!thinkingOff}
+                            />
                             <button onClick={() => removeModel(key, idx)} style={{
                               background: 'none', border: 'none', cursor: 'pointer',
                               color: 'var(--athena-text-3)', padding: 2, borderRadius: 3, display: 'flex',
