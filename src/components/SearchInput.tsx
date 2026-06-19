@@ -41,7 +41,7 @@ function useAutocomplete(query: string) {
         const res = await fetch(`/api/autocomplete?q=${encodeURIComponent(q)}`, { signal: controller.signal });
         if (!res.ok) throw new Error('fetch failed');
         const data = await res.json() as { suggestions: string[] };
-        const items = (data.suggestions ?? []).slice(0, 4);
+        const items = data.suggestions ?? [];
         cache.set(q, items);
         if (cache.size > 100) {
           const firstKey = cache.keys().next().value;

@@ -573,6 +573,13 @@ app.get('/autocomplete', async (req, res) => {
     return;
   }
 
+  const settings = loadSettings();
+  const count = settings.general.autocompleteCount;
+  if (count <= 0) {
+    res.json({ suggestions: [] });
+    return;
+  }
+
   try {
     const resp = await fetch(`https://suggestqueries.google.com/complete/search?client=firefox&q=${encodeURIComponent(q)}`, {
       headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -580,7 +587,7 @@ app.get('/autocomplete', async (req, res) => {
     const data: unknown = await resp.json();
     const arr = data as unknown[];
     const suggestions = Array.isArray(arr[1]) ? arr[1] as unknown[] : [];
-    res.json({ suggestions: suggestions.slice(0, 6) });
+    res.json({ suggestions: suggestions.slice(0, count) });
   } catch {
     res.json({ suggestions: [] });
   }

@@ -57,6 +57,7 @@ export interface SettingsData {
   maxSources: number;
   deepIterations: number;
   showDebugContext?: boolean;
+  autocompleteCount: number;
 }
 
 const providerLabels: Record<string, string> = {
@@ -98,6 +99,7 @@ export function getSettings(): SettingsData {
     maxSources: store.general.maxSources,
     deepIterations: store.general.deepIterations,
     showDebugContext: store.general.showDebugContext,
+    autocompleteCount: store.general.autocompleteCount,
   };
 }
 
@@ -118,6 +120,7 @@ export function saveSettings(data: SettingsData): void {
       thinkingStripPatterns: data.thinkingStripPatterns,
       titleModel: data.modelRouting?.title?.primary?.model || '',
       showDebugContext: data.showDebugContext ?? false,
+      autocompleteCount: data.autocompleteCount,
     },
   };
 

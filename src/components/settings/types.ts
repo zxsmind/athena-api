@@ -58,6 +58,7 @@ export interface SettingsData {
   maxSources: number;
   deepIterations: number;
   showDebugContext?: boolean;
+  autocompleteCount: number;
 }
 
 export const PROVIDER_KEYS = ['groq', 'gemini', 'vercel', 'openrouter', 'custom'] as const;

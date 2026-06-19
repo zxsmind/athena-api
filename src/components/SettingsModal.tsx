@@ -363,6 +363,20 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <InputRow label="Serper URL" value={data.serper.url} onChange={v => patchData({ serper: { ...data.serper, url: v } })} placeholder="https://google.serper.dev/search" />
               <ListSection label="Serper Keys" items={data.serper.keys} onAdd={addSerperKey} onRemove={removeSerperKey} emptyText="No Serper API keys configured" maskItems />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--athena-text-2)', width: 92 }}>🔍 Autocomplete</span>
+                <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', borderRadius: 6, border: '0.5px solid var(--athena-border)', background: 'var(--glass-bg)' }}>
+                  <Dropdown
+                    value={String(data.autocompleteCount)}
+                    options={[
+                      { value: '0', label: 'Off' },
+                      ...Array.from({ length: 12 }, (_, i) => ({ value: String(i + 1), label: String(i + 1) })),
+                    ]}
+                    onChange={v => patchData({ autocompleteCount: parseInt(v, 10) || 0 })}
+                    fontSize={10.5}
+                  />
+                </div>
+              </div>
             </div>
           </Section>
           <Section title="Research Controls">

@@ -64,6 +64,7 @@ export interface SettingsStore {
     thinkingStripPatterns: string;
     titleModel: string;
     showDebugContext: boolean;
+    autocompleteCount: number;
   };
 }
 
@@ -115,7 +116,7 @@ const defaults: SettingsStore = {
   },
   modelRouting: createModelRouting(),
   api: { ...apiDefaults },
-  general: { maxSources: 8, deepIterations: 3, thinkingStripPatterns: '', titleModel: '', showDebugContext: false },
+  general: { maxSources: 8, deepIterations: 3, thinkingStripPatterns: '', titleModel: '', showDebugContext: false, autocompleteCount: 5 },
 };
 
 function cloneDefaults(): SettingsStore {
@@ -217,6 +218,7 @@ function normalizeSettings(raw: unknown): SettingsStore {
     thinkingStripPatterns: typeof general?.thinkingStripPatterns === 'string' ? general.thinkingStripPatterns as string : merged.general.thinkingStripPatterns,
     titleModel: titleFallback,
     showDebugContext: typeof general?.showDebugContext === 'boolean' ? general.showDebugContext as boolean : merged.general.showDebugContext,
+    autocompleteCount: typeof general?.autocompleteCount === 'number' ? general.autocompleteCount as number : merged.general.autocompleteCount,
   };
   merged.modelRouting = normalizeModelRouting(r?.modelRouting, merged.providerOrder[0] || 'groq', titleFallback);
   const apiRaw = r.api && typeof r.api === 'object' ? r.api as Record<string, unknown> : null;
