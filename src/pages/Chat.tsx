@@ -301,6 +301,31 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     };
   }, [citationTooltip.visible, citationTooltip.rect, citationTooltip.items]);
 
+  // Badge hover → highlight preceding text via RAF + elementFromPoint
+  useEffect(() => {
+    let mx = 0, my = 0;
+    let activeGroup: HTMLElement | null = null;
+    const setGroup = (g: HTMLElement | null) => {
+      if (g === activeGroup) return;
+      if (activeGroup) activeGroup.classList.remove('highlighted');
+      activeGroup = g;
+      if (g) g.classList.add('highlighted');
+    };
+    const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
+    const tick = () => {
+      const el = document.elementFromPoint(mx, my);
+      const badge = el?.closest('.citation-badge') as HTMLElement | null;
+      setGroup(badge?.closest('.citation-group') as HTMLElement | null);
+      requestAnimationFrame(tick);
+    };
+    document.addEventListener('mousemove', onMove);
+    requestAnimationFrame(tick);
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      if (activeGroup) activeGroup.classList.remove('highlighted');
+    };
+  }, []);
+
   const runSearch = useCallback((q: string, history?: { role: string; content: string }[], mode?: 'quick' | 'deep') => {
     const myGen = ++runGenRef.current;
     if (searchingRef.current) searchingRef.current = false;
