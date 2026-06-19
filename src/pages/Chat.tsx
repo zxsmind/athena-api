@@ -268,6 +268,38 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     };
   }, [citationTooltip.visible]);
 
+  useEffect(() => {
+    let activeHighlight: HTMLElement | null = null;
+    const add = (badge: HTMLElement) => {
+      if (activeHighlight && activeHighlight !== badge) activeHighlight.classList.remove('highlighted');
+      badge.classList.add('highlighted');
+      activeHighlight = badge;
+      requestAnimationFrame(() => {
+        if (badge.isConnected) badge.classList.add('highlighted');
+      });
+    };
+    const remove = (badge: HTMLElement) => {
+      badge.classList.remove('highlighted');
+      if (activeHighlight === badge) activeHighlight = null;
+    };
+    const onOver = (e: MouseEvent) => {
+      const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
+      if (badge && badge !== activeHighlight) add(badge);
+    };
+    const onOut = (e: MouseEvent) => {
+      const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
+      if (!badge) return;
+      const related = e.relatedTarget as HTMLElement | null;
+      if (!related || !badge.contains(related)) remove(badge);
+    };
+    document.addEventListener('mouseover', onOver);
+    document.addEventListener('mouseout', onOut);
+    return () => {
+      document.removeEventListener('mouseover', onOver);
+      document.removeEventListener('mouseout', onOut);
+    };
+  }, []);
+
   useLayoutEffect(() => {
     if (!citationTooltip.visible || !tooltipRef.current) return;
     queueMicrotask(() => {

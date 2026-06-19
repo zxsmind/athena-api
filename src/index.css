@@ -800,7 +800,7 @@ body {
 .citation-badge::before {
   content: '';
   position: absolute;
-  right: 100%;
+  right: calc(100% + 4px);
   top: -6px;
   bottom: -6px;
   width: 2000px;
@@ -811,7 +811,7 @@ body {
   border-radius: 3px;
   z-index: -1;
 }
-.citation-group:hover .citation-badge::before {
+.citation-badge.highlighted::before {
   opacity: 1 !important;
 }
 
