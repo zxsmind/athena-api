@@ -311,7 +311,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       activeGroup = g;
       if (g) {
         g.classList.add('highlighted');
-        console.log('highlight added', g.innerText.slice(0, 30));
+        console.log('highlight added', g.outerHTML.slice(0, 200));
       } else {
         console.log('highlight removed');
       }
