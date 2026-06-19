@@ -832,7 +832,7 @@ body {
 }
 .tip-domain {
   font-size: 9.5px;
-  color: var(--athena-text-3);
+  color: var(--athena-text-2);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
