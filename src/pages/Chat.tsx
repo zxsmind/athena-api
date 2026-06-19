@@ -309,17 +309,11 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       if (g === activeGroup) return;
       if (activeGroup) activeGroup.classList.remove('highlighted');
       activeGroup = g;
-      if (g) {
-        g.classList.add('highlighted');
-        console.log('highlight added', g.outerHTML.slice(0, 200));
-      } else {
-        console.log('highlight removed');
-      }
+      if (g) g.classList.add('highlighted');
     };
     const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
     const onOver = (e: MouseEvent) => {
       const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
-      console.log('mouseover', e.target, badge);
       setGroup(badge?.closest('.citation-group') as HTMLElement | null);
     };
     const onOut = (e: MouseEvent) => {
