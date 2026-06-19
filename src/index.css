@@ -810,7 +810,7 @@ body {
   opacity: 1;
   transition: opacity 100ms ease;
   border-radius: 3px;
-  z-index: 999;
+  z-index: -1;
 }
 
 /* Citation tooltip */
