@@ -144,6 +144,17 @@ ATHENA-001/
 │   ├── package.json
 │   └── tsconfig.json
 │
+├── deploy/                       # Deployment sistemi (SSH + hash-incremental + PM2)
+│   ├── deploy.sh                 # Ana CLI (init/deploy/status/logs/rollback/restart/cleanup/doctor/config)
+│   ├── deploy.json               # Konfigürasyon dosyası
+│   ├── lib/
+│   │   ├── common.sh             # Logging, SSH helpers, error handling, memory hesaplama
+│   │   ├── hash.sh               # SHA256 manifest generation & comparison
+│   │   ├── sync.sh               # Incremental tar-pipe sync, release management
+│   │   ├── setup.sh              # OS/node/npm detection, dependency install, build
+│   │   └── service.sh            # PM2 management, health check, reboot resilience
+│   └── templates/                # (opsiyonel şablonlar)
+│
 ├── docs/                         # Proje dokümanları
 │   ├── API.md                    # API referansı (v2, Node backend)
 │   ├── agent-strategy.md         # Ajan mimarisi v2 planı
@@ -312,6 +323,86 @@ Detaylı dokümantasyon: `docs/API.md`.
 - `const` ile tanımlı fonksiyonlar ve utility fonksiyonlar tercih edilir.
 - `satisfies` kullanımı yaygın.
 - Node.js yerel `test` runner kullanılır (`node:test`).
+
+### 6.5. Deployment Sistemi (`deploy/`)
+
+> **Deployment sistemi, ATHENA-001'in production ortamına SSH üzerinden taşınması, kurulması ve yönetilmesi için tasarlanmıştır.**
+
+**Dosya yapısı:**
+```
+deploy/
+├── deploy.sh           # Ana CLI (1118 satır) — init/deploy/status/logs/rollback/restart/cleanup/doctor/config
+├── deploy.json         # Konfigürasyon dosyası (host, path, nodeVersion, pm2 ayarları)
+├── lib/
+│   ├── common.sh       # Renkli log, SSH helper'lar, hata yönetimi, akıllı RAM hesaplama
+│   ├── hash.sh         # SHA256 manifest ile dosya değişiklik tespiti
+│   ├── sync.sh         # Incremental tar-pipe sync, release yönetimi, rollback
+│   ├── setup.sh        # OS/Node.js tespiti, bağımlılık kurulumu, build
+│   └── service.sh      # PM2 yönetimi, health check, reboot resilience
+```
+
+**Temel özellikler:**
+
+| Özellik | Detay |
+|---------|-------|
+| **Hash-based sync** | SHA256 manifest ile sadece değişen dosyaları SSH üzerinden taşır (tar-pipe) |
+| **Akıllı RAM** | Remote RAM'i okuyup tiered formülle PM2 memory limiti hesaplar |
+| **PM2 otomatik kurulum** | Yoksa `npm install -g pm2` + `pm2 startup` + `pm2 save` |
+| **Reboot survival** | `pm2 startup` ile sistem açılışında otomatik başlatma |
+| **Versioned releases** | Her deploy `releases/v{timestamp}-{commit}/` olarak kaydedilir, son 5 tutulur |
+| **Atomic swap** | `current` symlink'i atomik olarak değiştirilir |
+| **Health check** | `/health` endpoint'ine curl ile N kez dener, başarısız olursa rollback |
+| **Rollback** | `deploy.sh rollback [N]` ile eski release'e anında dönüş |
+| **OOM koruması** | `pm2 --max-memory-restart` ile akıllı RAM limiti |
+| **Log yönetimi** | `deploy.sh logs --lines N --follow` ile PM2 log izleme |
+
+**Kullanım:**
+```bash
+# İlk kurulum (uzak sunucuda Node.js + PM2 ayarları)
+./deploy.sh init --host ubuntu@192.168.1.100
+
+# Deploy
+./deploy.sh deploy --host ubuntu@192.168.1.100
+
+# Dry-run (ne olacağını göster, hiçbir şey yapma)
+./deploy.sh deploy --dry-run
+
+# Servis durumu
+./deploy.sh status
+
+# Log izleme
+./deploy.sh logs --lines 100 --follow
+
+# Rollback (1 adım geri)
+./deploy.sh rollback
+
+# Diagnostik
+./deploy.sh doctor
+```
+
+**Akıllı RAM Hesaplama Formülü:**
+```
+< 1.5GB  → %36  (1GB → 368MB)
+1.5-3GB  → %25  (2GB → 512MB)
+3-6GB    → %20  (4GB → 819MB)
+6-12GB   → %15  (8GB → 1.2GB → cap 1024MB)
+> 12GB   → cap 1024MB
+Floor: 256MB, Ceiling: 1024MB
+```
+
+**Deploy akışı:**
+1. SHA256 manifest oluştur → remote manifest ile karşılaştır → değişen dosyaları bul
+2. Remote'ta `releases/{version}/` altında yeni release dizini oluştur
+3. Sadece değişen dosyaları tar-pipe ile SSH üzerinden gönder
+4. `package-lock.json` değişmişse `npm ci` çalıştır; değişmemişse atla
+5. `smart-routing-core` build et, sonra server `tsc` build
+6. PM2 ecosystem config oluştur (akıllı RAM limiti ile)
+7. Atomic symlink swap ile release'i aktifleştir
+8. PM2 reload/restart
+9. Health check (N kez dene, timeout 5sn)
+10. Health check başarısız → rollback
+11. Deploy meta yaz (`version, commit, timestamp, duration`)
+12. Eski release'leri temizle (keep: N)
 
 ---
 

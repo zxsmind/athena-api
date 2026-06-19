@@ -1,0 +1,20 @@
+{
+  "host": "user@your-server-ip",
+  "port": 22,
+  "remotePath": "/opt/athena",
+  "branch": "main",
+  "nodeVersion": 20,
+  "appPort": 3001,
+  "keepReleases": 5,
+  "sshKey": "",
+  "healthCheck": {
+    "retries": 5,
+    "timeout": 5000
+  },
+  "pm2": {
+    "instances": "auto",
+    "maxMemoryRestart": ""
+  },
+  "preDeploy": "",
+  "postDeploy": ""
+}
