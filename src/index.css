@@ -811,7 +811,7 @@ body {
   border-radius: 3px;
   z-index: -1;
 }
-.citation-badge:hover::before {
+.citation-group:hover .citation-badge::before {
   opacity: 1 !important;
 }
 
