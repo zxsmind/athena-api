@@ -269,53 +269,41 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
   }, [citationTooltip.visible]);
 
   useEffect(() => {
-    let activeHighlight: HTMLElement | null = null;
-    let lastX = 0;
-    let lastY = 0;
-    const applyToBadge = (badge: HTMLElement) => {
-      if (activeHighlight && activeHighlight !== badge) activeHighlight.classList.remove('highlighted');
-      badge.classList.add('highlighted');
-      activeHighlight = badge;
+    let mx = 0, my = 0;
+    let active: HTMLElement | null = null;
+    const set = (b: HTMLElement | null) => {
+      if (b === active) return;
+      if (active) active.classList.remove('highlighted');
+      active = b;
+      if (b) b.classList.add('highlighted');
     };
-    const add = (badge: HTMLElement, x: number, y: number) => {
-      applyToBadge(badge);
-      setTimeout(() => {
-        const el = document.elementFromPoint(x, y);
-        const b = el?.closest('.citation-badge') as HTMLElement | null;
-        if (b) applyToBadge(b);
-        else if (activeHighlight) { activeHighlight.classList.remove('highlighted'); activeHighlight = null; }
-      }, 60);
-      setTimeout(() => {
-        const el = document.elementFromPoint(x, y);
-        const b = el?.closest('.citation-badge') as HTMLElement | null;
-        if (b) applyToBadge(b);
-      }, 120);
-    };
-    const remove = (badge: HTMLElement) => {
-      badge.classList.remove('highlighted');
-      if (activeHighlight === badge) activeHighlight = null;
-    };
+    const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
     const onOver = (e: MouseEvent) => {
-      lastX = e.clientX; lastY = e.clientY;
-      const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
-      if (badge && badge !== activeHighlight) add(badge, e.clientX, e.clientY);
-    };
-    const onMove = (e: MouseEvent) => {
-      lastX = e.clientX; lastY = e.clientY;
+      const b = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
+      if (b) set(b);
     };
     const onOut = (e: MouseEvent) => {
-      const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
-      if (!badge) return;
-      const related = e.relatedTarget as HTMLElement | null;
-      if (!related || !badge.contains(related)) remove(badge);
+      const b = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
+      if (!b) return;
+      const r = e.relatedTarget as HTMLElement | null;
+      if (!r || !b.contains(r)) set(null);
     };
-    document.addEventListener('mouseover', onOver);
+    const tick = () => {
+      if (active && !active.isConnected) {
+        const el = document.elementFromPoint(mx, my);
+        set(el?.closest('.citation-badge') as HTMLElement | null);
+      }
+      requestAnimationFrame(tick);
+    };
     document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseover', onOver);
     document.addEventListener('mouseout', onOut);
+    requestAnimationFrame(tick);
     return () => {
-      document.removeEventListener('mouseover', onOver);
       document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseover', onOver);
       document.removeEventListener('mouseout', onOut);
+      if (active) active.classList.remove('highlighted');
     };
   }, []);
 
