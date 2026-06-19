@@ -234,7 +234,7 @@ stream_logs() {
   local host="$1" lines="${2:-50}" follow="${3:-false}"
 
   local follow_flag=""
-  [[ "$follow" == true ]] && follow_flag="--nostream"
+  if [[ "$follow" == true ]]; then follow_flag="--nostream"; fi
 
   log_info "Fetching logs (last ${lines} lines)..."
   ssh_exec "$host" "pm2 logs athena --lines ${lines} ${follow_flag} 2>&1" || {

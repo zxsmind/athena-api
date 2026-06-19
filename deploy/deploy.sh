@@ -95,59 +95,59 @@ load_config_file() {
 
   local host
   host=$(jq -r '.host // empty' "$cfg" 2>/dev/null)
-  [[ -n "$host" ]] && CONFIG_HOST="$host"
+  if [[ -n "$host" ]]; then CONFIG_HOST="$host"; fi
 
   local port
   port=$(jq -r '.port // empty' "$cfg" 2>/dev/null)
-  [[ -n "$port" && "$port" != "null" ]] && CONFIG_PORT="$port"
+  if [[ -n "$port" && "$port" != "null" ]]; then CONFIG_PORT="$port"; fi
 
   local path
   path=$(jq -r '.remotePath // empty' "$cfg" 2>/dev/null)
-  [[ -n "$path" ]] && CONFIG_REMOTE_PATH="$path"
+  if [[ -n "$path" ]]; then CONFIG_REMOTE_PATH="$path"; fi
 
   local branch
   branch=$(jq -r '.branch // empty' "$cfg" 2>/dev/null)
-  [[ -n "$branch" ]] && CONFIG_BRANCH="$branch"
+  if [[ -n "$branch" ]]; then CONFIG_BRANCH="$branch"; fi
 
   local node_ver
   node_ver=$(jq -r '.nodeVersion // empty' "$cfg" 2>/dev/null)
-  [[ -n "$node_ver" && "$node_ver" != "null" ]] && CONFIG_NODE_VERSION="$node_ver"
+  if [[ -n "$node_ver" && "$node_ver" != "null" ]]; then CONFIG_NODE_VERSION="$node_ver"; fi
 
   local app_port
   app_port=$(jq -r '.appPort // empty' "$cfg" 2>/dev/null)
-  [[ -n "$app_port" && "$app_port" != "null" ]] && CONFIG_APP_PORT="$app_port"
+  if [[ -n "$app_port" && "$app_port" != "null" ]]; then CONFIG_APP_PORT="$app_port"; fi
 
   local keep
   keep=$(jq -r '.keepReleases // empty' "$cfg" 2>/dev/null)
-  [[ -n "$keep" && "$keep" != "null" ]] && CONFIG_KEEP_RELEASES="$keep"
+  if [[ -n "$keep" && "$keep" != "null" ]]; then CONFIG_KEEP_RELEASES="$keep"; fi
 
   local ssh_key
   ssh_key=$(jq -r '.sshKey // empty' "$cfg" 2>/dev/null)
-  [[ -n "$ssh_key" ]] && CONFIG_SSH_KEY="$ssh_key"
+  if [[ -n "$ssh_key" ]]; then CONFIG_SSH_KEY="$ssh_key"; fi
 
   local health_retries
   health_retries=$(jq -r '.healthCheck.retries // empty' "$cfg" 2>/dev/null)
-  [[ -n "$health_retries" && "$health_retries" != "null" ]] && CONFIG_HEALTH_RETRIES="$health_retries"
+  if [[ -n "$health_retries" && "$health_retries" != "null" ]]; then CONFIG_HEALTH_RETRIES="$health_retries"; fi
 
   local health_timeout
   health_timeout=$(jq -r '.healthCheck.timeout // empty' "$cfg" 2>/dev/null)
-  [[ -n "$health_timeout" && "$health_timeout" != "null" ]] && CONFIG_HEALTH_TIMEOUT="$health_timeout"
+  if [[ -n "$health_timeout" && "$health_timeout" != "null" ]]; then CONFIG_HEALTH_TIMEOUT="$health_timeout"; fi
 
   local pre_d
   pre_d=$(jq -r '.preDeploy // empty' "$cfg" 2>/dev/null)
-  [[ -n "$pre_d" ]] && CONFIG_PRE_DEPLOY="$pre_d"
+  if [[ -n "$pre_d" ]]; then CONFIG_PRE_DEPLOY="$pre_d"; fi
 
   local post_d
   post_d=$(jq -r '.postDeploy // empty' "$cfg" 2>/dev/null)
-  [[ -n "$post_d" ]] && CONFIG_POST_DEPLOY="$post_d"
+  if [[ -n "$post_d" ]]; then CONFIG_POST_DEPLOY="$post_d"; fi
 
   local pm2_inst
   pm2_inst=$(jq -r '.pm2.instances // empty' "$cfg" 2>/dev/null)
-  [[ -n "$pm2_inst" && "$pm2_inst" != "null" ]] && CONFIG_PM2_INSTANCES="$pm2_inst"
+  if [[ -n "$pm2_inst" && "$pm2_inst" != "null" ]]; then CONFIG_PM2_INSTANCES="$pm2_inst"; fi
 
   local pm2_mem
   pm2_mem=$(jq -r '.pm2.maxMemoryRestart // empty' "$cfg" 2>/dev/null)
-  [[ -n "$pm2_mem" ]] && CONFIG_PM2_MAX_MEMORY_RESTART="$pm2_mem"
+  if [[ -n "$pm2_mem" ]]; then CONFIG_PM2_MAX_MEMORY_RESTART="$pm2_mem"; fi
 }
 
 # --- CLI Argument Parsing ---
@@ -265,7 +265,7 @@ pre_flight() {
   log_detail "Remote path: ${CONFIG_REMOTE_PATH}"
   log_detail "Branch: ${GIT_BRANCH}"
   log_detail "Commit: ${GIT_COMMIT}"
-  [[ "${DRY_RUN:-false}" == true ]] && log_detail "Mode: DRY RUN (no changes will be made)"
+  if [[ "${DRY_RUN:-false}" == true ]]; then log_detail "Mode: DRY RUN (no changes will be made)"; fi
 }
 
 # --- SSH Connection Test ---
@@ -396,9 +396,9 @@ cmd_deploy() {
         done
         local size_hr
         if (( total_bytes > 1048576 )); then
-          size_hr="$(echo "scale=1; $total_bytes / 1048576" | bc)MB"
+          size_hr="$(( total_bytes / 1048576 )).$(( total_bytes % 1048576 * 10 / 1048576 ))MB"
         else
-          size_hr="$(echo "scale=1; $total_bytes / 1024" | bc)KB"
+          size_hr="$(( total_bytes / 1024 )).$(( total_bytes % 1024 * 10 / 1024 ))KB"
         fi
 
         log_info "Transferring ${#include_args[@]} files (${size_hr})..."
@@ -680,6 +680,13 @@ PM2EOF" || die "Failed to generate ecosystem.config.cjs"
     [[ $removed -gt 0 ]] && log_success "Cleaned ${removed} old releases" || log_detail "Nothing to clean"
   fi
 
+  # Upload updated manifest for next incremental deploy
+  log_step "Updating deploy manifest"
+  if [[ "${DRY_RUN:-false}" == false ]]; then
+    upload_manifest "$CONFIG_HOST" "$local_manifest" "$CONFIG_REMOTE_PATH"
+    log_success "Remote manifest updated"
+  fi
+
   # Post-deploy hook
   if [[ -n "$CONFIG_POST_DEPLOY" ]]; then
     log_step "Running post-deploy hook"
@@ -907,7 +914,7 @@ cmd_cleanup() {
       size=$(ssh_exec_quiet "$CONFIG_HOST" "du -sb '$release' 2>/dev/null | cut -f1" || echo 0)
       ssh_rm "$CONFIG_HOST" "$release"
       local size_hr
-      size_hr=$(echo "scale=1; $size / 1048576" | bc)
+      size_hr="$(( size / 1048576 )).$(( size % 1048576 * 10 / 1048576 ))MB"
       log_detail "Removed: $(basename "$release") (${size_hr}MB)"
       removed=$((removed + 1))
     fi

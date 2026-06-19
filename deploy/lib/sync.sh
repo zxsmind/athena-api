@@ -81,9 +81,9 @@ sync_incremental() {
   local sync_time=$((SECONDS - elapsed))
   local sync_size_hr
   if (( total_bytes > 1048576 )); then
-    sync_size_hr="$(echo "scale=1; $total_bytes / 1048576" | bc)MB"
+    sync_size_hr="$(( total_bytes / 1048576 )).$(( total_bytes % 1048576 * 10 / 1048576 ))MB"
   elif (( total_bytes > 1024 )); then
-    sync_size_hr="$(echo "scale=1; $total_bytes / 1024" | bc)KB"
+    sync_size_hr="$(( total_bytes / 1024 )).$(( total_bytes % 1024 * 10 / 1024 ))KB"
   else
     sync_size_hr="${total_bytes}B"
   fi
@@ -274,14 +274,13 @@ cleanup_releases() {
     ssh_rm "$host" "$release"
     total_size=$((total_size + size))
     removed=$((removed + 1))
-    log_detail "Removed: $(basename "$release") ($(echo "scale=1; $size / 1048576" | bc)MB)"
+    log_detail "Removed: $(basename "$release") ($(( size / 1048576 )).$(( size % 1048576 * 10 / 1048576 ))MB)"
   done < <(ssh_exec_quiet "$host" "
     ls -1d '${remote_dir}/releases/'*/ 2>/dev/null | sort -r | tail -n +$((keep + 1))
   ")
 
   if [[ $removed -gt 0 ]]; then
-    local size_hr
-    size_hr=$(echo "scale=1; $total_size / 1048576" | bc)
+    local size_hr="$(( total_size / 1048576 )).$(( total_size % 1048576 * 10 / 1048576 ))MB"
     log_success "Cleaned ${removed} releases (${size_hr}MB freed)"
   else
     log_info "Nothing to clean"

@@ -133,7 +133,7 @@ compare_manifests() {
   ' > "$tmp_file" 2>/dev/null || {
     # Fallback: if jq fails, return all files from local
     log_warn "jq comparison failed, returning all files"
-    jq '{files: .files}' "$local_manifest" > "$tmp_file" 2>/dev/null || cat "$local_manifest" > "$tmp_file"
+    jq '.files // []' "$local_manifest" > "$tmp_file" 2>/dev/null || cat "$local_manifest" > "$tmp_file"
   }
 
   echo "$tmp_file"

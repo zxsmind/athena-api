@@ -11,7 +11,7 @@ log_success() { echo -e "${GREEN}✔${RESET}  $*"; }
 log_warn()    { echo -e "${YELLOW}⚠${RESET}  $*" >&2; }
 log_error()   { echo -e "${RED}✘${RESET}  $*" >&2; }
 log_step()    { echo -e "\n${BOLD}${CYAN}══ $* ══${RESET}"; }
-log_debug()   { [[ "${VERBOSE:-false}" == true ]] && echo -e "${GRAY}∙${RESET}  $*"; }
+log_debug()   { if [[ "${VERBOSE:-false}" == true ]]; then echo -e "${GRAY}∙${RESET}  $*"; fi; }
 log_detail()  { echo -e "   ${GRAY}$*${RESET}"; }
 log_banner()  { echo -e "${BOLD}${MAGENTA}═══════════════════════════════════════${RESET}"; echo -e "${BOLD}${MAGENTA}  $*${RESET}"; echo -e "${BOLD}${MAGENTA}═══════════════════════════════════════${RESET}"; }
 
