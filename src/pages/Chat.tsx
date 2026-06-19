@@ -301,33 +301,59 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     };
   }, [citationTooltip.visible, citationTooltip.rect, citationTooltip.items]);
 
-  // Badge hover → highlight preceding text via RAF + elementFromPoint
+  // Badge hover → highlight preceding text via overlay div (avoids Chrome's cached-layer repaint issue)
   useEffect(() => {
     let mx = 0, my = 0;
+    let overlay: HTMLDivElement | null = null;
     let activeText: HTMLElement | null = null;
-    const setText = (t: HTMLElement | null) => {
-      if (t === activeText) return;
-      if (activeText) activeText.classList.remove('highlighted');
-      activeText = t;
-      if (t) t.classList.add('highlighted');
+
+    const rmOverlay = () => {
+      if (overlay) { overlay.remove(); overlay = null; }
     };
+    const mkOverlay = (t: HTMLElement) => {
+      rmOverlay();
+      activeText = t;
+      const r = t.getBoundingClientRect();
+      const el = document.createElement('div');
+      el.className = 'citation-overlay';
+      el.style.cssText = 'position:fixed;pointer-events:none;z-index:9999;background:rgba(66,133,244,0.25);border-radius:3px;transition:background .1s';
+      el.style.left = r.left + 'px';
+      el.style.top = r.top + 'px';
+      el.style.width = r.width + 'px';
+      el.style.height = r.height + 'px';
+      document.body.appendChild(el);
+      overlay = el;
+    };
+    const upOverlay = (t: HTMLElement) => {
+      if (!overlay) return;
+      const r = t.getBoundingClientRect();
+      overlay.style.left = r.left + 'px';
+      overlay.style.top = r.top + 'px';
+      overlay.style.width = r.width + 'px';
+      overlay.style.height = r.height + 'px';
+    };
+
     const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
     const onOver = (e: MouseEvent) => {
       const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
       const group = badge?.closest('.citation-group') as HTMLElement | null;
-      setText(group?.querySelector('.citation-text') as HTMLElement | null);
+      const text = group?.querySelector('.citation-text') as HTMLElement | null;
+      if (text && text !== activeText) { rmOverlay(); mkOverlay(text); }
     };
     const onOut = (e: MouseEvent) => {
       const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
       if (!badge) return;
       const related = e.relatedTarget as HTMLElement | null;
-      if (!related || !badge.contains(related)) setText(null);
+      if (!related || !badge.contains(related)) { rmOverlay(); activeText = null; }
     };
     const tick = () => {
       const el = document.elementFromPoint(mx, my);
       const badge = el?.closest('.citation-badge') as HTMLElement | null;
       const group = badge?.closest('.citation-group') as HTMLElement | null;
-      setText(group?.querySelector('.citation-text') as HTMLElement | null);
+      const text = group?.querySelector('.citation-text') as HTMLElement | null;
+      if (text && text !== activeText) { rmOverlay(); mkOverlay(text); }
+      else if (text && overlay) { upOverlay(text); }
+      else if (!text && overlay) { rmOverlay(); activeText = null; }
       requestAnimationFrame(tick);
     };
     document.addEventListener('mousemove', onMove);
@@ -338,7 +364,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseover', onOver);
       document.removeEventListener('mouseout', onOut);
-      if (activeText) activeText.classList.remove('highlighted');
+      rmOverlay();
     };
   }, []);
 
