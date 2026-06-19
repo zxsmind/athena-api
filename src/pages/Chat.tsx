@@ -304,33 +304,83 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
   // Badge hover → highlight preceding text via overlay div (avoids Chrome's cached-layer repaint issue)
   useEffect(() => {
     let mx = 0, my = 0;
-    let overlay: HTMLDivElement | null = null;
+    let overlays: HTMLDivElement[] = [];
     let activeText: HTMLElement | null = null;
+    let lastRectCount = 0;
 
-    const rmOverlay = () => {
-      if (overlay) { overlay.remove(); overlay = null; }
+    const rmOverlays = () => {
+      overlays.forEach(el => el.remove());
+      overlays = [];
+      lastRectCount = 0;
     };
-    const mkOverlay = (t: HTMLElement) => {
-      rmOverlay();
+
+    const mkOverlays = (t: HTMLElement) => {
+      rmOverlays();
       activeText = t;
-      const r = t.getBoundingClientRect();
-      const el = document.createElement('div');
-      el.className = 'citation-overlay';
-      el.style.cssText = 'position:fixed;pointer-events:none;z-index:9998;background:rgba(66,133,244,0.25);border-radius:3px';
-      el.style.left = r.left + 'px';
-      el.style.top = (r.top + 2) + 'px';
-      el.style.width = r.width + 'px';
-      el.style.height = (r.height - 4) + 'px';
-      document.body.appendChild(el);
-      overlay = el;
+      const rects = t.getClientRects();
+      if (!rects || rects.length === 0) {
+        // fallback: inline <span> might have no layout yet, try boundingRect
+        const br = t.getBoundingClientRect();
+        if (br.width > 0 && br.height > 0) {
+          const el = document.createElement('div');
+          el.className = 'citation-overlay';
+          el.style.cssText = 'position:fixed;pointer-events:none;z-index:9998;background:rgba(66,133,244,0.25);border-radius:3px';
+          el.style.left = (br.left + 2) + 'px';
+          el.style.top = (br.top + 2) + 'px';
+          el.style.width = (br.width - 4) + 'px';
+          el.style.height = (br.height - 4) + 'px';
+          const container = scrollRef.current?.parentElement || document.body;
+          container.appendChild(el);
+          overlays.push(el);
+          lastRectCount = 1;
+        }
+        return;
+      }
+      const container = scrollRef.current?.parentElement || document.body;
+      for (let i = 0; i < rects.length; i++) {
+        const r = rects[i];
+        if (r.width === 0 || r.height === 0) continue;
+        const el = document.createElement('div');
+        el.className = 'citation-overlay';
+        el.style.cssText = 'position:fixed;pointer-events:none;z-index:9998;background:rgba(66,133,244,0.25);border-radius:3px';
+        el.style.left = (r.left + 2) + 'px';
+        el.style.top = (r.top + 2) + 'px';
+        el.style.width = (r.width - 4) + 'px';
+        el.style.height = (r.height - 4) + 'px';
+        container.appendChild(el);
+        overlays.push(el);
+      }
+      lastRectCount = rects.length;
     };
-    const upOverlay = (t: HTMLElement) => {
-      if (!overlay) return;
-      const r = t.getBoundingClientRect();
-      overlay.style.left = r.left + 'px';
-      overlay.style.top = (r.top + 2) + 'px';
-      overlay.style.width = r.width + 'px';
-      overlay.style.height = (r.height - 4) + 'px';
+
+    const upOverlays = (t: HTMLElement) => {
+      const rects = t.getClientRects();
+      if (!rects || rects.length === 0) {
+        // fallback to bounding
+        const br = t.getBoundingClientRect();
+        if (overlays.length === 1) {
+          const o = overlays[0];
+          o.style.left = (br.left + 2) + 'px';
+          o.style.top = (br.top + 2) + 'px';
+          o.style.width = (br.width - 4) + 'px';
+          o.style.height = (br.height - 4) + 'px';
+        }
+        return;
+      }
+      // if rect count changed, recreate
+      if (rects.length !== lastRectCount) {
+        mkOverlays(t);
+        return;
+      }
+      for (let i = 0; i < rects.length; i++) {
+        const r = rects[i];
+        const o = overlays[i];
+        if (!o) break;
+        o.style.left = (r.left + 2) + 'px';
+        o.style.top = (r.top + 2) + 'px';
+        o.style.width = (r.width - 4) + 'px';
+        o.style.height = (r.height - 4) + 'px';
+      }
     };
 
     const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
@@ -338,22 +388,22 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
       const group = badge?.closest('.citation-group') as HTMLElement | null;
       const text = group?.querySelector('.citation-text') as HTMLElement | null;
-      if (text && text !== activeText) { rmOverlay(); mkOverlay(text); }
+      if (text && text !== activeText) { rmOverlays(); mkOverlays(text); }
     };
     const onOut = (e: MouseEvent) => {
       const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
       if (!badge) return;
       const related = e.relatedTarget as HTMLElement | null;
-      if (!related || !badge.contains(related)) { rmOverlay(); activeText = null; }
+      if (!related || !badge.contains(related)) { rmOverlays(); activeText = null; }
     };
     const tick = () => {
       const el = document.elementFromPoint(mx, my);
       const badge = el?.closest('.citation-badge') as HTMLElement | null;
       const group = badge?.closest('.citation-group') as HTMLElement | null;
       const text = group?.querySelector('.citation-text') as HTMLElement | null;
-      if (text && text !== activeText) { rmOverlay(); mkOverlay(text); }
-      else if (text && overlay) { upOverlay(text); }
-      else if (!text && overlay) { rmOverlay(); activeText = null; }
+      if (text && text !== activeText) { rmOverlays(); mkOverlays(text); }
+      else if (text && overlays.length > 0) { upOverlays(text); }
+      else if (!text && overlays.length > 0) { rmOverlays(); activeText = null; }
       requestAnimationFrame(tick);
     };
     document.addEventListener('mousemove', onMove);
@@ -364,7 +414,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseover', onOver);
       document.removeEventListener('mouseout', onOut);
-      rmOverlay();
+      rmOverlays();
     };
   }, []);
 
