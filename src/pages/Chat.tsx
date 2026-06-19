@@ -659,7 +659,13 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
         {messages.map((msg, i) => {
           const displayMs = msg.loading ? liveMs : (msg.timerMs ?? liveMs);
           return (
-            <div key={i} data-msg-index={i} data-msg-type={msg.type} className="message-block" style={{ marginBottom: 20, animation: 'fade-in-up 0.3s var(--ease-out) both' }}>
+            <div key={i} data-msg-index={i} data-msg-type={msg.type} className="message-block" style={{ marginBottom: 20 }} ref={el => {
+              if (el && !el.dataset.animDone) {
+                el.dataset.animDone = 'true';
+                el.style.animation = 'fade-in-up 0.3s var(--ease-out) both';
+                el.addEventListener('animationend', () => { el.style.animation = ''; }, { once: true });
+              }
+            }}>
               {msg.type !== 'user' && msg.searches && msg.searches.length > 0 && (
                 <MessageSearches searches={msg.searches} />
               )}
