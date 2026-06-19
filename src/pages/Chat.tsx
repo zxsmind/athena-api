@@ -29,7 +29,6 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const chatRef = useRef<HTMLDivElement>(null);
   const convId = id ?? '';
   const isMobile = useMediaQuery('(max-width: 1023px)');
 
@@ -676,25 +675,11 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     setEditIndex(-1);
   }, [editText, runSearch]);
 
-  // Forward wheel events from non-message areas to scrollRef
-  useEffect(() => {
-    const el = chatRef.current;
-    const sc = scrollRef.current;
-    if (!el || !sc) return;
-    const handler = (e: WheelEvent) => {
-      if (sc.contains(e.target as Node)) return;
-      sc.scrollTop += e.deltaY;
-      e.preventDefault();
-    };
-    el.addEventListener('wheel', handler, { passive: false });
-    return () => el.removeEventListener('wheel', handler);
-  }, []);
-
   const currentConv = conversations.find(c => c.id === convId);
   const title = currentConv?.title ?? currentConv?.query ?? '';
 
   return (
-    <div ref={chatRef} style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
       {!isMobile && title && (
         <span data-ctx="title" style={{
           position: 'absolute', top: 14, right: 'var(--chat-pad-x, 28px)',
@@ -740,9 +725,10 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       )}
 
       <div ref={scrollRef} style={{
-        flex: 1, overflow: 'hidden auto', padding: `14px var(--chat-pad-x, 28px) 0`,
-        maxWidth: 720, margin: '0 auto', width: '100%',
+        flex: 1, overflow: 'hidden auto', padding: `14px 0 0`,
+        width: '100%',
       }}>
+        <div style={{ maxWidth: 720, margin: '0 auto', padding: '0 var(--chat-pad-x, 28px)' }}>
         {messages.map((msg, i) => {
           const displayMs = msg.loading ? liveMs : (msg.timerMs ?? liveMs);
           return (
@@ -796,6 +782,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
             </div>
           );
         })}
+      </div>
       </div>
 
       <div style={{ flexShrink: 0, padding: `12px var(--chat-pad-x, 28px) 20px`, maxWidth: 720, margin: '0 auto', width: '100%' }}>
