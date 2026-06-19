@@ -80,7 +80,7 @@ export function buildLLMRequestBody(opts: LLMOptions): Record<string, unknown> {
   const body: Record<string, unknown> = {
     messages: opts.messages,
     temperature: opts.temperature ?? 0.7,
-    max_completion_tokens: opts.maxTokens ?? 3200,
+    max_completion_tokens: opts.maxTokens ?? 5000,
   };
   if (opts.tools) body.tools = opts.tools;
   if (opts.toolChoice) body.tool_choice = opts.toolChoice;
