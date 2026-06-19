@@ -809,10 +809,9 @@ body {
   opacity: 0;
   transition: opacity 100ms ease;
   border-radius: 3px;
-  z-index: -1;
 }
-.citation-badge.highlighted::before {
-  opacity: 1 !important;
+.citation-badge:hover::before {
+  opacity: 1;
 }
 
 /* Citation tooltip */

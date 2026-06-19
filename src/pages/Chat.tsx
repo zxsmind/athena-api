@@ -268,45 +268,6 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     };
   }, [citationTooltip.visible]);
 
-  useEffect(() => {
-    let mx = 0, my = 0;
-    let active: HTMLElement | null = null;
-    const set = (b: HTMLElement | null) => {
-      if (b === active) return;
-      if (active) active.classList.remove('highlighted');
-      active = b;
-      if (b) b.classList.add('highlighted');
-    };
-    const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
-    const onOver = (e: MouseEvent) => {
-      const b = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
-      if (b) set(b);
-    };
-    const onOut = (e: MouseEvent) => {
-      const b = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
-      if (!b) return;
-      const r = e.relatedTarget as HTMLElement | null;
-      if (!r || !b.contains(r)) set(null);
-    };
-    const tick = () => {
-      if (active && !active.isConnected) {
-        const el = document.elementFromPoint(mx, my);
-        set(el?.closest('.citation-badge') as HTMLElement | null);
-      }
-      requestAnimationFrame(tick);
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseover', onOver);
-    document.addEventListener('mouseout', onOut);
-    requestAnimationFrame(tick);
-    return () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseover', onOver);
-      document.removeEventListener('mouseout', onOut);
-      if (active) active.classList.remove('highlighted');
-    };
-  }, []);
-
   useLayoutEffect(() => {
     if (!citationTooltip.visible || !tooltipRef.current) return;
     queueMicrotask(() => {
