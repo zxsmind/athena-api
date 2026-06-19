@@ -309,9 +309,25 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       if (g === activeGroup) return;
       if (activeGroup) activeGroup.classList.remove('highlighted');
       activeGroup = g;
-      if (g) g.classList.add('highlighted');
+      if (g) {
+        g.classList.add('highlighted');
+        console.log('highlight added', g.innerText.slice(0, 30));
+      } else {
+        console.log('highlight removed');
+      }
     };
     const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
+    const onOver = (e: MouseEvent) => {
+      const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
+      console.log('mouseover', e.target, badge);
+      setGroup(badge?.closest('.citation-group') as HTMLElement | null);
+    };
+    const onOut = (e: MouseEvent) => {
+      const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
+      if (!badge) return;
+      const related = e.relatedTarget as HTMLElement | null;
+      if (!related || !badge.contains(related)) setGroup(null);
+    };
     const tick = () => {
       const el = document.elementFromPoint(mx, my);
       const badge = el?.closest('.citation-badge') as HTMLElement | null;
@@ -319,9 +335,13 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       requestAnimationFrame(tick);
     };
     document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseover', onOver);
+    document.addEventListener('mouseout', onOut);
     requestAnimationFrame(tick);
     return () => {
       document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseover', onOver);
+      document.removeEventListener('mouseout', onOut);
       if (activeGroup) activeGroup.classList.remove('highlighted');
     };
   }, []);
