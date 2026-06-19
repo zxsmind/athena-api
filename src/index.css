@@ -796,7 +796,6 @@ body {
 .citation-group {
   display: inline;
   border-radius: 3px;
-  transition: background 100ms ease;
 }
 .citation-badge::before {
   content: '';
@@ -813,7 +812,7 @@ body {
   z-index: -1;
 }
 .citation-badge:hover::before {
-  opacity: 1;
+  opacity: 1 !important;
 }
 
 /* Citation tooltip */
