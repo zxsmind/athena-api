@@ -309,10 +309,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       if (t === activeText) return;
       if (activeText) activeText.classList.remove('highlighted');
       activeText = t;
-      if (t) {
-        t.classList.add('highlighted');
-        void t.offsetHeight;
-      }
+      if (t) t.classList.add('highlighted');
     };
     const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
     const onOver = (e: MouseEvent) => {
