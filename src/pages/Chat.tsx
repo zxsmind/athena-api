@@ -313,28 +313,24 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     const mkOverlay = (t: HTMLElement) => {
       rmOverlay();
       activeText = t;
-      const rects = t.getClientRects();
-      if (!rects || rects.length === 0) return;
-      const r = rects[0];
+      const r = t.getBoundingClientRect();
       const el = document.createElement('div');
       el.className = 'citation-overlay';
-      el.style.cssText = 'position:fixed;pointer-events:none;z-index:9999;background:rgba(66,133,244,0.25);border-radius:3px';
+      el.style.cssText = 'position:fixed;pointer-events:none;z-index:9998;background:rgba(66,133,244,0.25);border-radius:3px';
       el.style.left = r.left + 'px';
-      el.style.top = r.top + 'px';
+      el.style.top = (r.top + 2) + 'px';
       el.style.width = r.width + 'px';
-      el.style.height = r.height + 'px';
+      el.style.height = (r.height - 4) + 'px';
       document.body.appendChild(el);
       overlay = el;
     };
     const upOverlay = (t: HTMLElement) => {
       if (!overlay) return;
-      const rects = t.getClientRects();
-      if (!rects || rects.length === 0) return;
-      const r = rects[0];
+      const r = t.getBoundingClientRect();
       overlay.style.left = r.left + 'px';
-      overlay.style.top = r.top + 'px';
+      overlay.style.top = (r.top + 2) + 'px';
       overlay.style.width = r.width + 'px';
-      overlay.style.height = r.height + 'px';
+      overlay.style.height = (r.height - 4) + 'px';
     };
 
     const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
