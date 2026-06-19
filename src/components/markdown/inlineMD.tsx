@@ -65,7 +65,8 @@ export function inlineMD(t: string, sources?: Source[]) {
     let m: RegExpExecArray | null;
     while ((m = citationTagRe.exec(html)) !== null) {
       const before = html.slice(lastIdx, m.index);
-      grouped.push(`<span class="citation-group">${before}${m[0]}</span>`);
+      const textSpan = before ? `<span class="citation-text">${before}</span>` : '';
+      grouped.push(`<span class="citation-group">${textSpan}${m[0]}</span>`);
       lastIdx = m.index + m[0].length;
     }
     if (lastIdx < html.length) grouped.push(html.slice(lastIdx));

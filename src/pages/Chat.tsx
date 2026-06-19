@@ -304,28 +304,30 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
   // Badge hover → highlight preceding text via RAF + elementFromPoint
   useEffect(() => {
     let mx = 0, my = 0;
-    let activeGroup: HTMLElement | null = null;
-    const setGroup = (g: HTMLElement | null) => {
-      if (g === activeGroup) return;
-      if (activeGroup) activeGroup.classList.remove('highlighted');
-      activeGroup = g;
-      if (g) g.classList.add('highlighted');
+    let activeText: HTMLElement | null = null;
+    const setText = (t: HTMLElement | null) => {
+      if (t === activeText) return;
+      if (activeText) activeText.classList.remove('highlighted');
+      activeText = t;
+      if (t) t.classList.add('highlighted');
     };
     const onMove = (e: MouseEvent) => { mx = e.clientX; my = e.clientY; };
     const onOver = (e: MouseEvent) => {
       const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
-      setGroup(badge?.closest('.citation-group') as HTMLElement | null);
+      const group = badge?.closest('.citation-group') as HTMLElement | null;
+      setText(group?.querySelector('.citation-text') as HTMLElement | null);
     };
     const onOut = (e: MouseEvent) => {
       const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
       if (!badge) return;
       const related = e.relatedTarget as HTMLElement | null;
-      if (!related || !badge.contains(related)) setGroup(null);
+      if (!related || !badge.contains(related)) setText(null);
     };
     const tick = () => {
       const el = document.elementFromPoint(mx, my);
       const badge = el?.closest('.citation-badge') as HTMLElement | null;
-      setGroup(badge?.closest('.citation-group') as HTMLElement | null);
+      const group = badge?.closest('.citation-group') as HTMLElement | null;
+      setText(group?.querySelector('.citation-text') as HTMLElement | null);
       requestAnimationFrame(tick);
     };
     document.addEventListener('mousemove', onMove);
@@ -336,7 +338,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseover', onOver);
       document.removeEventListener('mouseout', onOut);
-      if (activeGroup) activeGroup.classList.remove('highlighted');
+      if (activeText) activeText.classList.remove('highlighted');
     };
   }, []);
 
