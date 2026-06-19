@@ -313,10 +313,12 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     const mkOverlay = (t: HTMLElement) => {
       rmOverlay();
       activeText = t;
-      const r = t.getBoundingClientRect();
+      const rects = t.getClientRects();
+      if (!rects || rects.length === 0) return;
+      const r = rects[0];
       const el = document.createElement('div');
       el.className = 'citation-overlay';
-      el.style.cssText = 'position:fixed;pointer-events:none;z-index:9999;background:rgba(66,133,244,0.25);border-radius:3px;transition:background .1s';
+      el.style.cssText = 'position:fixed;pointer-events:none;z-index:9999;background:rgba(66,133,244,0.25);border-radius:3px';
       el.style.left = r.left + 'px';
       el.style.top = r.top + 'px';
       el.style.width = r.width + 'px';
@@ -326,7 +328,9 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     };
     const upOverlay = (t: HTMLElement) => {
       if (!overlay) return;
-      const r = t.getBoundingClientRect();
+      const rects = t.getClientRects();
+      if (!rects || rects.length === 0) return;
+      const r = rects[0];
       overlay.style.left = r.left + 'px';
       overlay.style.top = r.top + 'px';
       overlay.style.width = r.width + 'px';

@@ -24,6 +24,7 @@ export default function CitationTooltip({
         padding: '8px 10px',
         borderRadius: 8,
         background: 'var(--athena-bg)',
+        backdropFilter: 'blur(12px)',
         border: '0.5px solid var(--athena-border)',
         boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
         zIndex: 9999,
