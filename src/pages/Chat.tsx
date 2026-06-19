@@ -274,13 +274,18 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       if (activeHighlight && activeHighlight !== badge) activeHighlight.classList.remove('highlighted');
       badge.classList.add('highlighted');
       activeHighlight = badge;
+      console.log('[highlight] add', badge);
       requestAnimationFrame(() => {
-        if (badge.isConnected) badge.classList.add('highlighted');
+        if (badge.isConnected) {
+          badge.classList.add('highlighted');
+          console.log('[highlight] RAF re-add', badge);
+        }
       });
     };
     const remove = (badge: HTMLElement) => {
       badge.classList.remove('highlighted');
       if (activeHighlight === badge) activeHighlight = null;
+      console.log('[highlight] remove', badge);
     };
     const onOver = (e: MouseEvent) => {
       const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
