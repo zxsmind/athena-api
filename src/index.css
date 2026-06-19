@@ -763,9 +763,12 @@ body {
   border-radius: 3px;
   transition: background 100ms ease;
 }
+.citation-text {
+  border-radius: 3px;
+  transition: background 100ms ease;
+}
 .citation-text.highlighted {
-  background: rgba(66, 133, 244, 0.5) !important;
-  outline: 4px solid rgba(66, 133, 244, 0.5) !important;
+  background: rgba(66, 133, 244, 0.25);
 }
 .citation-badge img {
   border-radius: 1px;
