@@ -29,6 +29,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const chatRef = useRef<HTMLDivElement>(null);
   const convId = id ?? '';
   const isMobile = useMediaQuery('(max-width: 1023px)');
 
@@ -675,11 +676,25 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     setEditIndex(-1);
   }, [editText, runSearch]);
 
+  // Forward wheel events from non-message areas to scrollRef
+  useEffect(() => {
+    const el = chatRef.current;
+    const sc = scrollRef.current;
+    if (!el || !sc) return;
+    const handler = (e: WheelEvent) => {
+      if (sc.contains(e.target as Node)) return;
+      sc.scrollTop += e.deltaY;
+      e.preventDefault();
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, []);
+
   const currentConv = conversations.find(c => c.id === convId);
   const title = currentConv?.title ?? currentConv?.query ?? '';
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
+    <div ref={chatRef} style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
       {!isMobile && title && (
         <span data-ctx="title" style={{
           position: 'absolute', top: 14, right: 'var(--chat-pad-x, 28px)',
