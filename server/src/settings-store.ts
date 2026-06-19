@@ -15,6 +15,7 @@ export interface ProviderState {
   name?: string;
   reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
   includeThoughts?: boolean;
+  disabledThinkingModels?: string[];
 }
 
 export interface ModelReference {
@@ -133,6 +134,7 @@ function normalizeProviderState(id: string, value: Partial<ProviderState> | unde
     name: typeof value?.name === 'string' ? value.name : def.name,
     reasoningEffort: typeof rawEffort === 'string' && (validEfforts as readonly string[]).includes(rawEffort) ? rawEffort as ProviderState['reasoningEffort'] : def.reasoningEffort,
     includeThoughts: typeof value?.includeThoughts === 'boolean' ? value.includeThoughts : def.includeThoughts,
+    disabledThinkingModels: Array.isArray(value?.disabledThinkingModels) ? value!.disabledThinkingModels.filter((m): m is string => typeof m === 'string') : (def.disabledThinkingModels ? [...def.disabledThinkingModels] : []),
   };
 }
 

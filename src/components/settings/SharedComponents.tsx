@@ -44,7 +44,7 @@ export function InputRow({
 }
 
 export function ListSection({
-  icon, label, items, onAdd, onRemove, emptyText, maskItems = false,
+  icon, label, items, onAdd, onRemove, emptyText, maskItems = false, renderItem,
 }: {
   icon?: React.ReactNode;
   label: string;
@@ -53,6 +53,7 @@ export function ListSection({
   onRemove: (idx: number) => void;
   emptyText: string;
   maskItems?: boolean;
+  renderItem?: (item: string, idx: number) => React.ReactNode;
 }) {
   const [collapsed, setCollapsed] = React.useState(true);
   const visibleItems = collapsed ? items.slice(0, 2) : items;
@@ -108,13 +109,15 @@ export function ListSection({
                 }}>
                   {display.length > 44 ? display.slice(0, 42) + '...' : display}
                 </span>
-                <button onClick={() => onRemove(idx)} style={{
-                  background: 'none', border: 'none', cursor: 'pointer',
-                  color: 'var(--athena-text-3)', padding: 2, borderRadius: 3, display: 'flex',
-                  flexShrink: 0,
-                }}>
-                  <span>✕</span>
-                </button>
+                {renderItem ? renderItem(item, idx) : (
+                  <button onClick={() => onRemove(idx)} style={{
+                    background: 'none', border: 'none', cursor: 'pointer',
+                    color: 'var(--athena-text-3)', padding: 2, borderRadius: 3, display: 'flex',
+                    flexShrink: 0,
+                  }}>
+                    <span>✕</span>
+                  </button>
+                )}
               </div>
             );
           })}

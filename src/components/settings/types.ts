@@ -11,6 +11,7 @@ export interface ProviderConfig {
   label: string;
   reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
   includeThoughts?: boolean;
+  disabledThinkingModels?: string[];
 }
 
 export interface ModelReference {

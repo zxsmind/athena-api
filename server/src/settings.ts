@@ -27,6 +27,7 @@ export interface ProviderConfig {
   label: string;
   reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
   includeThoughts?: boolean;
+  disabledThinkingModels?: string[];
 }
 
 export interface ApiSettingsData {
@@ -79,6 +80,7 @@ export function getSettings(): SettingsData {
       label: providerLabels[id] || id,
       reasoningEffort: p.reasoningEffort,
       includeThoughts: p.includeThoughts,
+      disabledThinkingModels: p.disabledThinkingModels,
     };
   }
 
@@ -128,6 +130,7 @@ export function saveSettings(data: SettingsData): void {
       name: p.name,
       reasoningEffort: p.reasoningEffort,
       includeThoughts: p.includeThoughts,
+      disabledThinkingModels: p.disabledThinkingModels,
     };
   }
 

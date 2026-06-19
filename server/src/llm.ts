@@ -185,12 +185,13 @@ async function tryProvider(
   }
 
   const reqBody: Record<string, unknown> = { ...body, model, stream: false };
-  if (target.id === 'gemini' && provider.reasoningEffort && ['minimal', 'low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+  const supportsThinking = !provider.disabledThinkingModels || !provider.disabledThinkingModels.includes(model);
+  if (supportsThinking && target.id === 'gemini' && provider.reasoningEffort && ['minimal', 'low', 'medium', 'high'].includes(provider.reasoningEffort)) {
     reqBody.thinkingConfig = {
       thinking_level: provider.reasoningEffort,
       thinking_summaries: provider.includeThoughts ? 'auto' : 'none',
     };
-  } else if (provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+  } else if (supportsThinking && provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
     reqBody.reasoning_effort = provider.reasoningEffort;
   }
 
@@ -265,12 +266,13 @@ async function tryProviderStream(
   }
 
   const reqBody: Record<string, unknown> = { ...body, model, stream: true };
-  if (target.id === 'gemini' && provider.reasoningEffort && ['minimal', 'low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+  const supportsThinking = !provider.disabledThinkingModels || !provider.disabledThinkingModels.includes(model);
+  if (supportsThinking && target.id === 'gemini' && provider.reasoningEffort && ['minimal', 'low', 'medium', 'high'].includes(provider.reasoningEffort)) {
     reqBody.thinkingConfig = {
       thinking_level: provider.reasoningEffort,
       thinking_summaries: provider.includeThoughts ? 'auto' : 'none',
     };
-  } else if (provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+  } else if (supportsThinking && provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
     reqBody.reasoning_effort = provider.reasoningEffort;
   }
 

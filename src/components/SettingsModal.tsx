@@ -150,6 +150,14 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const removeKey = (provider: string, idx: number) => updateProvider(provider, { keys: data!.providers[provider].keys.filter((_, i) => i !== idx) });
   const addModel = (provider: string) => showPrompt('Add Model Name', 'Enter model name...', false, (val) => { if (val) updateProvider(provider, { models: [...data!.providers[provider].models, val] }); });
   const removeModel = (provider: string, idx: number) => updateProvider(provider, { models: data!.providers[provider].models.filter((_, i) => i !== idx) });
+  const toggleModelThinking = (provider: string, model: string) => {
+    if (!data) return;
+    const p = data.providers[provider];
+    const disabled = p.disabledThinkingModels || [];
+    const idx = disabled.indexOf(model);
+    const next = idx >= 0 ? disabled.filter(m => m !== model) : [...disabled, model];
+    updateProvider(provider, { disabledThinkingModels: next });
+  };
   const addSerperKey = () => showPrompt('Add Serper API Key', 'Enter Serper API key...', true, (val) => { if (val && data) patchData({ serper: { ...data.serper, keys: [...data.serper.keys, val] } }); });
   const removeSerperKey = (idx: number) => { if (data) patchData({ serper: { ...data.serper, keys: data.serper.keys.filter((_, j) => j !== idx) } }); };
 
@@ -314,7 +322,32 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                       </div>
                       <span style={{ fontSize: 9.5, color: p.enabled ? 'var(--athena-text-2)' : 'var(--athena-text-3)' }}>{p.enabled ? 'Enabled' : 'Disabled'}</span>
                     </div>
-                    <ListSection icon={<span>📚</span>} label="Models" items={p.models} onAdd={() => addModel(key)} onRemove={i => removeModel(key, i)} emptyText="No models configured" />
+                    <ListSection icon={<span>📚</span>} label="Models" items={p.models} onAdd={() => addModel(key)} onRemove={i => removeModel(key, i)} emptyText="No models configured"
+                      renderItem={(model, idx) => {
+                        const disabled = p.disabledThinkingModels || [];
+                        const thinkingOff = disabled.includes(model);
+                        return (
+                          <>
+                            <button onClick={() => toggleModelThinking(key, model)} title={thinkingOff ? 'Thinking disabled' : 'Thinking enabled'}
+                              style={{
+                                background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', borderRadius: 3,
+                                display: 'flex', flexShrink: 0, fontSize: 10,
+                                color: thinkingOff ? 'var(--athena-text-3)' : 'var(--athena-accent)',
+                              }}
+                            >
+                              {thinkingOff ? '🧠' : '🧠'}
+                            </button>
+                            <button onClick={() => removeModel(key, idx)} style={{
+                              background: 'none', border: 'none', cursor: 'pointer',
+                              color: 'var(--athena-text-3)', padding: 2, borderRadius: 3, display: 'flex',
+                              flexShrink: 0,
+                            }}>
+                              <span>✕</span>
+                            </button>
+                          </>
+                        );
+                      }}
+                    />
                   </div>
                 );
               })}
