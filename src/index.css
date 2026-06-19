@@ -792,14 +792,25 @@ body {
   -webkit-mask-image: linear-gradient(to right, black 55%, transparent 90%);
 }
 
-/* Citation group hover highlight — mavi seçim efekti */
+/* Citation group — highlight badge ::before ile yapılır */
 .citation-group {
   display: inline;
   border-radius: 3px;
   transition: background 100ms ease;
 }
-.citation-group:has(.citation-badge:hover) {
+.citation-badge::before {
+  content: '';
+  position: absolute;
+  right: 100%;
+  top: -6px;
+  bottom: -6px;
+  width: 2000px;
   background: rgba(66, 133, 244, 0.15);
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 100ms ease;
+  border-radius: 3px;
+  z-index: 999;
 }
 
 /* Citation tooltip */
