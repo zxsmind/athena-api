@@ -270,26 +270,38 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
 
   useEffect(() => {
     let activeHighlight: HTMLElement | null = null;
-    const add = (badge: HTMLElement) => {
+    let lastX = 0;
+    let lastY = 0;
+    const applyToBadge = (badge: HTMLElement) => {
       if (activeHighlight && activeHighlight !== badge) activeHighlight.classList.remove('highlighted');
       badge.classList.add('highlighted');
       activeHighlight = badge;
-      console.log('[highlight] add', badge);
-      requestAnimationFrame(() => {
-        if (badge.isConnected) {
-          badge.classList.add('highlighted');
-          console.log('[highlight] RAF re-add', badge);
-        }
-      });
+    };
+    const add = (badge: HTMLElement, x: number, y: number) => {
+      applyToBadge(badge);
+      setTimeout(() => {
+        const el = document.elementFromPoint(x, y);
+        const b = el?.closest('.citation-badge') as HTMLElement | null;
+        if (b) applyToBadge(b);
+        else if (activeHighlight) { activeHighlight.classList.remove('highlighted'); activeHighlight = null; }
+      }, 60);
+      setTimeout(() => {
+        const el = document.elementFromPoint(x, y);
+        const b = el?.closest('.citation-badge') as HTMLElement | null;
+        if (b) applyToBadge(b);
+      }, 120);
     };
     const remove = (badge: HTMLElement) => {
       badge.classList.remove('highlighted');
       if (activeHighlight === badge) activeHighlight = null;
-      console.log('[highlight] remove', badge);
     };
     const onOver = (e: MouseEvent) => {
+      lastX = e.clientX; lastY = e.clientY;
       const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
-      if (badge && badge !== activeHighlight) add(badge);
+      if (badge && badge !== activeHighlight) add(badge, e.clientX, e.clientY);
+    };
+    const onMove = (e: MouseEvent) => {
+      lastX = e.clientX; lastY = e.clientY;
     };
     const onOut = (e: MouseEvent) => {
       const badge = (e.target as HTMLElement).closest('.citation-badge') as HTMLElement | null;
@@ -298,9 +310,11 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       if (!related || !badge.contains(related)) remove(badge);
     };
     document.addEventListener('mouseover', onOver);
+    document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseout', onOut);
     return () => {
       document.removeEventListener('mouseover', onOver);
+      document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseout', onOut);
     };
   }, []);
