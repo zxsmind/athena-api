@@ -112,7 +112,11 @@ export interface ResearchBatchRecord {
   items: ResearchBatchItem[];
 }
 
-const BASE = import.meta.env.VITE_SERVER_URL || '/api';
+const runtimeConfig = await fetch('/config.json')
+  .then(async (r) => (r.ok ? (await r.json()) : {}))
+  .catch(() => ({}));
+
+export const BASE = runtimeConfig.apiUrl !== undefined ? runtimeConfig.apiUrl : (import.meta.env.VITE_SERVER_URL || '/api');
 
 async function checkResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {

@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ATHENA Deploy</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0a0e14;
+    --surface: rgba(20, 28, 40, 0.85);
+    --surface-hover: rgba(30, 42, 60, 0.9);
+    --border: rgba(79, 195, 247, 0.12);
+    --border-hover: rgba(79, 195, 247, 0.3);
+    --accent: #4FC3F7;
+    --success: #81C784;
+    --error: #E57373;
+    --warn: #FFD54F;
+    --text: #e0e4ea;
+    --text-dim: #7a8494;
+    --text-bright: #ffffff;
+    --radius: 12px;
+    --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+  html, body { height: 100%; }
+  body {
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  button, .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 16px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--surface); color: var(--text);
+    font: inherit; font-size: 13px; cursor: pointer;
+    transition: all 0.2s; white-space: nowrap;
+  }
+  button:hover, .btn:hover { border-color: var(--border-hover); background: var(--surface-hover); }
+  button.primary { background: rgba(79,195,247,0.15); border-color: var(--accent); color: var(--accent); }
+  button.primary:hover { background: rgba(79,195,247,0.25); }
+  button.danger { color: var(--error); }
+  button.danger:hover { border-color: var(--error); background: rgba(229,115,115,0.1); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  input, textarea, select {
+    background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 12px; color: var(--text); font: inherit; font-size: 13px;
+    outline: none; transition: border-color 0.2s; width: 100%;
+  }
+  input:focus, textarea:focus { border-color: var(--accent); }
+  label { font-size: 12px; font-weight: 600; color: var(--text-dim); display: block; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+  /* Layout */
+  .sidebar {
+    width: 220px; flex-shrink: 0; background: var(--surface);
+    border-right: 1px solid var(--border); backdrop-filter: blur(20px);
+    display: flex; flex-direction: column; padding: 24px 12px;
+    position: sticky; top: 0; height: 100vh;
+  }
+  .logo { font-size: 16px; font-weight: 700; color: var(--accent); padding: 0 12px 16px; border-bottom: 1px solid var(--border); margin-bottom: 16px; letter-spacing: 1px; }
+  .logo small { display: block; font-size: 10px; font-weight: 400; color: var(--text-dim); letter-spacing: 2px; margin-top: 2px; }
+  .nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+  .nav a {
+    display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+    border-radius: 6px; color: var(--text-dim); text-decoration: none;
+    font-size: 13px; transition: all 0.2s; cursor: pointer;
+  }
+  .nav a:hover { background: var(--surface-hover); color: var(--text); }
+  .nav a.active { background: rgba(79,195,247,0.1); color: var(--accent); border: 1px solid var(--border-hover); }
+  .nav a .badge { margin-left: auto; font-size: 10px; padding: 1px 6px; border-radius: 10px; background: rgba(79,195,247,0.1); color: var(--accent); }
+  .sidebar-footer { padding: 12px; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-dim); }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; }
+  .dot.green { background: var(--success); }
+  .dot.red { background: var(--error); }
+  .dot.gray { background: var(--text-dim); }
+
+  .main { flex: 1; padding: 32px; overflow-y: auto; }
+
+  /* Pages */
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* Setup page */
+  .setup-center {
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 40px;
+  }
+  .setup-box {
+    width: 100%; max-width: 480px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 32px;
+    backdrop-filter: blur(16px);
+  }
+  .setup-box h1 { font-size: 20px; color: var(--text-bright); margin-bottom: 4px; }
+  .setup-box p { font-size: 13px; color: var(--text-dim); margin-bottom: 24px; }
+  .setup-box .field { margin-bottom: 16px; }
+  .setup-box .actions { display: flex; gap: 8px; margin-top: 24px; }
+  .setup-box .actions button { flex: 1; justify-content: center; }
+
+  /* Status bar */
+  .status-bar {
+    display: flex; gap: 8px; align-items: center;
+    padding: 12px 16px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    margin-bottom: 20px; font-size: 13px;
+  }
+
+  /* Cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; backdrop-filter: blur(16px); }
+  .card .label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim); margin-bottom: 4px; }
+  .card .value { font-size: 18px; font-weight: 700; color: var(--text-bright); }
+  .card .sub { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+  .card.accent .value { color: var(--accent); }
+  .card.success .value { color: var(--success); }
+
+  /* Actions bar */
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+  .actions .sep { width: 1px; background: var(--border); margin: 0 4px; }
+
+  /* Info table */
+  .info-table { width: 100%; border-collapse: collapse; }
+  .info-table td { padding: 8px 12px; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,0.03); }
+  .info-table td:first-child { color: var(--text-dim); width: 140px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .info-table tr:last-child td { border: none; }
+
+  /* Log viewer */
+  .log-viewer {
+    background: rgba(0,0,0,0.4); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 12px;
+    font-family: 'Cascadia Code','Fira Code','Consolas',monospace;
+    font-size: 12px; line-height: 1.5;
+    max-height: 400px; overflow-y: auto; color: var(--text-dim);
+  }
+  .log-viewer .line { white-space: pre-wrap; word-break: break-all; }
+  .log-viewer .line .ts { color: var(--text-dim); opacity: 0.5; }
+  .log-viewer .line .ok { color: var(--success); }
+  .log-viewer .line .err { color: var(--error); }
+  .log-viewer .line .warn { color: var(--warn); }
+
+  /* Timeline */
+  .releases { display: flex; flex-direction: column; gap: 12px; }
+  .release-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px;
+    display: flex; align-items: center; gap: 12px;
+  }
+  .release-item .dot { width: 10px; height: 10px; flex-shrink: 0; }
+  .release-item .ri-body { flex: 1; }
+  .release-item .ri-body h4 { font-size: 14px; color: var(--text-bright); font-weight: 600; }
+  .release-item .ri-body .meta { font-size: 12px; color: var(--text-dim); margin-top: 1px; }
+
+  /* Section header */
+  .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .section-header h2 { font-size: 15px; font-weight: 600; color: var(--text-bright); }
+
+  /* JSON editor */
+  .json-editor { font-family: 'Cascadia Code','Fira Code','Consolas',monospace; font-size: 12px; min-height: 300px; resize: vertical; }
+
+  /* SSE spinner */
+  .sse-status { font-size: 12px; color: var(--text-dim); }
+
+  /* Hide/reveal */
+  .hidden { display: none !important; }
+
+  @media (max-width: 720px) {
+    .sidebar { width: 60px; padding: 16px 8px; }
+    .sidebar .logo span, .sidebar .logo small, .nav a span:last-child, .sidebar-footer span { display: none; }
+    .nav a { justify-content: center; padding: 10px; }
+    .main { padding: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="app" style="width:100%;display:flex"></div>
+
+<script>
+// ─── State ───
+const state = {
+  side: 'overview',
+  target: false,
+  status: null,          // { target, connected, info, running }
+  config: null,
+  releases: [],
+  logs: '',
+  activeJob: null,       // { id, type }
+};
+
+// ─── Utils ───
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  return r.json();
+}
+
+function sse(path, onEvent) {
+  const es = new EventSource(path);
+  es.onmessage = (e) => { try { onEvent(JSON.parse(e.data)); } catch {} };
+  return () => es.close();
+}
+
+function $(id) { return document.getElementById(id); }
+
+// ─── Render ───
+function render() {
+  const app = document.getElementById('app');
+  if (!state.target) {
+    return renderSetup(app);
+  }
+  renderDashboard(app);
+}
+
+function renderSetup(app) {
+  const cfg = state.config || {};
+  app.innerHTML = `
+    <div class="setup-center">
+      <div class="setup-box">
+        <h1>ATHENA Deploy</h1>
+        <p>Connect your server and deploy</p>
+
+        <div class="field">
+          <label>Server <span style="color:var(--error)">*</span></label>
+          <input id="cfg-host" placeholder="192.168.1.100 or your-domain.com" value="${esc(cfg.host || '')}">
+          <div style="font-size:11px;color:var(--text-dim);margin-top:4px">SSH user@host, e.g. root@1.2.3.4 or just IP (user: root)</div>
+        </div>
+
+        <div class="field">
+          <label>Authentication</label>
+          <div style="display:flex;gap:8px">
+            <input id="cfg-key" placeholder="SSH key path (e.g. ~/.ssh/id_rsa)" value="${esc(cfg.sshKey || '')}" style="flex:1">
+            <span style="color:var(--text-dim);padding:8px 0">or</span>
+            <input id="cfg-pass" type="password" placeholder="Password" value="" style="flex:1">
+          </div>
+        </div>
+
+        <div style="margin:16px 0">
+          <a id="toggle-advanced" style="font-size:12px;color:var(--text-dim);cursor:pointer;display:flex;align-items:center;gap:4px" onclick="toggleAdvanced()">
+            <span id="adv-arrow">\u25B6</span> Advanced Settings
+          </a>
+        </div>
+
+        <div id="advanced-section" class="hidden" style="border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+          <div class="field">
+            <label>SSH Port</label>
+            <input id="cfg-port" type="number" placeholder="22" value="${cfg.port || ''}">
+          </div>
+          <div class="field">
+            <label>Remote Path</label>
+            <div style="display:flex;gap:6px">
+              <input id="cfg-path" placeholder="Auto-detect on connect" value="${esc(cfg.remotePath || '')}" style="flex:1">
+              <button id="btn-detect-path" style="font-size:11px;padding:8px;flex-shrink:0" title="Try to find best path on remote">Detect</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>App Port</label>
+            <input id="cfg-appport" type="number" placeholder="3001 (default)" value="${cfg.appPort || ''}">
+          </div>
+          <div class="field">
+            <label>Node Version</label>
+            <input id="cfg-node" type="number" placeholder="Auto (LTS)" value="${cfg.nodeVersion || ''}">
+          </div>
+        </div>
+
+        <div id="setup-output" class="hidden" style="margin-bottom:16px">
+          <div class="log-viewer" style="max-height:160px" id="setup-log"></div>
+        </div>
+
+        <button id="btn-deploy-setup" class="primary" style="width:100%;justify-content:center;padding:10px;font-size:14px">
+          Deploy
+        </button>
+      </div>
+    </div>
+  `;
+
+  $('btn-deploy-setup').onclick = async () => {
+    const host = $('cfg-host').value.trim();
+    setupLog('log', 'DEBUG: host from form = "' + host + '" (length=' + host.length + ')');
+    if (!host) { setupLog('err', 'Server address is required'); return; }
+
+    const cfg = {
+      host,
+      port: parseInt($('cfg-port').value) || 22,
+      remotePath: $('cfg-path').value.trim() || '',
+      sshKey: $('cfg-key').value.trim() || '',
+      sshPassword: $('cfg-pass').value || '',
+      appPort: parseInt($('cfg-appport').value) || 3001,
+      nodeVersion: parseInt($('cfg-node').value) || 20,
+      branch: 'main', keepReleases: 5, preDeploy: '', postDeploy: '',
+      healthCheck: { retries: 5, timeout: 5000 },
+      pm2: { instances: 'auto', maxMemoryRestart: '' },
+    };
+
+    const out = $('setup-output');
+    out.classList.remove('hidden');
+    setupLog('log', 'Testing SSH connection...');
+
+    // Save config first so engine can use it
+    const saveResult = await api('/api/config', { method: 'PUT', body: JSON.stringify(cfg) });
+    setupLog('log', 'DEBUG: PUT response = ' + JSON.stringify(saveResult));
+    if (!saveResult.ok) {
+      setupLog('err', 'Save failed: ' + (saveResult.error || 'unknown error'));
+      return;
+    }
+
+    const r = await api('/api/ping');
+    if (r.ok) {
+      setupLog('ok', '\u2713 Connected to ' + host);
+      // Save config only after successful connection
+      await api('/api/config', { method: 'PUT', body: JSON.stringify(cfg) });
+      if (!cfg.remotePath) {
+        setupLog('log', 'Detecting remote path...');
+        try {
+          const info = await api('/api/info');
+          const user = host.includes('@') ? host.split('@')[0] : 'root';
+          const homePath = '/home/' + user + '/athena';
+          cfg.remotePath = homePath;
+          await api('/api/config', { method: 'PUT', body: JSON.stringify(cfg) });
+          setupLog('ok', 'Using ' + homePath);
+        } catch { setupLog('warn', 'Could not detect, set path in Advanced'); }
+      }
+      setupLog('ok', '\u2713 Configuration saved');
+      setTimeout(refresh, 1000);
+    } else {
+      setupLog('err', '\u2717 Connection failed: ' + (r.error || 'timeout or refused'));
+      if (r.cfg) setupLog('log', 'DEBUG: parsed config = ' + JSON.stringify(r.cfg));
+      if (r.rawContent) setupLog('log', 'DEBUG: raw file = ' + r.rawContent);
+      if (r.args) setupLog('log', 'DEBUG: ssh args = ' + JSON.stringify(r.args));
+      setupLog('log', 'Check the address, port, and authentication method');
+    }
+  };
+}
+
+function toggleAdvanced() {
+  const section = $('advanced-section');
+  const arrow = $('adv-arrow');
+  if (section.classList.contains('hidden')) {
+    section.classList.remove('hidden');
+    arrow.textContent = '\u25BC';
+  } else {
+    section.classList.add('hidden');
+    arrow.textContent = '\u25B6';
+  }
+}
+
+function setupLog(cls, msg) {
+  const log = $('setup-log');
+  if (!log) return;
+  log.innerHTML += '<div class="line"><span class="' + cls + '">' + esc(msg) + '</span></div>';
+  log.scrollTop = log.scrollHeight;
+}
+
+function esc(s) { if (s == null) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function renderDashboard(app) {
+  const st = state.status || {};
+  const info = st.info || {};
+  const conn = st.connected;
+  const running = st.running;
+
+  const navItems = [
+    { id: 'overview', label: 'Overview', icon: '\u25CF' },
+    { id: 'config', label: 'Config', icon: '\u2699' },
+    { id: 'releases', label: 'Releases', icon: '\u21BB' },
+    { id: 'logs', label: 'Logs', icon: '\u2630' },
+  ];
+
+  app.innerHTML = `
+    <aside class="sidebar">
+      <div class="logo"><span>ATHENA</span><small>DEPLOY</small></div>
+      <nav class="nav" id="nav">
+        ${navItems.map(n => `
+          <a class="${state.side === n.id ? 'active' : ''}" data-side="${n.id}">
+            <span>${n.icon}</span> <span>${n.label}</span>
+          </a>
+        `).join('')}
+      </nav>
+      <div class="sidebar-footer">
+        <span class="dot ${conn ? (running ? 'green' : 'red') : 'gray'}"></span>
+        <span>${conn ? (running ? 'Running' : 'Stopped') : 'Disconnected'}</span>
+      </div>
+    </aside>
+    <main class="main" id="main-content">
+      <div id="sse-stream" class="hidden">
+        <div class="status-bar">
+          <span id="sse-label">Running...</span>
+          <span class="sse-status" id="sse-status"></span>
+          <div style="margin-left:auto;display:flex;gap:6px">
+            <button id="sse-cancel" class="danger" style="font-size:11px;padding:4px 10px">Cancel</button>
+          </div>
+        </div>
+        <div class="log-viewer" id="sse-log" style="margin-bottom:20px"></div>
+      </div>
+      <div id="page-container">
+        ${renderOverview(st)}
+        ${renderConfig()}
+        ${renderReleases()}
+        ${renderLogs()}
+      </div>
+    </main>
+  `;
+
+  // Nav
+  document.querySelectorAll('#nav a').forEach(a => {
+    a.onclick = () => {
+      document.querySelectorAll('#nav a').forEach(x => x.classList.remove('active'));
+      a.classList.add('active');
+      state.side = a.dataset.side;
+      document.querySelectorAll('.page-content').forEach(p => p.classList.remove('active'));
+      const page = $('page-' + a.dataset.side);
+      if (page) page.classList.add('active');
+    };
+  });
+
+  // Bind buttons
+  if ($('btn-deploy')) $('btn-deploy').onclick = () => startJob('deploy');
+  if ($('btn-init')) $('btn-init').onclick = () => startJob('init');
+  if ($('btn-uninstall')) $('btn-uninstall').onclick = () => startJob('uninstall');
+  if ($('btn-ping')) $('btn-ping').onclick = doPing;
+  if ($('btn-health')) $('btn-health').onclick = doHealth;
+  if ($('btn-rollback')) $('btn-rollback').onclick = doRollback;
+  if ($('btn-refresh')) $('btn-refresh').onclick = refresh;
+  if ($('btn-save-json')) $('btn-save-json').onclick = saveJsonConfig;
+  if ($('btn-refresh-logs')) $('btn-refresh-logs').onclick = refreshLogs;
+  if ($('sse-cancel')) $('sse-cancel').onclick = cancelJob;
+}
+
+function renderOverview(st) {
+  const info = st.info || {};
+  return `
+    <div class="page-content ${state.side === 'overview' ? 'active' : ''}" id="page-overview">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div>
+          <h1 style="font-size:20px;font-weight:600;color:var(--text-bright);margin-bottom:4px">Overview</h1>
+          <p style="font-size:13px;color:var(--text-dim)">Deployment status</p>
+        </div>
+        <button id="btn-refresh" style="font-size:12px">Refresh</button>
+      </div>
+
+      <div class="status-bar">
+        <span class="dot ${st.connected ? (st.running ? 'green' : 'red') : 'gray'}"></span>
+        <span>${st.connected ? (st.running ? 'Service Running' : 'Service Stopped') : 'No Connection'}</span>
+        <span style="color:var(--text-dim)">|</span>
+        <span style="color:var(--text-dim)">${info.os || '?'} / ${info.arch || '?'}</span>
+        <span style="color:var(--text-dim)">|</span>
+        <span style="color:var(--text-dim)">RAM: ${info.ram || '?'}</span>
+      </div>
+
+      <div class="cards">
+        <div class="card ${st.running ? 'success' : ''}">
+          <div class="label">Service</div>
+          <div class="value">${st.running ? '\u2713 Running' : '\u2717 Stopped'}</div>
+        </div>
+        <div class="card">
+          <div class="label">Node.js</div>
+          <div class="value">${info.nodeVersion || '-'}</div>
+        </div>
+        <div class="card">
+          <div class="label">PM2</div>
+          <div class="value">${info.pm2Version || '-'}</div>
+        </div>
+        <div class="card accent">
+          <div class="label">Target</div>
+          <div class="value" style="font-size:14px">${st.config ? esc(st.config.host || '-') : '-'}</div>
+        </div>
+      </div>
+
+      <div class="section-header"><h2>Actions</h2></div>
+      <div class="actions">
+        <button id="btn-deploy" class="primary">\u25B6 Deploy</button>
+        <button id="btn-init">\u2699 Init Server</button>
+        <button id="btn-ping">\u25B3 Ping</button>
+        <button id="btn-health">\u2665 Health</button>
+        <div class="sep"></div>
+        <button id="btn-rollback">\u21A9 Rollback</button>
+        <div class="sep"></div>
+        <button id="btn-uninstall" class="danger">\u2717 Uninstall</button>
+      </div>
+
+      <div class="section-header"><h2>Server Info</h2></div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);backdrop-filter:blur(16px)">
+        <table class="info-table">
+          <tr><td>OS</td><td>${info.os || '-'}</td></tr>
+          <tr><td>Arch</td><td>${info.arch || '-'}</td></tr>
+          <tr><td>RAM</td><td>${info.ram || '-'}</td></tr>
+          <tr><td>Node.js</td><td>${info.nodeVersion || '-'}</td></tr>
+          <tr><td>PM2</td><td>${info.pm2Version || '-'}</td></tr>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderConfig() {
+  const cfg = state.config || {};
+  return `
+    <div class="page-content ${state.side === 'config' ? 'active' : ''}" id="page-config">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div>
+          <h1 style="font-size:20px;font-weight:600;color:var(--text-bright);margin-bottom:4px">Config</h1>
+          <p style="font-size:13px;color:var(--text-dim)">deploy.json</p>
+        </div>
+        <button id="btn-save-json" class="primary" style="font-size:12px">Save</button>
+      </div>
+      <textarea class="json-editor" id="json-editor" style="width:100%;background:rgba(0,0,0,0.4);border:1px solid var(--border);border-radius:var(--radius);padding:12px;color:var(--text)">${esc(JSON.stringify(cfg, null, 2))}</textarea>
+    </div>
+  `;
+}
+
+function renderReleases() {
+  const rels = state.releases;
+  return `
+    <div class="page-content ${state.side === 'releases' ? 'active' : ''}" id="page-releases">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div>
+          <h1 style="font-size:20px;font-weight:600;color:var(--text-bright);margin-bottom:4px">Releases</h1>
+          <p style="font-size:13px;color:var(--text-dim)">${rels.length} release${rels.length !== 1 ? 's' : ''}</p>
+        </div>
+      </div>
+      <div class="releases">
+        ${rels.length === 0 ? '<div style="color:var(--text-dim);font-size:14px;padding:20px 0;text-align:center">No releases yet. Run a deploy first.</div>' : ''}
+        ${rels.map(r => {
+          const dot = r.status === 'ok' || r.ok ? 'green' : r.status === 'fail' || r.ok === false ? 'red' : 'blue';
+          const ts = r.timestamp ? new Date(r.timestamp).toLocaleString() : '-';
+          return `<div class="release-item">
+            <span class="dot ${dot}"></span>
+            <div class="ri-body">
+              <h4>${esc(r.version)}</h4>
+              <div class="meta">${ts}</div>
+            </div>
+            ${r.filesChanged ? `<span style="font-size:12px;color:var(--text-dim)">${r.filesChanged} files</span>` : ''}
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderLogs() {
+  return `
+    <div class="page-content ${state.side === 'logs' ? 'active' : ''}" id="page-logs">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div>
+          <h1 style="font-size:20px;font-weight:600;color:var(--text-bright);margin-bottom:4px">Logs</h1>
+          <p style="font-size:13px;color:var(--text-dim)">PM2 service logs</p>
+        </div>
+        <button id="btn-refresh-logs" style="font-size:12px">Refresh</button>
+      </div>
+      <div class="log-viewer" id="logs-viewer">${state.logs || '<div style="color:var(--text-dim)">No logs loaded</div>'}</div>
+    </div>
+  `;
+}
+
+// ─── Actions ───
+async function doPing() {
+  const r = await api('/api/ping');
+  alert(r.ok ? 'SSH connection OK' : 'SSH failed: ' + (r.error || 'timeout'));
+}
+
+async function doHealth() {
+  const r = await api('/api/health');
+  alert(r.ok ? '\u2713 Service is running (attempt ' + r.attempt + ')' : '\u2717 Health check failed');
+}
+
+async function doRollback() {
+  if (!confirm('Rollback to previous release?')) return;
+  const r = await api('/api/rollback?steps=1', { method: 'POST' });
+  alert(r.ok ? 'Rolled back to ' + r.version : 'Rollback failed: ' + (r.reason || r.error));
+  refresh();
+}
+
+async function saveJsonConfig() {
+  try {
+    const cfg = JSON.parse($('json-editor').value);
+    await api('/api/config', { method: 'PUT', body: JSON.stringify(cfg) });
+    alert('Config saved');
+  } catch (e) { alert('Invalid JSON: ' + e.message); }
+}
+
+async function refreshLogs() {
+  const r = await api('/api/logs');
+  state.logs = r.logs || 'No logs';
+  if (state.side === 'logs') {
+    const v = $('logs-viewer');
+    if (v) v.innerHTML = state.logs.split('\n').map(l => `<div class="line">${esc(l)}</div>`).join('');
+  }
+}
+
+async function refresh() {
+  const [status, config, releases] = await Promise.all([
+    api('/api/status'),
+    api('/api/config'),
+    api('/api/releases'),
+  ]);
+  state.status = status;
+  state.target = status && status.target;
+  state.config = config;
+  state.releases = releases;
+  render();
+  if (state.target && state.status && state.status.connected && state.side !== 'logs') {
+    // pre-fetch logs
+    refreshLogs();
+  }
+}
+
+// ─── SSE Job Runner ───
+function startJob(type) {
+  if (state.activeJob) return alert('A job is already running');
+  const labels = { init: 'Initializing server...', deploy: 'Deploying...', uninstall: 'Uninstalling...' };
+  state.activeJob = { type };
+
+  // Show SSE panel
+  const stream = $('sse-stream');
+  const log = $('sse-log');
+  const label = $('sse-label');
+  if (stream) stream.classList.remove('hidden');
+  if (label) label.textContent = labels[type] || 'Running...';
+  if (log) log.innerHTML = '';
+
+  api('/api/' + type, { method: 'POST' }).then(r => {
+    if (!r.jobId) { appendLog('error', 'Failed to start job'); return; }
+    state.activeJob.id = r.jobId;
+
+    const close = sse('/api/events/' + r.jobId, (ev) => {
+      if (ev.type === 'log') {
+        appendLog('log', ev.message);
+      } else if (ev.type === 'done') {
+        appendLog('ok', '\u2713 Complete');
+        state.activeJob = null;
+        close();
+        setTimeout(() => {
+          if ($('sse-stream')) $('sse-stream').classList.add('hidden');
+          refresh();
+        }, 1500);
+      } else if (ev.type === 'error') {
+        appendLog('err', '\u2717 ' + ev.message);
+        state.activeJob = null;
+        close();
+        setTimeout(() => {
+          if ($('sse-stream')) $('sse-stream').classList.add('hidden');
+        }, 3000);
+      }
+    });
+  });
+}
+
+function cancelJob() {
+  if (state.activeJob) {
+    state.activeJob = null;
+    appendLog('warn', 'Cancelled');
+    if ($('sse-stream')) $('sse-stream').classList.add('hidden');
+  }
+}
+
+function appendLog(cls, msg) {
+  const log = $('sse-log');
+  if (!log) return;
+  const line = document.createElement('div');
+  line.className = 'line';
+  line.innerHTML = `<span class="${cls}">${esc(msg)}</span>`;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+// ─── Init ───
+refresh();
+</script>
+</body>
+</html>

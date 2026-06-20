@@ -12,7 +12,7 @@
     }
   },
   "scripts": {
-    "prebuild": "node ../../scripts/clean-dist.mjs packages/smart-routing-core/dist",
+    "prebuild": "node ../scripts/clean-dist.mjs dist",
     "build": "tsc -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json",
     "test": "npx tsx --test src/index.test.ts"

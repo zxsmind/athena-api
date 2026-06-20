@@ -1,12 +1,15 @@
 {
-  "host": "user@your-server-ip",
+  "host": "ubuntu@129.151.245.192",
   "port": 22,
   "remotePath": "/opt/athena",
-  "branch": "main",
-  "nodeVersion": 20,
-  "appPort": 3001,
-  "keepReleases": 5,
   "sshKey": "",
+  "sshPassword": "!Lawrence2309",
+  "appPort": 3001,
+  "nodeVersion": 20,
+  "branch": "main",
+  "keepReleases": 5,
+  "preDeploy": "",
+  "postDeploy": "",
   "healthCheck": {
     "retries": 5,
     "timeout": 5000
@@ -14,7 +17,5 @@
   "pm2": {
     "instances": "auto",
     "maxMemoryRestart": ""
-  },
-  "preDeploy": "",
-  "postDeploy": ""
+  }
 }

@@ -16,13 +16,21 @@ export const config = {
 };
 
 let _port = 3001;
+let _host = '0.0.0.0';
+
 export function initPort() {
   const store = loadSettings();
   _port = parseInt(process.env.PORT || '', 10) || store.port || 3001;
+  // Always bind to all interfaces so the backend is reachable on the local network / Tailscale.
+  _host = '0.0.0.0';
 }
 
 export function getPort(): number {
   return _port;
+}
+
+export function getHost(): string {
+  return _host;
 }
 
 initPort();

@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
-import { getPublicConfig, getPort } from './config.js';
+import { existsSync, readFileSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { getPublicConfig, getPort, getHost } from './config.js';
 import { callLLM, callLLMStream } from './llm.js';
 import { getSettings, saveSettings } from './settings.js';
 import type { SettingsData } from './settings.js';
@@ -58,13 +61,10 @@ function applyAPISettingsFromStore() {
   }
 }
 
-const app = express();
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
-const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173,http://localhost:5174,http://localhost:5175').split(',');
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true,
-}));
+const app = express();
+app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/health', (_req, res) => {
@@ -627,6 +627,21 @@ app.post('/test-llm', async (req, res) => {
 
 applyAPISettingsFromStore();
 
-app.listen(getPort(), () => {
-  console.log(`ATHENA-001 server running on http://localhost:${getPort()}`);
+// Serve built frontend (if present)
+const publicDir = join(__dirname, 'public');
+if (existsSync(publicDir)) {
+  // API routes already defined above; static files only for non-API paths
+  app.use(express.static(publicDir, { maxAge: '1d' }));
+  // SPA fallback: unmatched GET requests serve index.html
+  app.use((req, res) => {
+    if (req.method === 'GET') {
+      res.sendFile(join(publicDir, 'index.html'));
+    } else {
+      res.status(404).json({ error: 'Not found' });
+    }
+  });
+}
+
+app.listen(getPort(), getHost(), () => {
+  console.log(`ATHENA-001 server running on http://${getHost()}:${getPort()}`);
 });

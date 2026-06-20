@@ -44,5 +44,11 @@ __pycache__/
 # Bolt
 .bolt/
 
+# Deploy state (connection info + file hashes)
+scripts/.deploy-state/
+
+# Generated config (apiUrl per deployment)
+public/config.json
+
 # Random generated files
 erseryykDesktopATHENA-001

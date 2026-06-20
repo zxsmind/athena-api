@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import useMediaQuery from '@mui/material/useMediaQuery';
+import { BASE } from '../lib/api';
 import { Section, InputRow, ListSection, InfoPanel } from './settings/SharedComponents';
 import Dropdown from './Dropdown';
 import { ModelRouteEditor } from './settings/ModelEditor';
@@ -46,7 +47,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
 
   useEffect(() => {
     if (!open) return;
-    fetch('/api/settings').then(r => r.json()).then(d => {
+    fetch(`${BASE}/settings`).then(r => r.json()).then(d => {
       setData(d); setActiveTab('general'); setDirty(false); setMessage(null);
     }).catch(() => setMessage({ type: 'error', text: 'Failed to load settings' }));
   }, [open]);
@@ -54,7 +55,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const save = useCallback(async (currentData: SettingsData) => {
     setSaving(true);
     try {
-      const res = await fetch('/api/settings', {
+      const res = await fetch(`${BASE}/settings`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(currentData),
       });
@@ -78,7 +79,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   useEffect(() => {
     return () => {
       if (dirtyRef.current && currentDataRef.current) {
-        fetch('/api/settings', {
+        fetch(`${BASE}/settings`, {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(currentDataRef.current), keepalive: true,
         }).catch(err => console.error('Failed to auto-save on unmount:', err));

@@ -145,15 +145,29 @@ ATHENA-001/
 │   └── tsconfig.json
 │
 ├── deploy/                       # Deployment sistemi (SSH + hash-incremental + PM2)
-│   ├── deploy.sh                 # Ana CLI (init/deploy/status/logs/rollback/restart/cleanup/doctor/config)
+│   ├── deploy.sh                 # Bash CLI (Linux/macOS) — delegasyon için wrapper
+│   ├── cli.mjs                   # Node.js CLI (cross-platform: Windows, Linux, macOS)
 │   ├── deploy.json               # Konfigürasyon dosyası
+│   ├── dashboard.html            # Web dashboard (setup formu + yönetim paneli)
+│   ├── server.mjs                # HTTP API server (port 4000, engine.mjs'i kullanır)
 │   ├── lib/
+│   │   ├── utils.mjs             # Config yükleme/kaydetme
+│   │   ├── engine.mjs            # DeployEngine (SSH, SCP, manifest, sync, health)
 │   │   ├── common.sh             # Logging, SSH helpers, error handling, memory hesaplama
 │   │   ├── hash.sh               # SHA256 manifest generation & comparison
 │   │   ├── sync.sh               # Incremental tar-pipe sync, release management
 │   │   ├── setup.sh              # OS/node/npm detection, dependency install, build
 │   │   └── service.sh            # PM2 management, health check, reboot resilience
 │   └── templates/                # (opsiyonel şablonlar)
+│
+├── scripts/                      # Yardımcı betikler
+│   ├── clean-dist.mjs            # Prebuild: dist klasörünü temizler
+│   └── deploy-simple.mjs         # Basit deploy (ssh2 ile hash-based sync, PM2, Tailscale)
+│
+├── public/                       # Frontend static dosyalar
+│   ├── favicon.svg
+│   ├── icons.svg
+│   └── config.json               # (generated) API base URL — deploy script tarafından yazılır
 │
 ├── docs/                         # Proje dokümanları
 │   ├── API.md                    # API referansı (v2, Node backend)
@@ -265,7 +279,7 @@ Ayarlar `server/data/settings.json` dosyasında saklanır. `settings-store.ts`:
 
 Ayar şeması v2 ana bölümleri:
 - `version`: Şema versiyonu (2).
-- `port` / `host`: Sunucu portu ve bind adresi.
+- `port`: Sunucu portu (`3001` varsayılan). `host` alanı hâlâ şemada tutulur ama **backend her zaman `0.0.0.0` adresine bağlanır** (`config.ts`); `host`/`HOST` ayarı bind adresini değiştirmez. Bunun sebebi: Tailscale veya yerel ağda herhangi bir arayüzden erişilebilir olması istenir; ayarlardaki yanlış bir `host` değeri sebebiyle yalnızca `127.0.0.1`’e kısıtlanma riski ortadan kaldırılır.
 - `providers`: `groq`, `gemini`, `vercel`, `openrouter`, `custom` — her biri `enabled`, `keys`, `models`, `url`, `name`.
 - `providerOrder`: Deneme sırası.
 - `modelRouting`: Her rol için `primary` + `fallback` model referansları.
@@ -310,6 +324,9 @@ Detaylı dokümantasyon: `docs/API.md`.
 - `dangerouslySetInnerHTML` kullanılan yerlerde (markdown render bileşenleri) `escapeHtml` kullanılır; güvenilir.
 - Tema değişimi `ColorMode.tsx` ve `document.documentElement.classList` (`dark`/`light`) üzerinden yönetilir.
 - `src/theme.ts` MUI teması oluşturur; `useDetectMode()` runtime'da `document.documentElement` ve `prefers-color-scheme` kontrol eder.
+- **Runtime backend URL**: `api.ts` açılışta `/config.json`'u okur (metadata). Sırasıyla: `config.json.apiUrl` → `VITE_SERVER_URL` env → `/api` fallback.
+  - `public/config.json` deploy script tarafından yazılır, gitignore'dadır.
+  - Dev proxy kullanılırken `/api` yeterlidir; remote backend için config.json gerekir.
 
 ### 6.3. Backend Özel
 
@@ -317,6 +334,7 @@ Detaylı dokümantasyon: `docs/API.md`.
 - `llm-errors.log` dosyasına 429, 400 ve 413 hataları kaydedilir; 401 hataları kaydedilmez (atlanır). Bu log dosyası gitignore'dadır.
 - In-memory job/batch yönetiminde `MAX_JOBS` / `MAX_BATCHES` limitleri aşılırsa en eski kayıtlar silinir.
 - `db.json` yazma işlemleri `withLock` ile seri hale getirilmiştir; race condition yoktur.
+- **Static files**: Backend, `server/dist/public/` varsa bu dizini `express.static` ile serve eder. Bu, build edilmiş frontend'in backend ile aynı porta düşmesini sağlar. Deploy script `dist/` (Vite build) → `server/dist/public/` kopyalar.
 
 ### 6.4. Smart Routing Core Özel
 
@@ -327,21 +345,36 @@ Detaylı dokümantasyon: `docs/API.md`.
 ### 6.5. Deployment Sistemi (`deploy/`)
 
 > **Deployment sistemi, ATHENA-001'in production ortamına SSH üzerinden taşınması, kurulması ve yönetilmesi için tasarlanmıştır.**
+> **Hem Linux/macOS (bash) hem de Windows (Node.js CLI) destekler.**
 
 **Dosya yapısı:**
 ```
 deploy/
-├── deploy.sh           # Ana CLI (1118 satır) — init/deploy/status/logs/rollback/restart/cleanup/doctor/config
-├── deploy.json         # Konfigürasyon dosyası (host, path, nodeVersion, pm2 ayarları)
+├── deploy.sh           # Bash CLI (Linux/macOS)
+├── cli.mjs             # Node.js CLI (komut satırı)
+├── deploy.json         # Konfigürasyon dosyası
+├── dashboard.html      # Web dashboard (setup formu + yönetim paneli)
+├── server.mjs          # HTTP API server (port 4000)
 ├── lib/
-│   ├── common.sh       # Renkli log, SSH helper'lar, hata yönetimi, akıllı RAM hesaplama
+│   ├── common.sh       # Renkli log, SSH helper'lar, hata yönetimi, RAM hesaplama
 │   ├── hash.sh         # SHA256 manifest ile dosya değişiklik tespiti
 │   ├── sync.sh         # Incremental tar-pipe sync, release yönetimi, rollback
 │   ├── setup.sh        # OS/Node.js tespiti, bağımlılık kurulumu, build
-│   └── service.sh      # PM2 yönetimi, health check, reboot resilience
+│   ├── service.sh      # PM2 yönetimi, health check, reboot resilience
+│   ├── utils.mjs       # Config yükleme/kaydetme
+│   └── engine.mjs      # DeployEngine (SSH, SCP, manifest, sync, health, sshpass)
 ```
 
-**Temel özellikler:**
+**Cross-platform Web Dashboard (`deploy/server.mjs` + `deploy/dashboard.html`):**
+- HTTP server on port 4000 (`npm run deploy`).
+- Stateless HTML/CSS/JS dashboard served from `server.mjs`.
+- No target configured → setup form (host, SSH key/password, advanced options).
+- Target configured → management panel (Overview, Config, Releases, Logs, Actions).
+- Long-running ops (init, deploy, uninstall) use SSE streaming for live log output in browser.
+- All operations: `DeployEngine` üzerinden SSH/SCP ile remote sunucuya gerçek işlemler.
+- `server.mjs` API endpoint'leri: `/api/status`, `/api/ping`, `/api/health`, `/api/info`, `/api/config`, `/api/releases`, `/api/logs`, `/api/init` (SSE), `/api/deploy` (SSE), `/api/uninstall` (SSE), `/api/rollback`, `/api/events/:id` (SSE).
+
+**Temel özellikler (bash + Node.js):**
 
 | Özellik | Detay |
 |---------|-------|
@@ -358,26 +391,13 @@ deploy/
 
 **Kullanım:**
 ```bash
-# İlk kurulum (uzak sunucuda Node.js + PM2 ayarları)
-./deploy.sh init --host ubuntu@192.168.1.100
+# Web dashboard'u başlat (http://localhost:4000)
+npm run deploy
 
-# Deploy
-./deploy.sh deploy --host ubuntu@192.168.1.100
-
-# Dry-run (ne olacağını göster, hiçbir şey yapma)
-./deploy.sh deploy --dry-run
-
-# Servis durumu
-./deploy.sh status
-
-# Log izleme
-./deploy.sh logs --lines 100 --follow
-
-# Rollback (1 adım geri)
-./deploy.sh rollback
-
-# Diagnostik
-./deploy.sh doctor
+# Alternatif — direkt Node.js CLI (eski, Windows/Linux):
+npm run deploy:cli                # Interaktif menü
+npm run deploy:cli deploy         # Direkt komut
+node deploy/cli.mjs               # Doğrudan çalıştırma
 ```
 
 **Akıllı RAM Hesaplama Formülü:**

@@ -55,8 +55,16 @@ function Layout() {
     return () => document.removeEventListener('keydown', handler);
   }, [sidebarOpen]);
 
+function genId(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
+}
+
   const handleSearch = useCallback(async (query: string, mode?: 'quick' | 'deep') => {
-    const id = crypto.randomUUID();
+    const id = genId();
     navigate(`/c/${id}`, { state: { query, mode } });
 
     setLoading(true);
