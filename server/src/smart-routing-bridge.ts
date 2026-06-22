@@ -53,7 +53,7 @@ export class SmartRoutingBridge {
     providerMap: Map<string, TargetReference>;
   } {
     const store = loadSettings();
-    const candidates: RouteCandidate[] = [];
+    const allCandidates: RouteCandidate[] = [];
     const providerMap = new Map<string, TargetReference>();
     const providerOrder = store.providerOrder || Object.keys(store.providers);
     let index = 0;
@@ -67,7 +67,7 @@ export class SmartRoutingBridge {
           scopeId: routeId,
           limits: { rpm: null, tpm: null, rpd: null, budgetMode: 'requests', budgetLimit: null },
         };
-        candidates.push({
+        allCandidates.push({
           routeId,
           sortKey: pid,
           rotationGroupId: pid,
@@ -83,7 +83,32 @@ export class SmartRoutingBridge {
         index++;
       }
     }
-    return { candidates, providerMap };
+
+    // Filter candidates by role-specific modelRouting if a role is given
+    if (role && store.modelRouting?.[role]) {
+      const route = store.modelRouting[role];
+      const allowedRouteIds = new Set<string>();
+
+      const addRef = (ref: { providerId: string; model: string }) => {
+        if (ref.providerId && ref.model) {
+          allowedRouteIds.add(`${ref.providerId}/${ref.model}`);
+        }
+      };
+
+      addRef(route.primary);
+      for (const fb of route.fallback ?? []) {
+        addRef(fb);
+      }
+
+      if (allowedRouteIds.size > 0) {
+        const filtered = allCandidates.filter(c => allowedRouteIds.has(c.routeId));
+        if (filtered.length > 0) {
+          return { candidates: filtered, providerMap };
+        }
+      }
+    }
+
+    return { candidates: allCandidates, providerMap };
   }
 
   selectTarget(role?: LLMRole): {
