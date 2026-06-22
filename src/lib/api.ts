@@ -161,6 +161,7 @@ export type ResearchJobEvent =
   | { type: 'progress'; data: ResearchProgressState; timestamp: string }
   | { type: 'token'; text: string; timestamp: string }
   | { type: 'sources'; sources: Source[]; timestamp: string }
+  | { type: 'context'; finalContext: string; timestamp: string }
   | { type: 'done'; response: SearchResponse; timestamp: string }
   | { type: 'error'; message: string; finalContext?: string; timestamp: string };
 
@@ -189,6 +190,7 @@ export interface JobEventCallbacks {
   onToken?: (text: string) => void;
   onStep?: (step: AgentStep) => void;
   onSources?: (sources: Source[]) => void;
+  onContext?: (finalContext: string) => void;
   onDone?: (response: SearchResponse) => void;
   onError?: (message: string, finalContext?: string) => void;
   onStatus?: (status: ResearchJobStatus) => void;
@@ -210,7 +212,7 @@ export function subscribeToJobEvents(
     source.close();
   };
 
-  const eventTypes = ['status', 'step', 'token', 'sources', 'done', 'error', 'progress'] as const;
+  const eventTypes = ['status', 'step', 'token', 'sources', 'context', 'done', 'error', 'progress'] as const;
   for (const type of eventTypes) {
     source.addEventListener(type, (e: MessageEvent) => {
       if (signal?.aborted) return;
@@ -222,6 +224,7 @@ export function subscribeToJobEvents(
           case 'token': callbacks.onToken?.(data.text); break;
           case 'step': callbacks.onStep?.(data.data); break;
           case 'sources': callbacks.onSources?.(data.sources); break;
+          case 'context': callbacks.onContext?.(data.finalContext); break;
           case 'status': callbacks.onStatus?.(data.status); break;
           case 'progress': callbacks.onProgress?.(data.data); break;
         }

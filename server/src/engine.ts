@@ -61,6 +61,18 @@ interface DeepResearchState {
   preset: ResolvedResearchPreset;
 }
 
+function makeFinalContextJson(messages: LLMMessage[]): string {
+  const MAX_CTX_KB = 10;
+  const MAX_CTX_MSGS = 20;
+  const all = messages.map(m => ({ role: m.role, content: m.content })).filter((m): m is { role: string; content: string } => typeof m.content === 'string' && m.content.length > 0);
+  const trimmed = all.length > MAX_CTX_MSGS ? all.slice(-MAX_CTX_MSGS) : all;
+  let json = JSON.stringify(trimmed);
+  if (json.length > MAX_CTX_KB * 1024) {
+    json = json.slice(0, MAX_CTX_KB * 1024) + '\n...TRUNCATED';
+  }
+  return json;
+}
+
 function deepResearchContextBlock(deepState: DeepResearchState, cadenceInstruction: string): string {
   return [
     `Research ledger (completed searches/fetches — do not repeat these queries):\n${ledgerContextBlock(deepState.ledger)}`,
@@ -75,8 +87,12 @@ function budgetExhaustedDeepMessage(): string {
   return 'Research budget exhausted. If raw evidence is not yet in the notebook, call write_notebook once with a Markdown summary. Then write the final answer using ONLY the notebook, research ledger, and source list. Cite with [N]. List remaining gaps explicitly; do not fill them with unsupported numbers or speculation.';
 }
 
+function roundsExhaustedDeepMessage(): string {
+  return 'Research rounds limit reached. If raw evidence is not yet in the notebook, call write_notebook once with a Markdown summary. Then write the final answer using ONLY the notebook, research ledger, and source list. Cite with [N]. List remaining gaps explicitly; do not fill them with unsupported numbers or speculation.';
+}
+
 type RoundResult =
-  | { kind: 'tools' }
+  | { kind: 'tools'; researchPerformed: boolean }
   | { kind: 'answer' }
   | { kind: 'error' };
 
@@ -100,20 +116,22 @@ async function toolCallingRound(
   if (signal?.aborted) return { kind: 'error' };
 
   const budgetExhausted = budget.remainingCredits <= 0;
+  const roundsExhausted = round >= maxRounds;
+  const researchExhausted = budgetExhausted || roundsExhausted;
 
   const stepType = round === 0 ? 'plan-analyze' : 'analyze';
   const step: AgentStep = { type: stepType, note: round === 0 ? 'Analyzing question...' : 'Thinking...' };
   steps.push(step);
   onEvent({ type: 'step', data: step });
 
-  if (budgetExhausted) {
-    budget.exhausted = true;
+  if (researchExhausted) {
+    if (budgetExhausted) budget.exhausted = true;
     onRoundProgress?.();
     const warning = deepState
-      ? budgetExhaustedDeepMessage()
-      : `⚠️ **Research budget exhausted.** You have no remaining search or fetch credits. Answer based on the information you already have. If you lack sufficient data, state what you know and what is missing.`;
+      ? (roundsExhausted ? roundsExhaustedDeepMessage() : budgetExhaustedDeepMessage())
+      : `⚠️ **Research budget or rounds exhausted.** Answer based on the information you already have. If you lack sufficient data, state what you know and what is missing.`;
     messages.push({ role: 'system', content: warning });
-    steps.push({ type: 'budget', note: 'Budget exhausted — model will answer from existing data.' });
+    steps.push({ type: 'budget', note: roundsExhausted ? 'Round limit reached — model will answer from existing data.' : 'Budget exhausted — model will answer from existing data.' });
     onEvent({ type: 'step', data: steps[steps.length - 1] });
   } else {
     const remainingRoundBudget = maxRounds - round;
@@ -145,7 +163,7 @@ async function toolCallingRound(
 
   const temp = temperatureForRound(round);
   let llmResult: LLMResult;
-  const tools = budgetExhausted
+  const tools = researchExhausted
     ? (deepState ? [WRITE_NOTEBOOK_TOOL, READ_NOTEBOOK_TOOL] : undefined)
     : (deepState ? [SEARCH_TOOL, FETCH_URL_TOOL, WRITE_NOTEBOOK_TOOL, READ_NOTEBOOK_TOOL] : [SEARCH_TOOL, FETCH_URL_TOOL]);
   try {
@@ -155,7 +173,8 @@ async function toolCallingRound(
       label: `tool-round-${round}`,
     });
   } catch (err: unknown) {
-    onEvent({ type: 'error', message: (err as Error).message || 'No available model responded', finalContext: JSON.stringify(messages.map(m => ({ role: m.role, content: m.content })).filter((m): m is { role: string; content: string } => typeof m.content === 'string' && m.content.length > 0), null, 2) });
+    onEvent({ type: 'context', finalContext: makeFinalContextJson(messages) });
+    onEvent({ type: 'error', message: (err as Error).message || 'No available model responded' });
     return { kind: 'error' };
   }
 
@@ -231,7 +250,7 @@ async function toolCallingRound(
         const tcId = tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
         messages.push({ role: 'tool', tool_call_id: tcId, content: 'Invalid tool call arguments. No results available.' });
       }
-      return { kind: 'tools' };
+      return { kind: 'tools', researchPerformed: false };
     }
     if (deepState && notebookReadTasks.length > 0) {
       for (const task of notebookReadTasks) {
@@ -289,7 +308,7 @@ async function toolCallingRound(
     }
 
     if (totalTasks === 0) {
-      return { kind: 'tools' };
+      return { kind: 'tools', researchPerformed: false };
     }
     if (budget.remainingCredits <= 0) {
       budget.exhausted = true; onRoundProgress?.();
@@ -297,7 +316,7 @@ async function toolCallingRound(
         const tcId = tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
         messages.push({ role: 'tool', tool_call_id: tcId, content: deepState ? budgetExhaustedDeepMessage() : 'Research budget exhausted. No results available. Write your final answer now based on the information you already have.' });
       }
-      return { kind: 'tools' };
+      return { kind: 'tools', researchPerformed: false };
     }
 
     const duplicateToolNotes = new Map<string, string[]>();
@@ -350,7 +369,7 @@ async function toolCallingRound(
         });
       }
       onRoundProgress?.();
-      return { kind: 'tools' };
+      return { kind: 'tools', researchPerformed: false };
     }
 
     if (allowedCount < totalTasks) {
@@ -450,17 +469,17 @@ async function toolCallingRound(
     if (budget.remainingCredits <= 0) budget.exhausted = true;
     onRoundProgress?.();
     messages.push({ role: 'system', content: `[Budget: ${budget.remainingCredits} credits remaining | Round ${round + 1}/${maxRounds}]` });
-    return { kind: 'tools' };
+    return { kind: 'tools', researchPerformed: allowedCount > 0 };
   }
 
   /* Inline tool call */
   const content = msg.content || '';
   const inlineCall = parseInlineToolCall(content);
   if (inlineCall) {
-    if (budgetExhausted) {
+    if (researchExhausted) {
       messages.push({ role: msg.role, content: content.replace(inlineCall.raw, '').trim() || null });
-      messages.push({ role: 'tool', tool_call_id: `call_inline_${Date.now()}`, content: 'Research budget exhausted. No results available. Write your final answer now based on the information you already have.' });
-      return { kind: 'tools' };
+      messages.push({ role: 'tool', tool_call_id: `call_inline_${Date.now()}`, content: roundsExhausted ? 'Research rounds limit reached. No results available. Write your final answer now based on the information you already have.' : 'Research budget exhausted. No results available. Write your final answer now based on the information you already have.' });
+      return { kind: 'tools', researchPerformed: false };
     }
     const allQueries = inlineCall.queries?.length ? inlineCall.queries : [(inlineCall.query || '').trim()].filter(Boolean);
     if (allQueries.length > 0) {
@@ -493,7 +512,7 @@ async function toolCallingRound(
           content: `${inlineDuplicateNotes.join('\n\n')}\n\n[No credits spent — use notebook/ledger evidence.]`,
         });
         onRoundProgress?.();
-        return { kind: 'tools' };
+        return { kind: 'tools', researchPerformed: false };
       }
       const queryTimestamps = allowedQueries.map(() => performance.now());
       const queryStepIndices: number[] = [];
@@ -554,7 +573,7 @@ async function toolCallingRound(
       onRoundProgress?.();
       messages.push({ role: 'system', content: `[Budget: ${budget.remainingCredits} credits remaining | Round ${round + 1}/${maxRounds}]` });
       onEvent({ type: 'sources', sources: Array.from(allSources.values()).map(toPublicSource) });
-      return { kind: 'tools' };
+      return { kind: 'tools', researchPerformed: allowedQueries.length > 0 };
     }
   }
 
@@ -696,7 +715,10 @@ export async function agenticResearchStream(
 
   let hadError = false;
   let round = startRound;
-  while (!hadError && round < maxRounds + 3) {
+  let totalTurns = 0;
+  const maxTotalTurns = Math.max(50, maxRounds * 3);
+
+  while (!hadError && round < maxRounds + 3 && totalTurns < maxTotalTurns) {
     if (options.signal?.aborted) break;
     const result = await toolCallingRound(messages, allSources, steps, round, onEvent, budget, maxRounds, () => publishProgress(round), options.signal, activeRole, deepState, preset, cooldownState);
     if (result.kind === 'error') { hadError = true; break; }
@@ -725,14 +747,19 @@ export async function agenticResearchStream(
       steps.push(checkpointStep);
       onEvent({ type: 'step', data: checkpointStep });
     }
-    publishProgress(round + 1);
-    round++;
+    if (result.kind === 'tools') {
+      if (result.researchPerformed) {
+        round++;
+      }
+    }
+    totalTurns++;
+    publishProgress(round);
   }
 
   if (hadError || options.signal?.aborted) return;
 
   function finalContextJson(): string {
-    return JSON.stringify(messages.map(m => ({ role: m.role, content: m.content })).filter((m): m is { role: string; content: string } => typeof m.content === 'string' && m.content.length > 0));
+    return makeFinalContextJson(messages);
   }
 
   const finalSources: Source[] = Array.from(allSources.values()).map(toPublicSource);
@@ -746,13 +773,16 @@ export async function agenticResearchStream(
     const elapsed = Math.round(performance.now() - start);
     if (options.jobId) deleteResearchCheckpoint(options.jobId);
     onEvent({ type: 'token', text: answerMsg.content });
-    onEvent({ type: 'done', response: { query, answer: answerMsg.content, sources: finalSources, steps, results_count: allSources.size, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted }, research_depth: mode === 'deep' ? preset.depth : undefined, research_notebook: deepState ? { id: deepState.notebook.id, path: deepState.notebook.path, updates: deepState.notebook.appendCount, updatedAt: deepState.notebook.updatedAt } : undefined, finalContext: finalContextJson() } as SearchResponse });
+    onEvent({ type: 'context', finalContext: finalContextJson() });
+    onEvent({ type: 'done', response: { query, answer: answerMsg.content, sources: finalSources, steps, results_count: allSources.size, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted }, research_depth: mode === 'deep' ? preset.depth : undefined, research_notebook: deepState ? { id: deepState.notebook.id, path: deepState.notebook.path, updates: deepState.notebook.appendCount, updatedAt: deepState.notebook.updatedAt } : undefined } as SearchResponse });
     return;
   }
 
   if (allSources.size > 0) {
-    onEvent({ type: 'error', message: budget.exhausted ? 'Araştırma bütçesi doldu ancak model cevap üretemedi.' : 'Model tüm turları kullandı ancak cevap üretemedi.', finalContext: finalContextJson() });
+    onEvent({ type: 'context', finalContext: finalContextJson() });
+    onEvent({ type: 'error', message: budget.exhausted ? 'Araştırma bütçesi doldu ancak model cevap üretemedi.' : 'Model tüm turları kullandı ancak cevap üretemedi.' });
   } else {
-    onEvent({ type: 'error', message: 'Model could not produce an answer.', finalContext: finalContextJson() });
+    onEvent({ type: 'context', finalContext: finalContextJson() });
+    onEvent({ type: 'error', message: 'Model could not produce an answer.' });
   }
 }

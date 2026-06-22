@@ -261,6 +261,8 @@ Modlar:
 - **quick**: Kullanıcıya "Instant" olarak gösterilir. Dahili model rolü `instant`. Max 3 tur, bütçe 6 kredi.
 - **deep**: Dahili model rolü `deep`. `depth` alanı ile `low`, `med`, `high`, `ultra` presetlerinden biri seçilir. Eski deep çağrıları `med` kabul edilir. Varsayılan presetler: low 20 kredi/5 tur, med 35 kredi/8 tur, high 50 kredi/13 tur, ultra 100 kredi/30 tur. Preset snapshot job/batch kaydına yazılır ve çalışan iş ayar değişikliklerinden etkilenmez.
 
+> **Önemli — Tur Hesaplaması:** Derin araştırma modlarında `maxRounds` (tur sınırı) yalnızca **gerçek araştırma işlemleri** (arama ve fetch) yapıldığında artar. `write_notebook` ve `read_notebook` gibi meta-araç çağrıları araştırma turu bütçesini tüketmez. Ayrıca, notebook işlemlerinin kısır döngüye girmesini önlemek için `maxTotalTurns` adında bir güvenlik sınırı bulunur (varsayılan: `Math.max(50, maxRounds * 3)`). Tur sınırı aşıldığında veya bütçe bittiğinde arama/fetch araçları kapatılır ve modelin sadece `write_notebook` yapmasına ve cevabı tamamlamasına izin verilir.
+
 > **Dikkat:** Ayarlarda bulunan `general.deepIterations` ve `research.maxFollowUpQueries` alanları şu anda `engine.ts` içinde aktif olarak kullanılmıyor. Deep mod tur sayısı `engine/depth-presets.ts` presetlerinden gelir; follow-up limiti bütçe, tur sayısı ve per-round search/fetch limitleri tarafından dolaylı olarak sınırlanır. Bu ayarları devreye sokacak bir değişiklik yapmadan önce bu dokümanı ve ilgili kodu güncelleyin.
 
 > **Not:** Deep modda `write_notebook` (Markdown append) ve `read_notebook` tool'ları aktiftir. Notebook `server/data/notebooks/{id}.md` dosyasına yazılır; context'e truncate edilmiş working view enjekte edilir. Raw search/fetch payload'ları notebook yazımından sonra kompaktlanır. Notebook cadence eşiği depth presetine göre belirlenir.
@@ -272,6 +274,8 @@ Modlar:
 > **Not:** High/Ultra presetlerinde `checkpointEveryRounds` > 0 ise engine `server/data/research-checkpoints/{jobId}.json` dosyasına checkpoint yazar; aynı job yeniden başlarsa notebook, budget, round ve kaynak haritasından resume eder. Başarılı tamamlamada checkpoint silinir. Sunucu restart sonrası kalan checkpoint dosyaları otomatik recover edilir. `POST /research-jobs/:id/pause` ve `POST /research-jobs/:id/resume` endpoint'leri High/Ultra job kontrolü içindir.
 
 > **Not:** Cevap modelin kendi `toolCallingRound` yanıtından gelir ve non-streaming `callLLM` ile alınır; tek bir `{ type: 'token', text }` olayı olarak gönderilir. Eski "synthesis" ve "synthesis-fallback" fazları (ve `SYNTHESIS_PROMPT`) kaldırılmıştır.
+
+> **Önemli — finalContext ayrı SSE event'i:** LLM konuşma geçmişi (`finalContext`) büyük olabileceği (50KB+) için `done` SSE event'i için browser EventSource'da silent drop'u önlemek amacıyla **ayrı bir `context` SSE event'i** olarak gönderilir (`engine.ts`). Sıralama: `context` (büyük payload) → `done`/`error` (küçük). `context` event'i düşse bile message completion etkilenmez. `makeFinalContextJson(messages)` modül seviyesi helper fonksiyonu tüm call site'larda kullanılır. `finalContext`'e yeni alan eklenmesi gerekiyorsa `makeFinalContextJson` güncellenmelidir.
 
 ### 5.2. LLM Yönlendirme (`server/src/llm.ts`)
 

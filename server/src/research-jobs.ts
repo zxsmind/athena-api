@@ -29,6 +29,7 @@ export type ResearchJobEvent =
   | { type: 'progress'; data: import('./engine/types.js').ResearchProgressState; timestamp: string }
   | { type: 'token'; text: string; timestamp: string }
   | { type: 'sources'; sources: Source[]; timestamp: string }
+  | { type: 'context'; finalContext: string; timestamp: string }
   | { type: 'done'; response: SearchResponse; timestamp: string }
   | { type: 'error'; message: string; finalContext?: string; timestamp: string };
 
@@ -167,7 +168,7 @@ export function markResearchJobFailed(id: string, message: string, finalContext?
   if (!job) return undefined;
   job.status = job.cancelled ? 'cancelled' : 'failed';
   job.error = message;
-  job.finalContext = finalContext;
+  if (finalContext !== undefined) job.finalContext = finalContext;
   job.finishedAt = nowIso();
   pushEvent(job, { type: 'error', message, finalContext, timestamp: nowIso() });
   notify(id);
@@ -182,6 +183,14 @@ export function setResearchJobStatus(id: string, status: ResearchJobStatus, deta
   job.status = status;
   pushEvent(job, { type: 'status', status, detail, timestamp: nowIso() });
   notify(id);
+  return job;
+}
+
+export function setResearchJobFinalContext(id: string, finalContext: string): ResearchJobRecord | undefined {
+  const job = jobs.get(id);
+  if (!job) return undefined;
+  job.finalContext = finalContext;
+  job.updatedAt = nowIso();
   return job;
 }
 

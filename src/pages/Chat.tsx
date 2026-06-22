@@ -9,7 +9,7 @@ import DiagramOverlay from '../components/DiagramOverlay';
 import CitationTooltip from '../components/CitationTooltip';
 import SourcesPanel from '../components/chat/SourcesPanel';
 import { MessageUser, MessageLoading, MessageError, MessageComplete, MessageSearches } from '../components/chat/MessageComponents';
-import { search, subscribeToJobEvents, fetchMessages, saveMessages, pauseResearchJob, resumeResearchJob, updateConversationResearch, type ConversationMeta, type DeepDepth, type Message, type SearchMode, type Source, type SearchResponse, type ResearchJobStatus } from '../lib/api';
+import { search, subscribeToJobEvents, fetchMessages, saveMessages, pauseResearchJob, resumeResearchJob, updateConversationResearch, BASE, type ConversationMeta, type DeepDepth, type Message, type SearchMode, type Source, type SearchResponse, type ResearchJobStatus } from '../lib/api';
 
 type Conversation = Omit<ConversationMeta, 'timestamp'> & { timestamp: Date };
 import { setDefaultDepth, setDefaultMode } from '../hooks/useDefaultMode';
@@ -90,7 +90,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
 
   useEffect(() => {
     if (!modalOpen) return;
-    fetch('/api/settings').then(r => r.json()).then(d => {
+    fetch(`${BASE}/settings`).then(r => r.json()).then(d => {
       setDebugContextEnabled(d.showDebugContext ?? false);
     }).catch(() => {});
   }, [modalOpen]);
@@ -463,6 +463,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     const searchStart = Date.now();
 
     let accumulatedAnswer = '';
+    let pendingFinalContext: string | undefined;
 
     const flushRef = { current: undefined as ReturnType<typeof setTimeout> | undefined };
     const doFlush = () => {
@@ -567,6 +568,10 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
               return updated;
             });
           },
+          onContext: (finalContext) => {
+            if (isStale()) return;
+            pendingFinalContext = finalContext;
+          },
           onStatus: (status: ResearchJobStatus) => {
             if (isStale()) return;
             if (status === 'paused') {
@@ -627,7 +632,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
                   }
                   return s;
                 });
-                updated[updated.length - 1] = { ...last, searches, type: 'assistant', content: response.answer, data: response, loading: false, streaming: false, timerMs: response.elapsed_ms };
+                updated[updated.length - 1] = { ...last, searches, type: 'assistant', content: response.answer, data: { ...response, finalContext: pendingFinalContext || response.finalContext }, loading: false, streaming: false, timerMs: response.elapsed_ms };
               }
               return updated;
             });
@@ -649,7 +654,8 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
               const updated = [...prev];
               const last = updated[updated.length - 1];
               if (last?.type === 'assistant') {
-                updated[updated.length - 1] = { ...last, error: message, loading: false, timerMs: elapsed, data: last.data ? { ...last.data, finalContext } : finalContext ? { query: '', answer: '', sources: [], steps: [], results_count: 0, elapsed_ms: 0, finalContext } : undefined };
+                const ctx = pendingFinalContext || finalContext;
+                updated[updated.length - 1] = { ...last, error: message, loading: false, timerMs: elapsed, data: last.data ? { ...last.data, finalContext: ctx } : ctx ? { query: '', answer: '', sources: [], steps: [], results_count: 0, elapsed_ms: 0, finalContext: ctx } : undefined };
               }
               return updated;
             });

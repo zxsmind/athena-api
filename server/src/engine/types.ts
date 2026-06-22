@@ -29,6 +29,7 @@ export type EngineEvent =
   | { type: 'step'; data: import('../schemas.js').AgentStep }
   | { type: 'token'; text: string }
   | { type: 'sources'; sources: import('../schemas.js').Source[] }
+  | { type: 'context'; finalContext: string }
   | { type: 'done'; response: import('../schemas.js').SearchResponse }
   | { type: 'error'; message: string; finalContext?: string };
 

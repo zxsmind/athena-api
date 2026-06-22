@@ -24,6 +24,7 @@ import {
   pauseResearchJob,
   resumeResearchJob,
   registerRecoveredJob,
+  setResearchJobFinalContext,
   setResearchJobStatus,
   setResearchJobRuntime,
   subscribeResearchJob,
@@ -389,7 +390,7 @@ async function syncResearchJobToConversation(job: ResearchJobRecord): Promise<vo
     msgs[msgs.length - 1] = {
       type: 'assistant',
       content: job.result.answer,
-      data: job.result,
+      data: { ...job.result, finalContext: job.finalContext || job.result.finalContext },
       loading: false,
     };
   } else if (job.status === 'failed' && job.error) {
@@ -438,6 +439,10 @@ async function runResearchJob(jobId: string) {
             break;
           case 'sources':
             appendResearchJobEvent(jobId, { type: 'sources', sources: event.sources, timestamp: new Date().toISOString() });
+            break;
+          case 'context':
+            appendResearchJobEvent(jobId, { type: 'context', finalContext: event.finalContext, timestamp: new Date().toISOString() });
+            setResearchJobFinalContext(jobId, event.finalContext);
             break;
           case 'done':
             markResearchJobDone(jobId, event.response);
