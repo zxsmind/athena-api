@@ -15,7 +15,8 @@
     "@mindbox/smart-routing-core": "file:../smart-routing-core",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "pdf-parse": "^2.4.5"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

@@ -139,6 +139,26 @@ export async function fetchPageContent(
       };
     }
 
+    const contentType = res.headers.get('content-type') || '';
+    const isPdf = contentType.includes('application/pdf') || url.toLowerCase().match(/\.pdf($|[?#])/);
+    if (isPdf) {
+      try {
+        const { PDFParse } = await import('pdf-parse');
+        const ab = await res.arrayBuffer();
+        const u8 = new Uint8Array(ab);
+        const parser = new PDFParse(u8);
+        const data = await parser.getText();
+        const text = (data?.text || '').trim();
+        return { title: url, content: text.slice(0, 8000) || '[PDF text was empty]' };
+      } catch (pdfErr: unknown) {
+        return {
+          title: url,
+          content: '',
+          error: `PDF parse failed: ${(pdfErr as Error).message}`,
+        };
+      }
+    }
+
     const html = await res.text();
     const title = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || url;
     const text = html

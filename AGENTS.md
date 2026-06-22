@@ -262,14 +262,12 @@ npm test             # smart-routing-core/ dizininde
 5. **Model Cevabı**: Model `tool_calls` döndürmezse (content ile cevap verirse), bu cevap doğrudan kullanıcıya `{ type: 'token', text }` + `{ type: 'done' }` olaylarıyla iletilir. **Ayrı bir "synthesis" veya "synthesis-fallback" fazı YOKTUR.**
 
 Modlar:
-- **quick**: Kullanıcıya "Instant" olarak gösterilir. Dahili model rolü `instant`. Max 3 tur, bütçe 6 kredi.
-- **deep**: Dahili model rolü `deep`. `depth` alanı ile `low`, `med`, `high`, `ultra` presetlerinden biri seçilir. Eski deep çağrıları `med` kabul edilir. Varsayılan presetler: low 20 kredi/5 tur, med 35 kredi/8 tur, high 50 kredi/13 tur, ultra 100 kredi/30 tur. Preset snapshot job/batch kaydına yazılır ve çalışan iş ayar değişikliklerinden etkilenmez.
-
-> **Önemli — Tur Hesaplaması:** Derin araştırma modlarında `maxRounds` (tur sınırı) yalnızca **gerçek araştırma işlemleri** (arama ve fetch) yapıldığında artar. `write_notebook` ve `read_notebook` gibi meta-araç çağrıları araştırma turu bütçesini tüketmez. Ayrıca, notebook işlemlerinin kısır döngüye girmesini önlemek için `maxTotalTurns` adında bir güvenlik sınırı bulunur (varsayılan: `Math.max(50, maxRounds * 3)`). Tur sınırı aşıldığında veya bütçe bittiğinde arama/fetch araçları kapatılır ve modelin sadece `write_notebook` yapmasına ve cevabı tamamlamasına izin verilir.
+- **quick**: Kullanıcıya "Instant" olarak gösterilir. Dahili model rolü `instant`. Bütçe 6 kredi, sadece bütçe bitince araştırma durur.
+- **deep**: Dahili model rolü `deep`. `depth` alanı ile `low`, `med`, `high`, `ultra` presetlerinden biri seçilir. Eski deep çağrıları `med` kabul edilir. Varsayılan presetler: low 20 kredi, med 35 kredi, high 50 kredi, ultra 100 kredi. Preset snapshot job/batch kaydına yazılır ve çalışan iş ayar değişikliklerinden etkilenmez. Araştırma sadece bütçe ile sınırlanır; round/tur limiti yoktur (güvenlik amaçlı 200 total turn üst sınırı vardır, pratikte asla tetiklenmez).
 
 > **Not:** `callLLM` ve `callLLMStream` artık `smart-routing-bridge.ts` üzerinden skor tabanlı rota seçimi yapar. Eski linear fallback döngüsü (primary→fallback→tüm provider'lar) kaldırılmıştır. `llm-utils.ts`'deki `resolveTargets`, `resolveRoleTargetReferences`, `iterateProviderReferences`, `modelSupportsTools` ve `learnedNoToolCalling` fonksiyonları temizlenmiştir. Tool calling desteği olmayan modeller smart routing tarafından transient-failure olarak işaretlenir.
 
-> **Dikkat:** Ayarlarda bulunan `general.deepIterations` ve `research.maxFollowUpQueries` alanları şu anda `engine.ts` içinde aktif olarak kullanılmıyor. Deep mod tur sayısı `engine/depth-presets.ts` presetlerinden gelir; follow-up limiti bütçe, tur sayısı ve per-round search/fetch limitleri tarafından dolaylı olarak sınırlanır. Bu ayarları devreye sokacak bir değişiklik yapmadan önce bu dokümanı ve ilgili kodu güncelleyin.
+> **Dikkat:** Ayarlarda bulunan `general.deepIterations` ve `research.maxFollowUpQueries` alanları şu anda `engine.ts` içinde aktif olarak kullanılmıyor. Follow-up limiti sadece bütçe tarafından dolaylı olarak sınırlanır. Bu ayarları devreye sokacak bir değişiklik yapmadan önce bu dokümanı ve ilgili kodu güncelleyin.
 
 > **Not:** Deep modda `write_notebook` (Markdown append) ve `read_notebook` tool'ları aktiftir. Notebook `server/data/notebooks/{id}.md` dosyasına yazılır; context'e truncate edilmiş working view enjekte edilir. Raw search/fetch payload'ları notebook yazımından sonra kompaktlanır. Notebook cadence eşiği depth presetine göre belirlenir.
 

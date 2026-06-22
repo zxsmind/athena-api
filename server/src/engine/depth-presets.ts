@@ -120,10 +120,13 @@ export function resolveResearchPreset(
     ? { ...baseDefaults, depth: normalizedDepth, ...settingsOverride }
     : baseDefaults;
   const legacyLimit = Math.max(1, settings.research.maxCreditsPerQuery || base.budgetCredits);
+  const finalBudget = Math.max(base.budgetCredits, legacyLimit);
+  const finalMaxRounds = Math.max(base.maxRounds, Math.ceil(finalBudget / 2));
   return {
     ...base,
     mode,
-    budgetCredits: Math.max(base.budgetCredits, legacyLimit),
+    maxRounds: finalMaxRounds,
+    budgetCredits: finalBudget,
   };
 }
 
@@ -132,7 +135,7 @@ export function depthBehaviorBlock(preset: ResolvedResearchPreset): string {
 
   const lines = [
     `**Depth profile:** Deep ${preset.depth.toUpperCase()}.`,
-    `- Research budget: ${preset.budgetCredits} search/fetch credits across up to ${preset.maxRounds} rounds.`,
+    `- Research budget: ${preset.budgetCredits} search/fetch credits.`,
     `- Notebook cadence: write the notebook when ${preset.notebookCadenceRawBlocks} raw evidence block(s) are still uncompacted.`,
     `- Per round target: no more than ${preset.maxSearchesPerRound} searches and ${preset.maxFetchesPerRound} fetches unless a critical gap requires it.`,
     `- Key claims should have at least ${preset.minIndependentSourcesForKeyClaims} independent supporting source(s) when available.`,

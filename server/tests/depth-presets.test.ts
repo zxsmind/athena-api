@@ -75,11 +75,9 @@ describe('depth-presets', () => {
   it('resolves deep depth budgets and rounds', () => {
     const settings = minimalSettings();
     expect(resolveResearchPreset('deep', 'low', settings).budgetCredits).toBe(35);
-    expect(resolveResearchPreset('deep', 'low', settings).maxRounds).toBe(5);
     expect(resolveResearchPreset('deep', 'med', settings).budgetCredits).toBe(35);
     expect(resolveResearchPreset('deep', 'high', settings).budgetCredits).toBe(50);
     expect(resolveResearchPreset('deep', 'ultra', settings).budgetCredits).toBe(100);
-    expect(resolveResearchPreset('deep', 'ultra', settings).maxRounds).toBe(30);
   });
 
   it('defaults deep without depth to med', () => {
@@ -95,7 +93,6 @@ describe('depth-presets', () => {
     settings.researchDepths.presets.low.maxRounds = 6;
     const preset = resolveResearchPreset('deep', 'low', settings);
     expect(preset.budgetCredits).toBe(25);
-    expect(preset.maxRounds).toBe(6);
   });
 });
 
