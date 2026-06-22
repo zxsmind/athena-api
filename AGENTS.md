@@ -491,6 +491,7 @@ Script otomatik olarak:
 - Tüm sistem promptları `server/src/agent/prompts.ts` içindedir.
 - `SYSTEM_PROMPT`, `DEEP_SYSTEM_PROMPT` (eski `SYNTHESIS_PROMPT` kaldırıldı).
 - Prompt değişikliği yapıldığında hem quick hem deep modda test edilmelidir; citation formatı bozulmamalıdır.
+- **Anti-pes-etme kuralı (DEEP_SYSTEM_PROMPT point 7 + Final answer readiness):** Model, bir kaynağın erişilemez olması (PDF, paywall, login wall, JS-rendered, kullanılamaz içerik) durumunda gap'i "unresolvable" ilan edemez. En az bir alternatif kaynak kategorisi (secondary reporting, mirror, aggregator, arşiv, forum) denenmeden gap kapatılamaz. "Final answer readiness" şartlarında "unresolvable" ancak en az iki farklı kaynak stratejisi denendikten sonra geçerlidir; hangi stratejilerin denendiği notebook'a kaydedilir. Bu kural konudan bağımsızdır; herhangi bir query için geçerlidir. Wordlist/spesifik kaynak önerme yoktur.
 
 ### 8.5. Frontend CSS / Tema Değişikliği
 
