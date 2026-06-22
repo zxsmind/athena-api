@@ -5,7 +5,7 @@ import { Globe, FileText, Cpu, Sparkles, Search, X, ExternalLink, ChevronDown, C
 export interface ResearchActivityMeta {
   depth?: DeepDepth;
   budget?: { used: number; limit: number; remaining?: number };
-  notebook?: { entries: number; updatedAt: string; openQuestions?: number };
+  notebook?: { updates: number; updatedAt: string };
 }
 
 interface ActivityModalProps {
@@ -272,10 +272,7 @@ export default function ActivityModal({ open, onClose, steps, sources, finalCont
               <SummaryChip icon={<Cpu size={10} />} label={`${researchMeta.budget.used}/${researchMeta.budget.limit} credits`} />
             )}
             {researchMeta?.notebook && (
-              <SummaryChip icon={<FileText size={10} />} label={`${researchMeta.notebook.entries} notebook entries`} />
-            )}
-            {typeof researchMeta?.notebook?.openQuestions === 'number' && researchMeta.notebook.openQuestions > 0 && (
-              <SummaryChip icon={<Search size={10} />} label={`${researchMeta.notebook.openQuestions} open questions`} />
+              <SummaryChip icon={<FileText size={10} />} label={`${researchMeta.notebook.updates} notebook update(s)`} />
             )}
           </div>
 

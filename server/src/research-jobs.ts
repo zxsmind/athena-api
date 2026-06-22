@@ -10,7 +10,7 @@ export interface ResearchJobRuntime {
   remainingCredits: number;
   round: number;
   notebookId?: string;
-  openQuestionsCount?: number;
+  notebookUpdates?: number;
   sourceMap?: import('./engine/types.js').SourceWithIndex[];
 }
 

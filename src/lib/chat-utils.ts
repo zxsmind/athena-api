@@ -80,9 +80,8 @@ export function mergeResearchProgress(
       ? {
           id: state.notebookId,
           path: base.research_notebook?.path ?? '',
-          entries: state.notebookEntries ?? base.research_notebook?.entries ?? 0,
+          updates: state.notebookUpdates ?? base.research_notebook?.updates ?? 0,
           updatedAt: base.research_notebook?.updatedAt ?? new Date().toISOString(),
-          openQuestions: state.openQuestionsCount,
         }
       : base.research_notebook,
   };

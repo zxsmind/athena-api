@@ -48,7 +48,7 @@ export interface SearchResponse {
   research_notebook?: {
     id: string;
     path: string;
-    entries: number;
+    updates: number;
     updatedAt: string;
   };
   research_depth?: import('./engine/depth-presets.js').DeepDepth;

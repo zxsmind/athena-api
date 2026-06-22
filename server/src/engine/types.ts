@@ -8,8 +8,7 @@ export interface ResearchProgressState extends ResearchBudgetState {
   round?: number;
   depth?: import('./depth-presets.js').DeepDepth;
   notebookId?: string;
-  notebookEntries?: number;
-  openQuestionsCount?: number;
+  notebookUpdates?: number;
   sourceMap?: SourceWithIndex[];
 }
 

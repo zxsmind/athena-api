@@ -144,10 +144,10 @@ event: token
 data: {"type":"token","text":"Partial answer text...","timestamp":"..."}
 
 event: progress
-data: {"type":"progress","data":{"usedCredits":3,"remainingCredits":32,"exhausted":false,"round":2,"depth":"med","notebookId":"...","notebookEntries":1,"openQuestionsCount":2},"timestamp":"..."}
+data: {"type":"progress","data":{"usedCredits":3,"remainingCredits":32,"exhausted":false,"round":2,"depth":"med","notebookId":"...","notebookUpdates":1},"timestamp":"..."}
 
 event: done
-data: {"type":"done","response":{"query":"...","answer":"...","sources":[...],"steps":[...],"results_count":5,"elapsed_ms":4230,"research_budget":{"used":3,"limit":35,"exhausted":false},"research_depth":"med","research_notebook":{"id":"...","path":"...","entries":2,"updatedAt":"..."}},"timestamp":"..."}
+data: {"type":"done","response":{"query":"...","answer":"...","sources":[...],"steps":[...],"results_count":5,"elapsed_ms":4230,"research_budget":{"used":3,"limit":35,"exhausted":false},"research_depth":"med","research_notebook":{"id":"...","path":"...","updates":2,"updatedAt":"..."}},"timestamp":"..."}
 
 event: error
 data: {"type":"error","message":"Provider unavailable","timestamp":"..."}
@@ -714,7 +714,7 @@ interface SearchResponse {
   research_notebook?: {
     id: string;
     path: string;
-    entries: number;
+    updates: number;
     updatedAt: string;
   };
 }

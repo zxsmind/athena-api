@@ -1093,9 +1093,8 @@ autoFocus
                 remaining: modalMsg.data.research_budget.limit - modalMsg.data.research_budget.used,
               } : undefined,
               notebook: modalMsg.data.research_notebook ? {
-                entries: modalMsg.data.research_notebook.entries,
+                updates: modalMsg.data.research_notebook.updates,
                 updatedAt: modalMsg.data.research_notebook.updatedAt,
-                openQuestions: modalMsg.data.research_notebook.openQuestions,
               } : undefined,
             } : undefined}
           />

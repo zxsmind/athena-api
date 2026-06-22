@@ -80,7 +80,7 @@ Bu paket, LLM çağrılarında birden fazla provider/key/model kombinasyonu aras
 - **Araştırma işleri (jobs)**: Bellek içi (in-memory), sunucu yeniden başlayınca silinir.
 - **Araştırma toplu işleri (batches)**: Bellek içi.
 - **Ayarlar**: `server/data/settings.json` (v2 şema), `settings-store.ts` tarafından yüklenir ve normalize edilir.
-- **Deep research notebook'ları**: `server/data/notebooks/*.json` altında tutulur. Deep modda model `write_notebook` tool'u ile araştırma notlarını kalıcı hale getirir; notebook yazıldıktan sonra ilgili raw search/fetch payload'ları aktif LLM context'inde kompaktlanır. `open_questions` / `next_actions` **merge** edilir (replace değil); tamamlanan maddeler `resolved_questions` / `resolved_next_actions` ile kaldırılır.
+- **Deep research notebook'ları**: `server/data/notebooks/{id}.md` altında Markdown olarak tutulur; engine metadata `{id}.meta.json` sidecar dosyasında (model yazmaz). Deep modda model `write_notebook` ile Markdown append eder, `read_notebook` ile (gerekirse) tam/önceki bölümleri okur. Context'e notebook son kısmı en fazla ~10KB olarak enjekte edilir; notebook yazıldıktan sonra raw search/fetch payload'ları kompaktlanır. Eski `{id}.json` notebook'lar ilk yüklemede otomatik `.md`'ye migrate edilir.
 - **Research ledger (bellek içi)**: Deep modda `engine/research-ledger.ts` her job için tamamlanan arama/sorgu ve fetch geçmişini tutar; LLM context compaction'dan bağımsızdır. Normalize edilmiş sorgu dedup ile tekrarlayan `web_search` / `fetch_url` çağrıları kredi harcamadan atlanır. Ledger + notebook her tur system context'e enjekte edilir.
 - **Gemini provider**: Artık **native REST API** kullanır (`/v1beta/models/{model}:generateContent`), OpenAI-compatible endpoint değil. Auth `x-goog-api-key` header ile yapılır. İstek gövdesi `convertToGeminiBody()` ile OpenAI formatından Gemini native formatına çevrilir. Varsayılan URL: `https://generativelanguage.googleapis.com/v1beta`.
 
@@ -135,7 +135,7 @@ ATHENA-001/
 │   │   ├── engine/cooldown.ts    # Deep mod dynamic cooldown (depth preset pacing)
 │   │   ├── engine/rate-signals.ts # LLM 429 / Retry-After sinyalleri (smart-routing yerine hafif cooldown beslemesi)
 │   │   ├── engine/checkpoint.ts  # High/Ultra job checkpoint save/load (disk)
-│   │   ├── engine/notebook.ts    # Deep research notebook tool'u, disk persistence, merge semantics ve context compaction desteği
+│   │   ├── engine/notebook.ts    # Deep research Markdown notebook (append/read tools, 10KB context cap, legacy JSON migrate)
 │   │   ├── engine/research-ledger.ts # Deep mod query/fetch dedup, ledger context block, compaction notları
 │   │   ├── research-jobs.ts      # Uzun süren işlerin in-memory yönetimi
 │   │   ├── research-batches.ts     # Toplu araştırma işlerinin yönetimi
@@ -263,7 +263,7 @@ Modlar:
 
 > **Dikkat:** Ayarlarda bulunan `general.deepIterations` ve `research.maxFollowUpQueries` alanları şu anda `engine.ts` içinde aktif olarak kullanılmıyor. Deep mod tur sayısı `engine/depth-presets.ts` presetlerinden gelir; follow-up limiti bütçe, tur sayısı ve per-round search/fetch limitleri tarafından dolaylı olarak sınırlanır. Bu ayarları devreye sokacak bir değişiklik yapmadan önce bu dokümanı ve ilgili kodu güncelleyin.
 
-> **Not:** Deep modda `write_notebook` tool'u aktiftir. Notebook yazımı `server/data/notebooks/*.json` dosyasına kalıcı not ekler; son notebook yazımından beri context'te duran raw search/fetch payload'ları kompaktlanır. `open_questions`, `next_actions` ve `claims` merge edilir; `resolved_questions` / `resolved_next_actions` ile kuyruk temizlenir. Notebook cadence eşiği depth presetine göre belirlenir. Uncompacted raw block sayısı eşiğe ulaştığında engine soft system mesajı ile önce `write_notebook` önerir (final cevap reddedilmez).
+> **Not:** Deep modda `write_notebook` (Markdown append) ve `read_notebook` tool'ları aktiftir. Notebook `server/data/notebooks/{id}.md` dosyasına yazılır; context'e truncate edilmiş working view enjekte edilir. Raw search/fetch payload'ları notebook yazımından sonra kompaktlanır. Notebook cadence eşiği depth presetine göre belirlenir.
 
 > **Not:** Deep modda `engine/research-ledger.ts` bellek içi bir ledger tutar (checkpoint resume'da sıfırlanır). Tamamlanan arama/fetch kayıtları normalize query/URL ile dedup edilir; duplicate tool call'lar kredi harcamadan reddedilir. Her LLM turunda ledger + notebook system context'e eklenir. Bütçe tükendiğinde model'e yapılandırılmış "cevap yaz" rehberi gönderilir (boşluk doldurma teşviki yok).
 

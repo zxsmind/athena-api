@@ -37,9 +37,8 @@ export interface SearchResponse {
   research_notebook?: {
     id: string;
     path: string;
-    entries: number;
+    updates: number;
     updatedAt: string;
-    openQuestions?: number;
   };
 }
 
@@ -50,8 +49,7 @@ export interface ResearchProgressState {
   round?: number;
   depth?: DeepDepth;
   notebookId?: string;
-  notebookEntries?: number;
-  openQuestionsCount?: number;
+  notebookUpdates?: number;
 }
 
 export interface Message {

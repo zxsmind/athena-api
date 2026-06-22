@@ -459,7 +459,7 @@ async function runResearchJob(jobId: string) {
             remainingCredits: state.remainingCredits,
             round: state.round ?? 0,
             notebookId: state.notebookId,
-            openQuestionsCount: state.openQuestionsCount,
+            notebookUpdates: state.notebookUpdates,
             sourceMap: state.sourceMap,
           });
           appendResearchJobEvent(jobId, {

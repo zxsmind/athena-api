@@ -117,7 +117,7 @@ export function ledgerContextBlock(ledger: ResearchLedger): string {
 
 export function compactedEvidenceNote(notebookId: string, snippetPreview: string): string {
   const preview = snippetPreview.trim().slice(0, 400);
-  return `[Raw search/fetch payload compacted into notebook ${notebookId}. Evidence preserved in notebook + research ledger.${preview ? ` Preview: ${preview}${snippetPreview.length > 400 ? '…' : ''}` : ''} Continue from notebook open_questions and next_actions — do not repeat ledger queries.]`;
+  return `[Raw search/fetch payload compacted into notebook ${notebookId}. Evidence preserved in notebook + research ledger.${preview ? ` Preview: ${preview}${snippetPreview.length > 400 ? '…' : ''}` : ''} Continue from the notebook and ledger — do not repeat completed searches.]`;
 }
 
 export function extractSourceUrlsFromToolContent(content: string): string[] {
