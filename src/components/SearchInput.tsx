@@ -1,11 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Search, ArrowUp, X } from 'lucide-react';
 import ModeDropdown from './ModeDropdown';
+import type { ResearchModeValue } from './ModeDropdown';
+import type { DeepDepth, SearchMode } from '../lib/api';
 
 interface SearchInputProps {
-  onSubmit: (query: string, mode?: 'quick' | 'deep') => void;
+  onSubmit: (query: string, mode?: SearchMode, depth?: DeepDepth) => void;
   initialValue?: string;
-  initialMode?: 'quick' | 'deep';
+  initialMode?: SearchMode;
+  initialDepth?: DeepDepth;
   compact?: boolean;
   autoFocus?: boolean;
   dropdownUp?: boolean;
@@ -104,6 +107,7 @@ export default function SearchInput({
   onSubmit,
   initialValue = '',
   initialMode = 'quick',
+  initialDepth = 'med',
   compact = false,
   autoFocus = false,
   dropdownUp = false,
@@ -113,7 +117,7 @@ export default function SearchInput({
   const [value, setValue] = useState(initialValue);
   const [focused, setFocused] = useState(false);
   const [activeIdx, setActiveIdx] = useState(-1);
-  const [deepMode, setDeepMode] = useState(initialMode === 'deep');
+  const [modeValue, setModeValue] = useState<ResearchModeValue>(initialMode === 'deep' ? `deep-${initialDepth}` : 'instant');
   const inputRef = useRef<HTMLInputElement>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const suggestions = useAutocomplete(value);
@@ -124,10 +128,6 @@ export default function SearchInput({
       return () => clearTimeout(timer);
     }
   }, [autoFocus]);
-
-  useEffect(() => {
-    setDeepMode(initialMode === 'deep');
-  }, [initialMode]);
 
   const safeIdx = (() => {
     if (suggestions.length === 0) return -1;
@@ -161,13 +161,14 @@ export default function SearchInput({
       if (disabled) return;
       const query = (q ?? value).trim();
       if (!query) return;
-      onSubmit(query, deepMode ? 'deep' : undefined);
+      const depth = modeValue.startsWith('deep-') ? modeValue.slice(5) as DeepDepth : undefined;
+      onSubmit(query, depth ? 'deep' : 'quick', depth);
       setValue('');
       setActiveIdx(-1);
       setFocused(false);
       inputRef.current?.blur();
     },
-    [value, deepMode, onSubmit, disabled]
+    [value, modeValue, onSubmit, disabled]
   );
 
   const handleKeyDown = useCallback(
@@ -198,6 +199,8 @@ export default function SearchInput({
 
   const showSuggestions = focused && value.trim().length >= 2 && suggestions.length > 0;
   const displayIdx = safeIdx >= 0 ? safeIdx : 0;
+
+  const showLongRunWarning = modeValue === 'deep-high' || modeValue === 'deep-ultra';
 
   return (
     <div style={{ position: 'relative', width: '100%' }}>
@@ -270,7 +273,7 @@ export default function SearchInput({
           </button>
         )}
 
-        <ModeDropdown value={deepMode ? 'deep' : 'instant'} setDeepMode={setDeepMode} />
+        <ModeDropdown value={modeValue} onChange={setModeValue} />
 
         <button onClick={() => handleSubmit()} disabled={!value.trim() || disabled}
           style={{
@@ -289,6 +292,18 @@ export default function SearchInput({
           <ArrowUp size={compact ? 13 : 14} strokeWidth={2.5} />
         </button>
       </div>
+      {showLongRunWarning && (
+        <div style={{
+          marginTop: 8, padding: '8px 12px', borderRadius: 10,
+          border: '0.5px solid rgba(var(--athena-accent-rgb), 0.2)',
+          background: 'rgba(var(--athena-accent-rgb), 0.04)',
+          fontSize: 10.5, lineHeight: 1.45, color: 'var(--athena-text-2)',
+        }}>
+          {modeValue === 'deep-ultra'
+            ? 'Ultra research may run for hours with heavy API usage. The job runs in the background, is cancelable, and builds a durable research notebook.'
+            : 'High research may run 30 minutes to 1 hour with elevated API usage. Cancel anytime; results use notebook-backed verification.'}
+        </div>
+      )}
     </div>
   );
 }

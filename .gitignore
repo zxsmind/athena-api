@@ -26,6 +26,8 @@ dist-ssr
 # Runtime data (auto-generated, not committed)
 server/data/db.json
 server/data/settings.json
+server/data/notebooks/
+server/data/research-checkpoints/
 
 *.err
 *.png

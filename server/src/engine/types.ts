@@ -4,10 +4,22 @@ export interface ResearchBudgetState {
   exhausted: boolean;
 }
 
+export interface ResearchProgressState extends ResearchBudgetState {
+  round?: number;
+  depth?: import('./depth-presets.js').DeepDepth;
+  notebookId?: string;
+  notebookEntries?: number;
+  openQuestionsCount?: number;
+  sourceMap?: SourceWithIndex[];
+}
+
 export interface ResearchRunOptions {
   budget?: Partial<ResearchBudgetState>;
-  onProgress?: (state: ResearchBudgetState) => void;
+  onProgress?: (state: ResearchProgressState) => void;
   signal?: AbortSignal;
+  depth?: import('./depth-presets.js').DeepDepth;
+  preset?: import('./depth-presets.js').ResolvedResearchPreset;
+  jobId?: string;
 }
 
 export type SourceWithIndex = import('../schemas.js').Source & { source_index: number };

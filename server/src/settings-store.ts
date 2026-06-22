@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import type { DeepDepth, ResearchDepthPresetConfig } from './engine/depth-presets.js';
+import { DEFAULT_RESEARCH_DEPTH_PRESETS, DEEP_DEPTHS, DEFAULT_DEEP_DEPTH } from './engine/depth-presets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const settingsPath = resolve(__dirname, '..', 'data', 'settings.json');
@@ -45,6 +47,11 @@ export interface ApiSettings {
   defaultMode: 'quick' | 'deep';
 }
 
+export interface ResearchDepthsSettings {
+  defaultDepth: DeepDepth;
+  presets: Record<DeepDepth, ResearchDepthPresetConfig>;
+}
+
 export interface SettingsStore {
   version: number;
   port: number;
@@ -56,6 +63,7 @@ export interface SettingsStore {
     maxCreditsPerQuery: number;
     maxFollowUpQueries: number;
   };
+  researchDepths: ResearchDepthsSettings;
   modelRouting: ModelRouting;
   api: ApiSettings;
   general: {
@@ -97,6 +105,16 @@ const apiDefaults: ApiSettings = {
   defaultMode: 'quick',
 };
 
+function createDefaultResearchDepths(): ResearchDepthsSettings {
+  const presets = {} as Record<DeepDepth, ResearchDepthPresetConfig>;
+  for (const depth of DEEP_DEPTHS) {
+    const { depth: _depthKey, ...config } = DEFAULT_RESEARCH_DEPTH_PRESETS[depth];
+    void _depthKey;
+    presets[depth] = config;
+  }
+  return { defaultDepth: DEFAULT_DEEP_DEPTH, presets };
+}
+
 const defaults: SettingsStore = {
   version: SETTINGS_VERSION,
   port: 3001,
@@ -104,7 +122,7 @@ const defaults: SettingsStore = {
   providerOrder,
   providers: {
     groq: { enabled: false, keys: [], models: [], url: 'https://api.groq.com/openai/v1/chat/completions' },
-    gemini: { enabled: false, keys: [], models: [], url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions' },
+    gemini: { enabled: false, keys: [], models: [], url: 'https://generativelanguage.googleapis.com/v1beta' },
     vercel: { enabled: false, keys: [], models: [], url: '' },
     openrouter: { enabled: false, keys: [], models: [], url: 'https://openrouter.ai/api/v1/chat/completions' },
     custom: { enabled: false, keys: [], models: [], url: '', name: 'custom' },
@@ -114,6 +132,7 @@ const defaults: SettingsStore = {
     maxCreditsPerQuery: 20,
     maxFollowUpQueries: 3,
   },
+  researchDepths: createDefaultResearchDepths(),
   modelRouting: createModelRouting(),
   api: { ...apiDefaults },
   general: { maxSources: 8, deepIterations: 3, thinkingStripPatterns: '', titleModel: '', showDebugContext: false, autocompleteCount: 5 },
@@ -121,6 +140,46 @@ const defaults: SettingsStore = {
 
 function cloneDefaults(): SettingsStore {
   return JSON.parse(JSON.stringify(defaults)) as SettingsStore;
+}
+
+function clampInt(value: unknown, fallback: number, min = 0): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.floor(value));
+}
+
+function normalizeDepthPresetConfig(
+  value: unknown,
+  fallback: ResearchDepthPresetConfig,
+): ResearchDepthPresetConfig {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
+  return {
+    budgetCredits: clampInt(v.budgetCredits, fallback.budgetCredits, 1),
+    maxRounds: clampInt(v.maxRounds, fallback.maxRounds, 1),
+    minCooldownMs: clampInt(v.minCooldownMs, fallback.minCooldownMs, 0),
+    maxCooldownMs: clampInt(v.maxCooldownMs, fallback.maxCooldownMs, 0),
+    notebookCadenceRawBlocks: clampInt(v.notebookCadenceRawBlocks, fallback.notebookCadenceRawBlocks, 1),
+    maxSearchesPerRound: clampInt(v.maxSearchesPerRound, fallback.maxSearchesPerRound, 1),
+    maxFetchesPerRound: clampInt(v.maxFetchesPerRound, fallback.maxFetchesPerRound, 0),
+    minIndependentSourcesForKeyClaims: clampInt(v.minIndependentSourcesForKeyClaims, fallback.minIndependentSourcesForKeyClaims, 1),
+    contradictionPass: typeof v.contradictionPass === 'boolean' ? v.contradictionPass : fallback.contradictionPass,
+    primarySourcePreference: typeof v.primarySourcePreference === 'boolean' ? v.primarySourcePreference : fallback.primarySourcePreference,
+    exhaustiveGapReview: typeof v.exhaustiveGapReview === 'boolean' ? v.exhaustiveGapReview : fallback.exhaustiveGapReview,
+    checkpointEveryRounds: clampInt(v.checkpointEveryRounds, fallback.checkpointEveryRounds, 0),
+  };
+}
+
+function normalizeResearchDepths(raw: unknown): ResearchDepthsSettings {
+  const base = createDefaultResearchDepths();
+  const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const defaultDepth = DEEP_DEPTHS.includes(source.defaultDepth as DeepDepth)
+    ? source.defaultDepth as DeepDepth
+    : base.defaultDepth;
+  const presetsRaw = (source.presets && typeof source.presets === 'object' ? source.presets : {}) as Record<string, unknown>;
+  const presets = {} as Record<DeepDepth, ResearchDepthPresetConfig>;
+  for (const depth of DEEP_DEPTHS) {
+    presets[depth] = normalizeDepthPresetConfig(presetsRaw[depth], base.presets[depth]);
+  }
+  return { defaultDepth, presets };
 }
 
 function normalizeProviderState(id: string, value: Partial<ProviderState> | undefined): ProviderState {
@@ -212,6 +271,7 @@ function normalizeSettings(raw: unknown): SettingsStore {
     maxCreditsPerQuery: typeof researchRaw?.maxCreditsPerQuery === 'number' ? researchRaw.maxCreditsPerQuery as number : merged.research.maxCreditsPerQuery,
     maxFollowUpQueries: typeof researchRaw?.maxFollowUpQueries === 'number' ? researchRaw.maxFollowUpQueries as number : merged.research.maxFollowUpQueries,
   };
+  merged.researchDepths = normalizeResearchDepths(r?.researchDepths);
   merged.general = {
     maxSources: typeof general?.maxSources === 'number' ? general.maxSources as number : merged.general.maxSources,
     deepIterations: typeof general?.deepIterations === 'number' ? general.deepIterations as number : merged.general.deepIterations,

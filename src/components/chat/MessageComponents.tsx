@@ -135,11 +135,14 @@ export function MessageUser({
 }
 
 export function MessageLoading({
-  msg, i, messages, displayMs, onDiagramClick, onOpenModal,
+  msg, i, messages, displayMs, onDiagramClick, onOpenModal, showJobControls, onPause, onResume,
 }: {
   msg: Message; i: number; messages: Message[];
   displayMs: number; onDiagramClick: (svg: string) => void;
   onOpenModal: () => void;
+  showJobControls?: boolean;
+  onPause?: () => void;
+  onResume?: () => void;
 }) {
   return (
     <>
@@ -151,10 +154,20 @@ export function MessageLoading({
       {msg.activeSteps && msg.activeSteps.length > 0 && (
         <StepIndicator step={msg.activeSteps[msg.activeSteps.length - 1]} />
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 10.5, color: 'var(--athena-text-3)', fontVariantNumeric: 'tabular-nums' }}>
-          {formatTime(displayMs)}
+          {msg.paused ? 'Paused' : formatTime(displayMs)}
         </span>
+        {msg.paused && onResume && (
+          <button type="button" onClick={onResume} style={{ fontSize: 10, padding: '3px 8px', borderRadius: 6, border: '0.5px solid var(--athena-border)', background: 'var(--glass-bg)', color: 'var(--athena-text-2)', cursor: 'pointer' }}>
+            Resume
+          </button>
+        )}
+        {!msg.paused && showJobControls && onPause && (
+          <button type="button" onClick={onPause} style={{ fontSize: 10, padding: '3px 8px', borderRadius: 6, border: '0.5px solid var(--athena-border)', background: 'var(--glass-bg)', color: 'var(--athena-text-2)', cursor: 'pointer' }}>
+            Pause
+          </button>
+        )}
         <ActionButton onClick={onOpenModal}><MoreHorizontal size={11} /></ActionButton>
       </div>
     </>

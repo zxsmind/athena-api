@@ -1,6 +1,12 @@
 import { useState } from 'react';
-import type { AgentStep, Source } from '../lib/api';
+import type { AgentStep, Source, DeepDepth } from '../lib/api';
 import { Globe, FileText, Cpu, Sparkles, Search, X, ExternalLink, ChevronDown, ChevronRight } from 'lucide-react';
+
+export interface ResearchActivityMeta {
+  depth?: DeepDepth;
+  budget?: { used: number; limit: number; remaining?: number };
+  notebook?: { entries: number; updatedAt: string; openQuestions?: number };
+}
 
 interface ActivityModalProps {
   open: boolean;
@@ -9,6 +15,7 @@ interface ActivityModalProps {
   sources: Source[];
   finalContext?: string;
   showDebugContext?: boolean;
+  researchMeta?: ResearchActivityMeta;
 }
 
 const STEP_ICONS: Record<string, typeof Globe> = {
@@ -48,6 +55,11 @@ const STEP_LABELS: Record<string, string> = {
   'follow-up': 'Follow-up',
   webpage: 'Page',
   answer: 'Answer',
+  notebook: 'Notebook',
+  verification: 'Verification',
+  cooldown: 'Pacing',
+  budget: 'Budget',
+  checkpoint: 'Checkpoint',
 };
 
 function stepDisplay(step: AgentStep): { icon: string; label: string } {
@@ -167,7 +179,7 @@ function RawContextBlock({ context }: { context: string }) {
   );
 }
 
-export default function ActivityModal({ open, onClose, steps, sources, finalContext, showDebugContext }: ActivityModalProps) {
+export default function ActivityModal({ open, onClose, steps, sources, finalContext, showDebugContext, researchMeta }: ActivityModalProps) {
   if (!open) return null;
 
   const searchSteps = steps.filter(s => s.type.startsWith('search'));
@@ -253,6 +265,18 @@ export default function ActivityModal({ open, onClose, steps, sources, finalCont
               <SummaryChip icon={<FileText size={10} />} label={steps[0].model} />
             )}
             <SummaryChip icon={<Sparkles size={10} />} label={`${sources.length} sources`} />
+            {researchMeta?.depth && (
+              <SummaryChip icon={<FileText size={10} />} label={`Deep ${researchMeta.depth.toUpperCase()}`} />
+            )}
+            {researchMeta?.budget && (
+              <SummaryChip icon={<Cpu size={10} />} label={`${researchMeta.budget.used}/${researchMeta.budget.limit} credits`} />
+            )}
+            {researchMeta?.notebook && (
+              <SummaryChip icon={<FileText size={10} />} label={`${researchMeta.notebook.entries} notebook entries`} />
+            )}
+            {typeof researchMeta?.notebook?.openQuestions === 'number' && researchMeta.notebook.openQuestions > 0 && (
+              <SummaryChip icon={<Search size={10} />} label={`${researchMeta.notebook.openQuestions} open questions`} />
+            )}
           </div>
 
           {/* Timeline */}

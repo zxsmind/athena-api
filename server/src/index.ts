@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getPublicConfig, getPort, getHost } from './config.js';
@@ -8,9 +8,10 @@ import { callLLM, callLLMStream } from './llm.js';
 import { getSettings, saveSettings } from './settings.js';
 import type { SettingsData } from './settings.js';
 import { agenticResearchStream } from './engine.js';
-import type { SearchRequest } from './schemas.js';
+import type { SearchRequest, SearchResponse } from './schemas.js';
 import type { EngineEvent } from './engine.js';
 import { loadSettings } from './settings-store.js';
+import { resolveResearchPreset } from './engine/depth-presets.js';
 import {
   createResearchJob,
   getResearchJob,
@@ -20,13 +21,18 @@ import {
   markResearchJobFailed,
   appendResearchJobEvent,
   cancelResearchJob,
+  pauseResearchJob,
+  resumeResearchJob,
+  registerRecoveredJob,
   setResearchJobStatus,
+  setResearchJobRuntime,
   subscribeResearchJob,
   applyAPISettings as applyJobAPISettings,
   type ResearchJobRequest,
   type ResearchJobStatus,
   type ResearchJobRecord,
 } from './research-jobs.js';
+import { cleanupStaleCheckpoints, listResearchCheckpoints } from './engine/checkpoint.js';
 import {
   createResearchBatch,
   getResearchBatch,
@@ -47,6 +53,7 @@ import {
 import {
   getConversations,
   createConversation,
+  updateConversationResearch,
   getMessages,
   saveMessages,
   updateConversationTitle,
@@ -66,6 +73,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
+
+function normalizeMode(mode: unknown, fallback: 'quick' | 'deep'): 'quick' | 'deep' {
+  return mode === 'deep' || mode === 'quick' ? mode : fallback;
+}
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -97,17 +108,21 @@ app.put('/settings', (req, res) => {
 
 /* â”€â”€ Research jobs â”€â”€ */
 app.post('/research-jobs', async (req, res) => {
-  const { query, history, mode } = req.body as ResearchJobRequest;
+  const { query, history, mode, depth } = req.body as ResearchJobRequest;
   if (!query || !query.trim()) {
     res.status(400).json({ detail: 'Query is required' });
     return;
   }
 
   const settings = loadSettings();
+  const resolvedMode = normalizeMode(mode, settings.api?.defaultMode || 'quick');
+  const preset = resolveResearchPreset(resolvedMode, depth, settings);
   const job = createResearchJob({
     query: query.trim(),
     history,
-    mode: mode || settings.api?.defaultMode || 'quick',
+    mode: resolvedMode,
+    depth: resolvedMode === 'deep' ? preset.depth : undefined,
+    preset,
   });
   runResearchJob(job.id).catch(err => console.error('[research-job]', err));
   res.status(202).json(job);
@@ -142,8 +157,15 @@ function createSSEEndpoint<T extends { events: { type: string }[]; status: strin
 
     const sentEvents = new Set<unknown>();
     const send = (event: string, data: object) => {
+      let payload: string;
       try {
-        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        payload = JSON.stringify(data);
+      } catch (err) {
+        console.error(`[SSE] Failed to serialize ${event} event:`, err);
+        return;
+      }
+      try {
+        res.write(`event: ${event}\ndata: ${payload}\n\n`);
       } catch {
         // Client disconnected.
       }
@@ -166,9 +188,16 @@ function createSSEEndpoint<T extends { events: { type: string }[]; status: strin
     };
 
     flush(record);
-    if (record.status === 'running') {
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+    if (record.status === 'running' || record.status === 'planning' || record.status === 'searching' || record.status === 'reviewing' || record.status === 'synthesizing') {
+      heartbeat = setInterval(() => {
+        try { res.write(': heartbeat\n\n'); } catch { if (heartbeat) clearInterval(heartbeat); }
+      }, 20000);
       const unsubscribe = subscribe(id, flush);
-      req.on('close', unsubscribe);
+      req.on('close', () => {
+        if (heartbeat) clearInterval(heartbeat);
+        unsubscribe();
+      });
     } else {
       resetIdle();
     }
@@ -186,6 +215,25 @@ app.post('/research-jobs/:id/cancel', (req, res) => {
   res.json(job);
 });
 
+app.post('/research-jobs/:id/pause', (req, res) => {
+  const job = pauseResearchJob(req.params.id);
+  if (!job) {
+    res.status(400).json({ detail: 'Job cannot be paused' });
+    return;
+  }
+  res.json(job);
+});
+
+app.post('/research-jobs/:id/resume', (req, res) => {
+  const job = resumeResearchJob(req.params.id);
+  if (!job) {
+    res.status(400).json({ detail: 'Job cannot be resumed' });
+    return;
+  }
+  runResearchJob(job.id).catch(err => console.error('[research-job-resume]', err));
+  res.json(job);
+});
+
 app.get('/research-batches', (_req, res) => {
   const list = listResearchBatches().map(b => {
     return {
@@ -193,6 +241,7 @@ app.get('/research-batches', (_req, res) => {
       queries: b.queries,
       history: b.history,
       mode: b.mode,
+      depth: b.depth,
       maxConcurrent: b.maxConcurrent,
       sharedCredits: b.sharedCredits,
       perItemCredits: b.perItemCredits,
@@ -212,7 +261,7 @@ app.get('/research-batches', (_req, res) => {
 });
 
 app.post('/research-batches', async (req, res) => {
-  const { queries, history, mode, maxConcurrent, sharedCredits, perItemCredits } = req.body as ResearchBatchRequest;
+  const { queries, history, mode, depth, maxConcurrent, sharedCredits, perItemCredits } = req.body as ResearchBatchRequest;
   const normalizedQueries = Array.isArray(queries) ? queries.map(q => String(q).trim()).filter(q => q.length > 0) : [];
   if (normalizedQueries.length === 0) {
     res.status(400).json({ detail: 'queries array is required' });
@@ -220,13 +269,17 @@ app.post('/research-batches', async (req, res) => {
   }
 
   const settings = loadSettings();
+  const resolvedMode = normalizeMode(mode, settings.api?.defaultMode || 'quick');
+  const preset = resolveResearchPreset(resolvedMode, depth, settings);
   const batch = createResearchBatch({
     queries: normalizedQueries,
     history,
-    mode: mode || settings.api?.defaultMode || 'quick',
+    mode: resolvedMode,
+    depth: resolvedMode === 'deep' ? preset.depth : undefined,
+    preset,
     maxConcurrent: maxConcurrent ?? settings.api?.defaultMaxConcurrent ?? 2,
     sharedCredits,
-    perItemCredits,
+    perItemCredits: perItemCredits ?? preset.budgetCredits,
   });
   runResearchBatch(batch.id).catch(err => console.error('[research-batch]', err));
   res.status(202).json(batch);
@@ -259,17 +312,36 @@ app.get('/conversations', async (_req, res) => {
 });
 
 app.post('/conversations', async (req, res) => {
-  const { id, query } = req.body as { id: string; query: string };
+  const { id, query, mode, depth } = req.body as {
+    id: string;
+    query: string;
+    mode?: 'quick' | 'deep';
+    depth?: string;
+  };
   if (!id || !query) {
     res.status(400).json({ detail: 'id and query required' });
     return;
   }
-  await createConversation(id, query);
+  await createConversation(id, query, mode, depth as import('./engine/depth-presets.js').DeepDepth | undefined);
 
   await generateTitle(id, query);
 
   const updatedList = await getConversations();
   res.json(updatedList);
+});
+
+app.put('/conversations/:id/research', async (req, res) => {
+  const { mode, depth } = req.body as { mode?: 'quick' | 'deep'; depth?: string };
+  if (!mode) {
+    res.status(400).json({ detail: 'mode required' });
+    return;
+  }
+  await updateConversationResearch(
+    req.params.id,
+    mode,
+    depth as import('./engine/depth-presets.js').DeepDepth | undefined,
+  );
+  res.json({ ok: true });
 });
 
 async function generateTitle(conversationId: string, query: string) {
@@ -293,9 +365,9 @@ async function generateTitle(conversationId: string, query: string) {
     if (title) {
       await updateConversationTitle(conversationId, title.slice(0, 60));
     }
-  } catch (err: any) {
-    console.error(`[title-gen] failed:`, err?.message || err);
-    console.error(`[title-gen] full error:`, JSON.stringify(err, Object.getOwnPropertyNames(err)));
+  } catch (err: unknown) {
+    console.error(`[title-gen] failed:`, err instanceof Error ? err.message : err);
+    console.error(`[title-gen] full error:`, err instanceof Error ? JSON.stringify(err, Object.getOwnPropertyNames(err)) : String(err));
   }
 }
 
@@ -317,7 +389,7 @@ async function syncResearchJobToConversation(job: ResearchJobRecord): Promise<vo
     msgs[msgs.length - 1] = {
       type: 'assistant',
       content: job.result.answer,
-      data: job.result as any,
+      data: job.result,
       loading: false,
     };
   } else if (job.status === 'failed' && job.error) {
@@ -326,7 +398,7 @@ async function syncResearchJobToConversation(job: ResearchJobRecord): Promise<vo
       content: last.content || '',
       error: job.error,
       loading: false,
-      data: last.data ? { ...last.data, finalContext: job.finalContext } : job.finalContext ? { query: '', answer: '', sources: [], steps: [], results_count: 0, elapsed_ms: 0, finalContext: job.finalContext } as any : undefined,
+      data: last.data ? { ...last.data, finalContext: job.finalContext } : job.finalContext ? { query: '', answer: '', sources: [], steps: [], results_count: 0, elapsed_ms: 0, finalContext: job.finalContext } as SearchResponse : undefined,
     };
   } else if (job.status === 'cancelled') {
     msgs[msgs.length - 1] = {
@@ -378,17 +450,38 @@ async function runResearchJob(jobId: string) {
       job.mode,
       {
         signal: controller.signal,
-        onProgress: () => {},
+        depth: job.depth,
+        preset: job.preset,
+        jobId: job.id,
+        onProgress: (state) => {
+          setResearchJobRuntime(jobId, {
+            usedCredits: state.usedCredits,
+            remainingCredits: state.remainingCredits,
+            round: state.round ?? 0,
+            notebookId: state.notebookId,
+            openQuestionsCount: state.openQuestionsCount,
+            sourceMap: state.sourceMap,
+          });
+          appendResearchJobEvent(jobId, {
+            type: 'progress',
+            data: state,
+            timestamp: new Date().toISOString(),
+          });
+        },
       },
     );
-    await syncResearchJobToConversation(getResearchJob(jobId)!);
-  } catch (err: any) {
+    const after = getResearchJob(jobId);
+    if (!after || after.status === 'paused') return;
+    await syncResearchJobToConversation(after);
+  } catch (err: unknown) {
+    const after = getResearchJob(jobId);
     if (controller.signal.aborted) {
+      if (after?.status === 'paused') return;
       const cancelled = cancelResearchJob(jobId);
       if (cancelled) await syncResearchJobToConversation(cancelled);
       return;
     }
-    markResearchJobFailed(jobId, (err as Error)?.message || 'Research job failed');
+    markResearchJobFailed(jobId, err instanceof Error ? err.message : 'Research job failed');
   }
 
   const finalJob = getResearchJob(jobId);
@@ -404,7 +497,8 @@ async function runResearchBatch(batchId: string) {
   const controller = new AbortController();
   attachResearchBatchController(batchId, controller);
   const settings = loadSettings();
-  const perItemBudget = Math.max(1, batch.perItemCredits || settings.research.maxCreditsPerQuery);
+  const preset = batch.preset ?? resolveResearchPreset(batch.mode, batch.depth, settings);
+  const perItemBudget = Math.max(1, batch.perItemCredits || preset.budgetCredits);
   let sharedRemaining = Math.max(1, batch.sharedCredits || perItemBudget * batch.items.length);
   const pending = [...batch.items];
   const active = new Set<Promise<void>>();
@@ -463,6 +557,8 @@ async function runResearchBatch(batchId: string) {
       batch.mode,
       {
         signal: controller.signal,
+        depth: batch.depth,
+        preset,
         budget: { remainingCredits: allocated },
       },
     );
@@ -549,17 +645,21 @@ app.delete('/conversations/:id', async (req, res) => {
 
 /* ── Search (creates job, returns ID — frontend streams via /research-jobs/:id/events) ── */
 app.post('/search', async (req, res) => {
-  const { query, history, mode, conversationId } = req.body as SearchRequest;
+  const { query, history, mode, depth, conversationId } = req.body as SearchRequest;
   if (!query || !query.trim()) {
     res.status(400).json({ detail: 'Query is required' });
     return;
   }
 
   const settings = loadSettings();
+  const resolvedMode = normalizeMode(mode, settings.api?.defaultMode || 'quick');
+  const preset = resolveResearchPreset(resolvedMode, depth, settings);
   const job = createResearchJob({
     query: query.trim(),
     history,
-    mode: (mode || settings.api?.defaultMode || 'quick') as 'quick' | 'deep',
+    mode: resolvedMode,
+    depth: resolvedMode === 'deep' ? preset.depth : undefined,
+    preset,
     conversationId,
   });
   runResearchJob(job.id).catch(err => console.error('[research-job]', err));
@@ -626,6 +726,26 @@ app.post('/test-llm', async (req, res) => {
 });
 
 applyAPISettingsFromStore();
+
+function recoverInterruptedResearchJobs() {
+  const settings = loadSettings();
+  const maxAgeMs = Math.max(1, settings.api.maxRetentionMinutes) * 60 * 1000;
+  const removed = cleanupStaleCheckpoints(maxAgeMs);
+  if (removed > 0) {
+    console.log(`[checkpoint] removed ${removed} stale checkpoint(s)`);
+  }
+
+  const checkpoints = listResearchCheckpoints();
+  for (const cp of checkpoints) {
+    const existing = getResearchJob(cp.jobId);
+    if (existing && (existing.status === 'running' || existing.status === 'completed')) continue;
+    const job = registerRecoveredJob(cp);
+    console.log(`[checkpoint] recovering job ${job.id} (${cp.depth}, round ${cp.round})`);
+    runResearchJob(job.id).catch(err => console.error('[research-job-recover]', err));
+  }
+}
+
+recoverInterruptedResearchJobs();
 
 // Serve built frontend (if present)
 const publicDir = join(__dirname, 'public');

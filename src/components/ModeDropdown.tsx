@@ -1,20 +1,26 @@
 import Dropdown from './Dropdown';
+import type { DeepDepth } from '../lib/api';
+
+export type ResearchModeValue = 'instant' | `deep-${DeepDepth}`;
 
 interface ModeDropdownProps {
-  value: 'instant' | 'deep';
-  setDeepMode: (v: boolean) => void;
+  value: ResearchModeValue;
+  onChange: (value: ResearchModeValue) => void;
 }
 
-export default function ModeDropdown({ value, setDeepMode }: ModeDropdownProps) {
+export default function ModeDropdown({ value, onChange }: ModeDropdownProps) {
   return (
     <Dropdown
       value={value}
-      accent={value === 'deep'}
+      accent={value !== 'instant'}
       options={[
         { value: 'instant', label: 'Instant' },
-        { value: 'deep', label: 'Deep' },
+        { value: 'deep-low', label: 'Deep Low' },
+        { value: 'deep-med', label: 'Deep Med' },
+        { value: 'deep-high', label: 'Deep High' },
+        { value: 'deep-ultra', label: 'Deep Ultra' },
       ]}
-      onChange={v => setDeepMode(v === 'deep')}
+      onChange={v => onChange(v as ResearchModeValue)}
     />
   );
 }

@@ -48,6 +48,8 @@ describe('normalizeSettings', () => {
     expect(s.providers.gemini.enabled).toBe(false);
     expect(s.research.maxCreditsPerQuery).toBe(20);
     expect(s.research.maxFollowUpQueries).toBe(3);
+    expect(s.researchDepths.defaultDepth).toBe('med');
+    expect(s.researchDepths.presets.high.maxRounds).toBe(13);
     expect(s.api.defaultMaxConcurrent).toBe(2);
     expect(s.api.maxActiveJobs).toBe(50);
     expect(s.api.maxActiveBatches).toBe(50);

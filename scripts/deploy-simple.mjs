@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash } from 'crypto';
+import { createHash, scryptSync, createDecipheriv } from 'crypto';
 import { existsSync, mkdirSync, cpSync, readFileSync, readdirSync, statSync, writeFileSync, createReadStream } from 'fs';
 import { execSync } from 'child_process';
 import { join, dirname, relative } from 'path';
@@ -13,6 +13,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const STATE = join(__dirname, '.deploy-state');
 const ROOT = join(__dirname, '..');
 const CONN_FILE = join(STATE, 'connection.json');
+const ENC_FILE = join(__dirname, 'connection.enc');
 const MANIFEST_FILE = join(STATE, 'manifest.json');
 
 const SOURCES = [
@@ -33,6 +34,28 @@ const ask = async (q, def) => {
 
 // ─── Helpers ───────────────────────────────────────────────────
 function readJSON(p) { try { return JSON.parse(readFileSync(p, 'utf-8')); } catch { return null; } }
+
+function decryptConnection() {
+  if (!existsSync(ENC_FILE)) return null;
+  const secret = process.env.DEPLOY_SECRET;
+  if (!secret) {
+    console.error('  ❌ DEPLOY_SECRET environment variable not set. Cannot decrypt connection.enc');
+    process.exit(1);
+  }
+  const raw = readFileSync(ENC_FILE, 'utf-8').trim();
+  const parts = raw.split(':');
+  if (parts.length !== 3) throw new Error('Invalid encrypted connection file');
+  const [iv, tag, data] = parts;
+  const key = scryptSync(secret, 'athena-deploy-salt-2026', 32);
+  const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'hex'));
+  decipher.setAuthTag(Buffer.from(tag, 'hex'));
+  let dec = decipher.update(data, 'hex', 'utf-8');
+  dec += decipher.final('utf-8');
+  const conn = JSON.parse(dec);
+  // Mark as encrypted so we skip password prompts
+  conn.__encrypted = true;
+  return conn;
+}
 function writeJSON(p, d) {
   if (!existsSync(dirname(p))) mkdirSync(dirname(p), { recursive: true });
   writeFileSync(p, JSON.stringify(d, null, 2));
@@ -130,10 +153,19 @@ async function main() {
   // ─── Connection info ──────────────────────────────────────
   let cache = readJSON(CONN_FILE);
   let conn;
+  let usingEncrypted = false;
 
   if (cache) {
     const ok = await ask(`Kullan: ${cache.user}@${cache.host}`, 'Y');
     if (ok.toLowerCase() === 'y' || ok === '') conn = cache;
+  }
+
+  if (!conn) {
+    conn = decryptConnection();
+    if (conn) {
+      usingEncrypted = true;
+      console.log(`  🔐 Decrypted connection: ${conn.user}@${conn.host}`);
+    }
   }
 
   if (!conn) {
@@ -169,7 +201,7 @@ async function main() {
     }
 
     writeJSON(CONN_FILE, { ...conn });
-  } else if (conn.authType === 'password') {
+    } else if (conn.authType === 'password' && !usingEncrypted) {
     conn.pw = await rl.question('SSH şifresi: ');
   }
 

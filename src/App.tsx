@@ -16,14 +16,9 @@ import Landing from './pages/Landing';
 import Chat from './pages/Chat';
 import SettingsModal from './components/SettingsModal';
 import { fetchConversations, createConversation, renameConversation, deleteConversation } from './lib/api';
-import type { Message } from './lib/api';
+import type { ConversationMeta, DeepDepth, Message, SearchMode } from './lib/api';
 
-interface Conversation {
-  id: string;
-  query: string;
-  title: string | null;
-  timestamp: Date;
-}
+type Conversation = Omit<ConversationMeta, 'timestamp'> & { timestamp: Date };
 
 function Layout() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -63,12 +58,18 @@ function genId(): string {
   });
 }
 
-  const handleSearch = useCallback(async (query: string, mode?: 'quick' | 'deep') => {
+  const handleConversationResearchUpdate = useCallback((id: string, mode: SearchMode, depth?: DeepDepth) => {
+    setConversations(prev => prev.map(c => (
+      c.id === id ? { ...c, mode, depth: mode === 'deep' ? depth : undefined } : c
+    )));
+  }, []);
+
+  const handleSearch = useCallback(async (query: string, mode?: SearchMode, depth?: DeepDepth) => {
     const id = genId();
-    navigate(`/c/${id}`, { state: { query, mode } });
+    navigate(`/c/${id}`, { state: { query, mode, depth } });
 
     setLoading(true);
-    createConversation(id, query)
+    createConversation(id, query, mode, depth)
       .then(list => {
         setConversations(list.map(c => ({ ...c, timestamp: new Date(c.timestamp) })));
       })
@@ -141,6 +142,7 @@ function genId(): string {
                   onUpdateMessages={setChatMessages}
                   conversations={conversations}
                   onOpenSidebar={() => setSidebarOpen(true)}
+                  onConversationResearchUpdate={handleConversationResearchUpdate}
                 />
               }
             />

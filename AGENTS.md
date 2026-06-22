@@ -7,12 +7,15 @@
 ## 0. AGENTS.md Güncelleme ve Doğruluk Kuralı
 
 > **Bu dosyanın güncelliği ve doğruluğu, projenin sürdürülebilirliği için kritiktir.**
+> **Bu dosya, tüm AI ajanlarının (agent'ların) çalışma prensiplerini belirler; her ajan değişiklik yaptıktan sonra bu dosyayı güncellemek ve değişiklik özetini kullanıcıya göstermek ZORUNLUDUR.**
 
 - Her kod değişikliği, mimari değişikliği veya yeni özellik eklenmesi sonrasında, bu `AGENTS.md` dosyasındaki ilgili bölümler gözden geçirilmeli ve gerekirse güncellenmelidir.
 - Eğer bir değişiklik, bu dokümanda yazan bir kuralı, mimariyi, endpoint'i, ayar şemasını veya konvansiyonu değiştiriyorsa, **önce veya hemen sonra** doküman da düzeltilmelidir.
 - Eksik, yanlış veya eski kalan bilgi bulunursa, proje taranmalı ve doğru haliyle değiştirilmelidir. Sadece kodu değiştirip dokümanı unutmak yasaktır.
 - Yeni bir konvansiyon, güvenlik kuralı veya kritik davranış ortaya çıkarsa, bu dosyaya açıkça eklenmelidir.
 - Bu dosya, sonraki ajanlar (ve insan katkıcılar) için tek kaynak doğru (single source of truth) kabul edilir; dolayısıyla her tutarsızlık derhal giderilmelidir.
+- **Her ajan, yaptığı her değişiklikten sonra bu dosyayı güncellemeli VE güncellenmiş değişiklik özetini kullanıcıya göstermelidir (örneğin: "AGENTS.md güncellendi: yeni bölüm X, değişen kısım Y").** Kullanıcı görmeden commit atmak yasaktır.
+- _Eğer bir ajan bu kuralı ihlal ederse, sonraki ajanlar ihmal edilen güncellemeleri fark etmeli ve düzeltmelidir._
 
 Bu kural, bu dokümanın 12. bölümünde (Son Not) tekrar vurgulanmıştır.
 
@@ -73,10 +76,13 @@ Bu paket, LLM çağrılarında birden fazla provider/key/model kombinasyonu aras
 
 ### 2.5. Veri Saklama
 
-- **Sohbetler / Mesajlar**: `server/data/db.json` JSON dosyası (`db.ts`).
+- **Sohbetler / Mesajlar**: `server/data/db.json` JSON dosyası (`db.ts`). Her sohbet kaydı (`ConversationMeta`) `mode` (`quick`|`deep`) ve isteğe bağlı `depth` (`low`|`med`|`high`|`ultra`) taşır; F5 ve sidebar navigasyonunda araştırma modu bu metadata'dan restore edilir. Follow-up aramalarda `PUT /conversations/:id/research` ile güncellenir.
 - **Araştırma işleri (jobs)**: Bellek içi (in-memory), sunucu yeniden başlayınca silinir.
 - **Araştırma toplu işleri (batches)**: Bellek içi.
 - **Ayarlar**: `server/data/settings.json` (v2 şema), `settings-store.ts` tarafından yüklenir ve normalize edilir.
+- **Deep research notebook'ları**: `server/data/notebooks/*.json` altında tutulur. Deep modda model `write_notebook` tool'u ile araştırma notlarını kalıcı hale getirir; notebook yazıldıktan sonra ilgili raw search/fetch payload'ları aktif LLM context'inde kompaktlanır. `open_questions` / `next_actions` **merge** edilir (replace değil); tamamlanan maddeler `resolved_questions` / `resolved_next_actions` ile kaldırılır.
+- **Research ledger (bellek içi)**: Deep modda `engine/research-ledger.ts` her job için tamamlanan arama/sorgu ve fetch geçmişini tutar; LLM context compaction'dan bağımsızdır. Normalize edilmiş sorgu dedup ile tekrarlayan `web_search` / `fetch_url` çağrıları kredi harcamadan atlanır. Ledger + notebook her tur system context'e enjekte edilir.
+- **Gemini provider**: Artık **native REST API** kullanır (`/v1beta/models/{model}:generateContent`), OpenAI-compatible endpoint değil. Auth `x-goog-api-key` header ile yapılır. İstek gövdesi `convertToGeminiBody()` ile OpenAI formatından Gemini native formatına çevrilir. Varsayılan URL: `https://generativelanguage.googleapis.com/v1beta`.
 
 ---
 
@@ -94,7 +100,7 @@ ATHENA-001/
 │   │   ├── SettingsModal.tsx     # Ayarlar modalı (5 sekme: General, Providers, Models, Advanced, API)
 │   │   ├── SearchInput.tsx       # Ana arama inputu + autocomplete
 │   │   ├── Sidebar.tsx           # Sol yan menü (sohbetler, tema, ayarlar)
-│   │   ├── ModeDropdown.tsx      # Instant / Deep mod seçimi
+│   │   ├── ModeDropdown.tsx      # Instant / Deep Low/Med/High/Ultra mod seçimi
 │   │   ├── ActivityModal.tsx     # Aktivite/ayrıntı modalı
 │   │   ├── ActivityPanel.tsx
 │   │   ├── Background.tsx
@@ -125,6 +131,12 @@ ATHENA-001/
 │   │   ├── config.ts             # Public config, port, static URL'ler
 │   │   ├── schemas.ts            # Paylaşılan TypeScript tipleri
 │   │   ├── agent/prompts.ts      # System / synthesis / deep research promptları
+│   │   ├── engine/depth-presets.ts # Deep Low/Med/High/Ultra preset resolver ve varsayılanları
+│   │   ├── engine/cooldown.ts    # Deep mod dynamic cooldown (depth preset pacing)
+│   │   ├── engine/rate-signals.ts # LLM 429 / Retry-After sinyalleri (smart-routing yerine hafif cooldown beslemesi)
+│   │   ├── engine/checkpoint.ts  # High/Ultra job checkpoint save/load (disk)
+│   │   ├── engine/notebook.ts    # Deep research notebook tool'u, disk persistence, merge semantics ve context compaction desteği
+│   │   ├── engine/research-ledger.ts # Deep mod query/fetch dedup, ledger context block, compaction notları
 │   │   ├── research-jobs.ts      # Uzun süren işlerin in-memory yönetimi
 │   │   ├── research-batches.ts     # Toplu araştırma işlerinin yönetimi
 │   │   └── run-agentic.ts        # CLI test betiği
@@ -162,7 +174,10 @@ ATHENA-001/
 │
 ├── scripts/                      # Yardımcı betikler
 │   ├── clean-dist.mjs            # Prebuild: dist klasörünü temizler
-│   └── deploy-simple.mjs         # Basit deploy (ssh2 ile hash-based sync, PM2, Tailscale)
+│   ├── deploy-simple.mjs         # Ana deploy script (ssh2 ile git-pull tabanlı deploy, PM2, Tailscale)
+│   ├── encrypt-connection.mjs    # Bağlantı bilgilerini AES-256-GCM ile şifreler → scripts/connection.enc
+│   ├── sync-settings.mjs         # Local settings.json'u remote'a yükler (tek seferlik)
+│   └── .deploy-state/            # (gitignored) connection.json, manifest.json
 │
 ├── public/                       # Frontend static dosyalar
 │   ├── favicon.svg
@@ -172,6 +187,7 @@ ATHENA-001/
 ├── docs/                         # Proje dokümanları
 │   ├── API.md                    # API referansı (v2, Node backend)
 │   ├── agent-strategy.md         # Ajan mimarisi v2 planı
+│   ├── deep-depth-presets-plan.md # Deep Low/Med/High/Ultra preset tasarım planı
 │   └── settings-modal-redesign-plan.md
 │
 ├── Websearchworkersmart.py       # Bağımsız Python CLI betiği (paralel Serper+Groq)
@@ -243,9 +259,17 @@ npm test             # smart-routing-core/ dizininde
 
 Modlar:
 - **quick**: Kullanıcıya "Instant" olarak gösterilir. Dahili model rolü `instant`. Max 3 tur, bütçe 6 kredi.
-- **deep**: Dahili model rolü `deep`. Max 50 tur, bütçe `maxCreditsPerQuery` (varsayılan 20).
+- **deep**: Dahili model rolü `deep`. `depth` alanı ile `low`, `med`, `high`, `ultra` presetlerinden biri seçilir. Eski deep çağrıları `med` kabul edilir. Varsayılan presetler: low 20 kredi/5 tur, med 35 kredi/8 tur, high 50 kredi/13 tur, ultra 100 kredi/30 tur. Preset snapshot job/batch kaydına yazılır ve çalışan iş ayar değişikliklerinden etkilenmez.
 
-> **Dikkat:** Ayarlarda bulunan `general.deepIterations` ve `research.maxFollowUpQueries` alanları şu anda `engine.ts` içinde aktif olarak kullanılmıyor; deep mod tur sayısı sabit 50, follow-up limiti bütçe ve tur sayısı tarafından dolaylı olarak sınırlanıyor. Bu ayarları devreye sokacak bir değişiklik yapmadan önce bu dokümanı ve ilgili kodu güncelleyin.
+> **Dikkat:** Ayarlarda bulunan `general.deepIterations` ve `research.maxFollowUpQueries` alanları şu anda `engine.ts` içinde aktif olarak kullanılmıyor. Deep mod tur sayısı `engine/depth-presets.ts` presetlerinden gelir; follow-up limiti bütçe, tur sayısı ve per-round search/fetch limitleri tarafından dolaylı olarak sınırlanır. Bu ayarları devreye sokacak bir değişiklik yapmadan önce bu dokümanı ve ilgili kodu güncelleyin.
+
+> **Not:** Deep modda `write_notebook` tool'u aktiftir. Notebook yazımı `server/data/notebooks/*.json` dosyasına kalıcı not ekler; son notebook yazımından beri context'te duran raw search/fetch payload'ları kompaktlanır. `open_questions`, `next_actions` ve `claims` merge edilir; `resolved_questions` / `resolved_next_actions` ile kuyruk temizlenir. Notebook cadence eşiği depth presetine göre belirlenir. Uncompacted raw block sayısı eşiğe ulaştığında engine soft system mesajı ile önce `write_notebook` önerir (final cevap reddedilmez).
+
+> **Not:** Deep modda `engine/research-ledger.ts` bellek içi bir ledger tutar (checkpoint resume'da sıfırlanır). Tamamlanan arama/fetch kayıtları normalize query/URL ile dedup edilir; duplicate tool call'lar kredi harcamadan reddedilir. Her LLM turunda ledger + notebook system context'e eklenir. Bütçe tükendiğinde model'e yapılandırılmış "cevap yaz" rehberi gönderilir (boşluk doldurma teşviki yok).
+
+> **Not:** Deep modda search/fetch batch sonrası `engine/cooldown.ts` depth preset'e göre dinamik cooldown uygular (low 5-10s, med 10-15s, high 20-40s, ultra min 60s). Hata oranı, 429, `Retry-After` (`engine/rate-signals.ts`) ve latency sinyalleri cooldown'ı artırır; başarı serisi low/med'de hafif azaltır. Cooldown SSE step olarak `type: 'cooldown'` ile gönderilir; notebook yazımına uygulanmaz. Canlı bütçe/notebook durumu `progress` SSE event'i ile iletilir.
+
+> **Not:** High/Ultra presetlerinde `checkpointEveryRounds` > 0 ise engine `server/data/research-checkpoints/{jobId}.json` dosyasına checkpoint yazar; aynı job yeniden başlarsa notebook, budget, round ve kaynak haritasından resume eder. Başarılı tamamlamada checkpoint silinir. Sunucu restart sonrası kalan checkpoint dosyaları otomatik recover edilir. `POST /research-jobs/:id/pause` ve `POST /research-jobs/:id/resume` endpoint'leri High/Ultra job kontrolü içindir.
 
 > **Not:** Cevap modelin kendi `toolCallingRound` yanıtından gelir ve non-streaming `callLLM` ile alınır; tek bir `{ type: 'token', text }` olayı olarak gönderilir. Eski "synthesis" ve "synthesis-fallback" fazları (ve `SYNTHESIS_PROMPT`) kaldırılmıştır.
 
@@ -257,15 +281,19 @@ Modlar:
 - Eğer hedef rol yoksa veya tüm hedefler başarısız olursa, tüm enabled provider'ların modelleri denenir.
 - 429 rate limit, 401 auth, 413 context too large, timeout, stream interruption gibi durumlar için retry ve fallback mantığı vardır.
 - Deep modda toplam 5 deneme (1 ilk deneme + 4 global retry) ve exponential backoff (2s, 4s, 8s, 16s) vardır.
+- 429 yanıtlarında `Retry-After` header'ı parse edilir ve `engine/rate-signals.ts` modülüne kaydedilir; deep mod cooldown bu sinyali kullanır.
 
 > **Dikkat:** `reasoning` rolü ayarlarda tanımlı olsa da, şu anda `engine.ts` içinde doğrudan kullanılmıyor. Gelecekte ayrı bir analiz/reasoning aşaması eklenecekse bu rol devreye girecektir.
 
-### 5.3. Smart Routing (`smart-routing-core`)
+### 5.3. Smart Routing (`smart-routing-core`) — paket mevcut, backend'de henüz bağlı değil
 
-- `createSmartRoutingEngine()`.
-- `selectRoute({ candidates, rotationPolicy })` → `sticky-incumbent` veya `balanced`.
-- `recordOutcome({ leaseId, kind, observations })` → başarı/başarısızlık/rate-limit kaydı.
-- Runtime'da öğrenilen limitler (learned capacity), 429 header'ları, retry-after, burst episode detection, provider pressure gibi kavramları vardır.
+`@mindbox/smart-routing-core` `server/package.json` içinde yerel paket olarak tanımlıdır ve deploy sırasında build edilir; ancak **`server/src/` altında hiçbir dosya bu paketi import etmez**. Aktif LLM yönlendirmesi `llm.ts` + `llm-utils.ts` ile yapılır (rol bazlı primary/fallback, provider/key rotasyonu, deep mod global retry).
+
+Paket yetenekleri (gelecek entegrasyon için):
+- `createSmartRoutingEngine()`, `selectRoute()`, `recordOutcome()`
+- Runtime learned capacity, 429/retry-after, burst episode, provider pressure
+
+**Şu anki alternatif:** Deep mod dinamik cooldown için `engine/rate-signals.ts` kullanılır — LLM 429 + `Retry-After` sinyallerini toplar ve `engine/cooldown.ts` içindeki `computeCooldownMs()`'e `providerPressure` / `retryAfterMs` olarak iletir. Tam smart-routing entegrasyonu ayrı bir görevdir.
 
 ### 5.4. Ayarlar Sistemi (`settings-store.ts` + `settings.ts`)
 
@@ -285,6 +313,7 @@ Ayar şeması v2 ana bölümleri:
 - `modelRouting`: Her rol için `primary` + `fallback` model referansları.
 - `serper`: Arama API anahtarları.
 - `research`: `maxCreditsPerQuery`, `maxFollowUpQueries`.
+- `researchDepths`: `defaultDepth` + per-depth preset overrides (`low`, `med`, `high`, `ultra`) — budget, rounds, cooldown, notebook cadence, per-round limits, checkpoint interval.
 - `api`: `defaultMode`, `defaultMaxConcurrent`, `maxActiveJobs`, `maxActiveBatches`, `maxEventsPerJob`, `maxEventsPerBatch`, `maxRetentionMinutes`.
 - `general`: `maxSources`, `deepIterations`, `thinkingStripPatterns`, `titleModel`.
 
@@ -296,7 +325,7 @@ Ayar şeması v2 ana bölümleri:
 - `POST /research-jobs/:id/cancel` → işi iptal eder.
 - `GET/POST /research-batches` → toplu araştırma işleri.
 - `GET /settings`, `PUT /settings` → ayarları oku/yaz.
-- `GET /conversations`, `POST /conversations`, `GET/PUT /conversations/:id/messages`, `PUT /conversations/:id/rename`, `DELETE /conversations/:id`.
+- `GET /conversations`, `POST /conversations` (accepts optional `mode`, `depth`), `PUT /conversations/:id/research`, `GET/PUT /conversations/:id/messages`, `PUT /conversations/:id/rename`, `DELETE /conversations/:id`.
 - `GET /autocomplete?q=...` → Google autocomplete proxy.
 - `GET /config`, `GET /health`, `GET /ping`, `POST /test-llm`.
 
@@ -342,87 +371,63 @@ Detaylı dokümantasyon: `docs/API.md`.
 - `satisfies` kullanımı yaygın.
 - Node.js yerel `test` runner kullanılır (`node:test`).
 
-### 6.5. Deployment Sistemi (`deploy/`)
+### 6.5. Deploy / Update Sistemi (`scripts/deploy-simple.mjs`)
 
-> **Deployment sistemi, ATHENA-001'in production ortamına SSH üzerinden taşınması, kurulması ve yönetilmesi için tasarlanmıştır.**
-> **Hem Linux/macOS (bash) hem de Windows (Node.js CLI) destekler.**
+> **Tüm agent'lar (local ve remote) aynı komutla deploy edebilir. Şifre `DEPLOY_SECRET` env var ile AES-256-GCM şifreli dosyadan çözülür, agent şifreyi görmez.**
 
-**Dosya yapısı:**
-```
-deploy/
-├── deploy.sh           # Bash CLI (Linux/macOS)
-├── cli.mjs             # Node.js CLI (komut satırı)
-├── deploy.json         # Konfigürasyon dosyası
-├── dashboard.html      # Web dashboard (setup formu + yönetim paneli)
-├── server.mjs          # HTTP API server (port 4000)
-├── lib/
-│   ├── common.sh       # Renkli log, SSH helper'lar, hata yönetimi, RAM hesaplama
-│   ├── hash.sh         # SHA256 manifest ile dosya değişiklik tespiti
-│   ├── sync.sh         # Incremental tar-pipe sync, release yönetimi, rollback
-│   ├── setup.sh        # OS/Node.js tespiti, bağımlılık kurulumu, build
-│   ├── service.sh      # PM2 yönetimi, health check, reboot resilience
-│   ├── utils.mjs       # Config yükleme/kaydetme
-│   └── engine.mjs      # DeployEngine (SSH, SCP, manifest, sync, health, sshpass)
-```
+**Mimari:**
+- 1 adet remote sunucu, tüm agent'lar aynı sunucuya deploy eder
+- Her agent git push/pull ile değişiklikleri paylaşır
+- Deploy = SSH + git pull + rebuild + PM2 restart (dosya sync gerekmez, git yeterli)
+- Şifre `scripts/connection.enc` dosyasında AES-256-GCM ile şifrelenir ve git'e commit edilir
+- `DEPLOY_SECRET` çevre değişkeni ile runtime'da çözülür; agent şifreyi asla görmez
 
-**Cross-platform Web Dashboard (`deploy/server.mjs` + `deploy/dashboard.html`):**
-- HTTP server on port 4000 (`npm run deploy`).
-- Stateless HTML/CSS/JS dashboard served from `server.mjs`.
-- No target configured → setup form (host, SSH key/password, advanced options).
-- Target configured → management panel (Overview, Config, Releases, Logs, Actions).
-- Long-running ops (init, deploy, uninstall) use SSE streaming for live log output in browser.
-- All operations: `DeployEngine` üzerinden SSH/SCP ile remote sunucuya gerçek işlemler.
-- `server.mjs` API endpoint'leri: `/api/status`, `/api/ping`, `/api/health`, `/api/info`, `/api/config`, `/api/releases`, `/api/logs`, `/api/init` (SSE), `/api/deploy` (SSE), `/api/uninstall` (SSE), `/api/rollback`, `/api/events/:id` (SSE).
+**Dosyalar:**
+| Dosya | Açıklama |
+|-------|----------|
+| `scripts/deploy-simple.mjs` | Ana deploy script: build, SSH, git pull, rebuild, PM2 restart |
+| `scripts/encrypt-connection.mjs` | `connection.json`'u AES-256-GCM ile şifreler → `connection.enc` |
+| `scripts/sync-settings.mjs` | Local `settings.json`'u remote'a yükler (tek seferlik) |
+| `scripts/.deploy-state/connection.json` | (gitignored) İlk kurulumda oluşan plaintext bağlantı bilgisi |
+| `scripts/connection.enc` | (git'te) AES-256-GCM şifreli bağlantı bilgisi |
 
-**Temel özellikler (bash + Node.js):**
+**İlk Kurulum (insan kullanıcı yapar):**
+```powershell
+# 1. İlk deploy: bağlantı bilgilerini girer, connection.json oluşur
+node scripts/deploy-simple.mjs
 
-| Özellik | Detay |
-|---------|-------|
-| **Hash-based sync** | SHA256 manifest ile sadece değişen dosyaları SSH üzerinden taşır (tar-pipe) |
-| **Akıllı RAM** | Remote RAM'i okuyup tiered formülle PM2 memory limiti hesaplar |
-| **PM2 otomatik kurulum** | Yoksa `npm install -g pm2` + `pm2 startup` + `pm2 save` |
-| **Reboot survival** | `pm2 startup` ile sistem açılışında otomatik başlatma |
-| **Versioned releases** | Her deploy `releases/v{timestamp}-{commit}/` olarak kaydedilir, son 5 tutulur |
-| **Atomic swap** | `current` symlink'i atomik olarak değiştirilir |
-| **Health check** | `/health` endpoint'ine curl ile N kez dener, başarısız olursa rollback |
-| **Rollback** | `deploy.sh rollback [N]` ile eski release'e anında dönüş |
-| **OOM koruması** | `pm2 --max-memory-restart` ile akıllı RAM limiti |
-| **Log yönetimi** | `deploy.sh logs --lines N --follow` ile PM2 log izleme |
+# 2. Bağlantıyı şifrele
+$env:DEPLOY_SECRET = "benim-gizli-anahtarim"
+node scripts/encrypt-connection.mjs
+# → scripts/connection.enc oluşur
 
-**Kullanım:**
-```bash
-# Web dashboard'u başlat (http://localhost:4000)
-npm run deploy
+# 3. Şifreli dosyayı commit et
+git add scripts/connection.enc
+git commit -m "add encrypted deploy connection"
+git push
 
-# Alternatif — direkt Node.js CLI (eski, Windows/Linux):
-npm run deploy:cli                # Interaktif menü
-npm run deploy:cli deploy         # Direkt komut
-node deploy/cli.mjs               # Doğrudan çalıştırma
+# 4. Her agent'ın makinesinde DEPLOY_SECRET ortam değişkenini ayarla
+#    (profile, .env, veya CI secrets olarak)
 ```
 
-**Akıllı RAM Hesaplama Formülü:**
-```
-< 1.5GB  → %36  (1GB → 368MB)
-1.5-3GB  → %25  (2GB → 512MB)
-3-6GB    → %20  (4GB → 819MB)
-6-12GB   → %15  (8GB → 1.2GB → cap 1024MB)
-> 12GB   → cap 1024MB
-Floor: 256MB, Ceiling: 1024MB
+**Agent Kullanımı (tüm agent'lar için aynı, tek komut):**
+```powershell
+node scripts/deploy-simple.mjs
 ```
 
-**Deploy akışı:**
-1. SHA256 manifest oluştur → remote manifest ile karşılaştır → değişen dosyaları bul
-2. Remote'ta `releases/{version}/` altında yeni release dizini oluştur
-3. Sadece değişen dosyaları tar-pipe ile SSH üzerinden gönder
-4. `package-lock.json` değişmişse `npm ci` çalıştır; değişmemişse atla
-5. `smart-routing-core` build et, sonra server `tsc` build
-6. PM2 ecosystem config oluştur (akıllı RAM limiti ile)
-7. Atomic symlink swap ile release'i aktifleştir
-8. PM2 reload/restart
-9. Health check (N kez dene, timeout 5sn)
-10. Health check başarısız → rollback
-11. Deploy meta yaz (`version, commit, timestamp, duration`)
-12. Eski release'leri temizle (keep: N)
+Script otomatik olarak:
+1. `connection.json` (gitignored, dev modu) arar → yoksa `connection.enc`'i dener
+2. `connection.enc` varsa `DEPLOY_SECRET` ile çözer → SSH bağlanır
+3. Remote'da `git pull` çeker
+4. Frontend + smart-routing-core + server rebuild eder
+5. PM2 restart athena-server
+6. Health check yapar
+
+**Önemli:**
+- Agent `connection.enc` dosyasını okur, `DEPLOY_SECRET` env var'ını kullanır, **şifreyi asla görmez**
+- Her agent'ın çalıştığı ortamda `DEPLOY_SECRET` ayarlanmış olmalı (kullanıcı ayarlar)
+- `connection.json` (plaintext) `.deploy-state/` altındadır, `.gitignore` ile korunur, commit edilmez
+- `connection.enc` **commit edilir** — güvenlidir çünkü AES-256-GCM ile şifrelidir
 
 ---
 
@@ -433,7 +438,7 @@ Floor: 256MB, Ceiling: 1024MB
 1. **API anahtarları asla frontend'e gitmez.** `server/data/settings.json` içindeki `keys` dizileri `GET /settings` yanıtında döner, ancak UI `SettingsModal.tsx` içinde `maskSecret()` ile maskeleme yapar. Yine de anahtarlar istemciye ulaşır; bu bilerek yapılmış bir yerel uygulama tasarımıdır. Üretimde bu ayar endpoint'i daha fazla kısıtlanmalıdır.
 2. **`server/data/settings.json` ve `server/data/db.json` commitlenmez.** `.gitignore` içinde belirtilidir. **Asla** bu dosyalara gerçek API anahtarı yazıp commit yapmayın. Eğer yanlışlıkla yapılırsa kullanıcıya hemen bildirin.
 3. **`.env` dosyaları gitignore'dadır.** Node.js backend `dotenv` kullanır ama şu anda aktif `.env` dosyası yoktur.
-4. **Yeni provider entegrasyonu** yapılırken OpenAI-compatible chat completions formatına uygun olmalıdır. Gemini native formatı `normalizeGeminiResponse()` ile dönüştürülür.
+4. **Yeni provider entegrasyonu** yapılırken OpenAI-compatible chat completions formatına uygun olmalıdır. Gemini native formatı `convertToGeminiBody()` ile istek gövdesi çevrilir, yanıt `normalizeGeminiResponse()` ile OpenAI formatına dönüştürülür.
 5. **Tool calling desteği olmayan modeller** `NO_TOOL_CALLING_MODELS` set'inde veya runtime'da `learnedNoToolCalling` set'inde tutulur; bu modeller araç çağrısı gerektiğinde atlanır.
 6. **Web sayfası çekme (`fetch_url`)**: Dış URL'lere istek atılır; `AbortError` dışındaki hatalar yutulur ve ajan bilgilendirilir. Zararlı içerikten kaçınmak için herhangi bir sanitizasyon yoktur; sonuçlar LLM'e gönderilir.
 
@@ -474,6 +479,24 @@ Floor: 256MB, Ceiling: 1024MB
 - Renk, cam efekt, animasyon gibi tasarım değişiklikleri `src/index.css` içindeki CSS değişkenlerinden yapılır.
 - Koyu mod için `.dark` selector'u kullanılır.
 - MUI tema değişikliği gerekiyorsa `src/theme.ts` güncellenir.
+
+### 8.6. Deploy / Update (Tüm Agent'lar İçin)
+
+Değişiklik yaptıktan sonra canlı siteye yansıtmak için:
+
+```powershell
+# 1. Değişiklikleri commit et ve pushla
+git add -A
+git commit -m "yaptığın değişiklik"
+git push
+
+# 2. Remote sunucuda deploy et
+node scripts/deploy-simple.mjs
+```
+
+Script otomatik olarak `DEPLOY_SECRET` ile şifreli bağlantıyı çözer, remote'da `git pull` çeker, rebuild eder ve PM2 restart yapar. Agent şifreyi görmez, hiçbir şey sormaz.
+
+> **Uyarı:** Eğer `DEPLOY_SECRET` env var ayarlı değilse script hata verir. Kullanıcıya bildir, devam etme.
 
 ---
 
@@ -522,6 +545,7 @@ Eğer testler mevcut değilse veya değişiklik yeni bir modül etkiliyorsa, mev
 
 - **API dokümantasyonu**: `docs/API.md`
 - **Ajan stratejisi planı**: `docs/agent-strategy.md`
+- **Deep depth preset planı**: `docs/deep-depth-presets-plan.md`
 - **Ayarlar modalı yeniden tasarım planı**: `docs/settings-modal-redesign-plan.md`
 - **README** (kullanıcıya yönelik): `README.md` (şu anda Vite template açıklaması; proje özgü bilgi eklenebilir).
 - **Bu dosyayı güncelle**: Eğer proje yapısı, teknoloji yığını veya kritik kurallar değişirse bu `AGENTS.md` dosyasını da güncelleyin. Ayrıntılı kural için 0. ve 12. bölümlere bakın.
@@ -538,3 +562,4 @@ ATHENA-001, hızlı bir demo değil; aktif olarak geliştirilen, çok provider'l
 - **API anahtarlarını ve kişisel ayarları asla commit etmeyin**.
 - Yeni özellik eklerken önce **Node.js backend**'i düşünün; Python backend legacy'dir ve yalnızca özel istek üzerine değiştirilmelidir.
 - **Ve en önemlisi**: her değişiklikten sonra bu `AGENTS.md` dosyasını da gözden geçirin; eski, eksik veya çelişkili bilgi bırakmayın.
+- **Kullanıcıya değişiklik özetini gösterin**: `AGENTS.md` güncellendikten sonra değişiklikleri kullanıcıya gösterin, ardından commit ve push yapın.

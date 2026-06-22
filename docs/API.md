@@ -66,6 +66,8 @@ Authentication is not implemented. The server is designed for local/trusted-netw
 | `GET` | `/research-jobs/:id` | Get job status and result |
 | `GET` | `/research-jobs/:id/events` | SSE stream of job events |
 | `POST` | `/research-jobs/:id/cancel` | Cancel a running job |
+| `POST` | `/research-jobs/:id/pause` | Pause a running job (checkpoint) |
+| `POST` | `/research-jobs/:id/resume` | Resume a paused job |
 | `GET` | `/research-batches` | List all research batches |
 | `POST` | `/research-batches` | Create a batch of research queries |
 | `GET` | `/research-batches/:id` | Get batch status and results |
@@ -77,6 +79,7 @@ Authentication is not implemented. The server is designed for local/trusted-netw
 | `POST` | `/conversations` | Create conversation |
 | `GET` | `/conversations/:id/messages` | Get conversation messages |
 | `PUT` | `/conversations/:id/messages` | Save conversation messages |
+| `PUT` | `/conversations/:id/research` | Update conversation mode/depth |
 | `PUT` | `/conversations/:id/rename` | Rename conversation |
 | `DELETE` | `/conversations/:id` | Delete conversation |
 | `GET` | `/health` | Server health check |
@@ -104,7 +107,8 @@ Create a research job. Returns immediately with the job ID. The frontend then su
     { "role": "user", "content": "Previous question" },
     { "role": "assistant", "content": "Previous answer" }
   ],
-  "mode": "deep"
+  "mode": "deep",
+  "depth": "med"
 }
 ```
 
@@ -113,6 +117,7 @@ Create a research job. Returns immediately with the job ID. The frontend then su
 | `query` | `string` | **Yes** | — | The search query |
 | `history` | `Array<{role, content}>` | No | `[]` | Conversation history for context |
 | `mode` | `"quick" \| "deep"` | No | `"quick"` | Research depth |
+| `depth` | `"low" \| "med" \| "high" \| "ultra"` | No | `"med"` for deep | Deep preset. Ignored for quick mode |
 
 **Response (202):**
 
@@ -138,8 +143,11 @@ data: {"type":"sources","sources":[{"title":"...","url":"...","domain":"...","sn
 event: token
 data: {"type":"token","text":"Partial answer text...","timestamp":"..."}
 
+event: progress
+data: {"type":"progress","data":{"usedCredits":3,"remainingCredits":32,"exhausted":false,"round":2,"depth":"med","notebookId":"...","notebookEntries":1,"openQuestionsCount":2},"timestamp":"..."}
+
 event: done
-data: {"type":"done","response":{"query":"...","answer":"...","sources":[...],"steps":[...],"results_count":5,"elapsed_ms":4230,"research_budget":{"used":3,"limit":20,"exhausted":false}},"timestamp":"..."}
+data: {"type":"done","response":{"query":"...","answer":"...","sources":[...],"steps":[...],"results_count":5,"elapsed_ms":4230,"research_budget":{"used":3,"limit":35,"exhausted":false},"research_depth":"med","research_notebook":{"id":"...","path":"...","entries":2,"updatedAt":"..."}},"timestamp":"..."}
 
 event: error
 data: {"type":"error","message":"Provider unavailable","timestamp":"..."}
@@ -150,6 +158,7 @@ data: {"type":"error","message":"Provider unavailable","timestamp":"..."}
 | Event | Data Shape | Description |
 |-------|-----------|-------------|
 | `step` | `{ type: "step", data: AgentStep, timestamp }` | Research phase update (plan, search, analyze, synthesize) |
+| `progress` | `{ type: "progress", data: ResearchProgressState, timestamp }` | Live budget, depth, round, notebook stats during active job |
 | `sources` | `{ type: "sources", sources: Source[], timestamp }` | Sources found during search |
 | `token` | `{ type: "token", text: string, timestamp }` | Streaming answer token |
 | `done` | `{ type: "done", response: SearchResponse, timestamp }` | Final result with complete answer and sources |
@@ -159,8 +168,17 @@ The stream stays open until the job reaches a terminal state (`completed`, `fail
 
 **Modes:**
 
-- **`quick`**: Single-pass research. Model can call `web_search` tool up to ~3 rounds. Faster, uses fewer credits.
-- **`deep`**: Multi-pass research. After initial search+analyze, a critical review phase generates follow-up queries, then searches again before synthesis. Uses `deepIterations + 2` search rounds.
+- **`quick`**: Instant mode. Model can call `web_search`/`fetch_url` up to 3 rounds with a 6-credit budget.
+- **`deep`**: Notebook-driven research. Use `depth` to select `low`, `med`, `high`, or `ultra`. Legacy deep requests without `depth` use `med`.
+
+**Deep presets:**
+
+| Depth | Budget | Rounds | Purpose |
+|-------|--------|--------|---------|
+| `low` | 20 | 5 | Fast deep research, roughly 1-2 minutes |
+| `med` | 35 | 8 | Balanced deep research, roughly 5-10 minutes |
+| `high` | 50 | 13 | Aggressive verification |
+| `ultra` | 100 | 30 | Long-running exhaustive research |
 
 **Client timeout:** 3 minutes (180,000 ms). The frontend `search()` function in `src/lib/api.ts` automatically aborts after this duration.
 
@@ -180,7 +198,8 @@ Create a new research job. Returns immediately with a `202 Accepted` status.
 {
   "query": "History of the Roman Empire",
   "history": [],
-  "mode": "deep"
+  "mode": "deep",
+  "depth": "high"
 }
 ```
 
@@ -189,6 +208,7 @@ Create a new research job. Returns immediately with a `202 Accepted` status.
 | `query` | `string` | **Yes** | — | The research query |
 | `history` | `Array<{role, content}>` | No | `[]` | Conversation context |
 | `mode` | `"quick" \| "deep"` | No | settings `api.defaultMode` | Research depth |
+| `depth` | `"low" \| "med" \| "high" \| "ultra"` | No | `"med"` for deep | Deep preset. Ignored for quick mode |
 
 **Response (202):**
 
@@ -197,6 +217,7 @@ Create a new research job. Returns immediately with a `202 Accepted` status.
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "query": "History of the Roman Empire",
   "mode": "deep",
+  "depth": "high",
   "status": "queued",
   "createdAt": "2026-06-16T01:00:00.000Z",
   "updatedAt": "2026-06-16T01:00:00.000Z",
@@ -217,6 +238,7 @@ Poll for job status and result.
   "id": "550e8400-...",
   "query": "History of the Roman Empire",
   "mode": "deep",
+  "depth": "high",
   "status": "completed",
   "createdAt": "2026-06-16T01:00:00.000Z",
   "updatedAt": "2026-06-16T01:02:30.000Z",
@@ -253,10 +275,11 @@ Poll for job status and result.
 | `completed` | Research finished successfully, `result` is populated |
 | `failed` | Research failed, `error` field contains reason |
 | `cancelled` | Cancelled by user via cancel endpoint |
+| `paused` | Paused by user; checkpoint saved for High/Ultra jobs |
 
 ### `GET /research-jobs/:id/events`
 
-SSE stream of job events. Same event types as [Search API events](#get-research-jobsidevents) (`step`, `sources`, `token`, `done`, `error`).
+SSE stream of job events. Same event types as [Search API events](#get-research-jobsidevents) (`step`, `progress`, `sources`, `token`, `done`, `error`). Long-running jobs emit SSE heartbeats every 20s while active.
 
 ### `POST /research-jobs/:id/cancel`
 
@@ -275,6 +298,22 @@ Cancel a running job. The job's AbortController is triggered, stopping the engin
 ```
 
 **Status: 404** — job ID not found.
+
+### `POST /research-jobs/:id/pause`
+
+Pause a running deep job. Saves a checkpoint when notebook runtime state is available (High/Ultra). Job status becomes `paused`.
+
+**Response (200):** updated job record with `"status": "paused"`.
+
+**Status: 400** — job is not in a pausable state.
+
+### `POST /research-jobs/:id/resume`
+
+Resume a paused job from its checkpoint. Re-queues the job and continues the agentic loop from the saved round/budget/notebook state.
+
+**Response (202):** updated job record with `"status": "queued"` (transitions to `running` immediately).
+
+**Status: 400** — job is not paused.
 
 ---
 
@@ -337,6 +376,7 @@ Create a batch of research queries.
 | `queries` | `string[]` | **Yes** | — | Array of queries to research (min 1) |
 | `history` | `Array<{role, content}>` | No | `[]` | Shared conversation context |
 | `mode` | `"quick" \| "deep"` | No | settings `api.defaultMode` | Research depth for all items |
+| `depth` | `"low" \| "med" \| "high" \| "ultra"` | No | `"med"` for deep | Deep preset for all items |
 | `maxConcurrent` | `number` | No | settings `api.defaultMaxConcurrent` (default: `2`) | Max parallel items |
 | `sharedCredits` | `number` | No | `perItemCredits * queries.length` | Total research credits shared across all items |
 | `perItemCredits` | `number` | No | `20` | Max credits per individual item |
@@ -497,7 +537,7 @@ List all conversations.
 
 ```json
 [
-  { "id": "conv-uuid", "query": "What is AI?", "title": "AI Overview", "timestamp": "2026-06-16T01:00:00.000Z" }
+  { "id": "conv-uuid", "query": "What is AI?", "title": "AI Overview", "timestamp": "2026-06-16T01:00:00.000Z", "mode": "deep", "depth": "med" }
 ]
 ```
 
@@ -508,10 +548,25 @@ Create a new conversation. Triggers automatic title generation using the configu
 **Request Body:**
 
 ```json
-{ "id": "conv-uuid", "query": "What is AI?" }
+{ "id": "conv-uuid", "query": "What is AI?", "mode": "deep", "depth": "high" }
 ```
 
+- `mode` (optional): `quick` or `deep`. Defaults to `quick` when omitted.
+- `depth` (optional): `low`, `med`, `high`, or `ultra`. Used when `mode` is `deep`; invalid values normalize to `med`.
+
 **Response (200):** Updated conversation list.
+
+### `PUT /conversations/:id/research`
+
+Update persisted research mode/depth for a conversation (used on follow-up searches and mode changes).
+
+**Request Body:**
+
+```json
+{ "mode": "deep", "depth": "ultra" }
+```
+
+**Response (200):** `{ "ok": true }`
 
 ### `GET /conversations/:id/messages`
 
@@ -655,6 +710,13 @@ interface SearchResponse {
     limit: number;
     exhausted: boolean;
   };
+  research_depth?: 'low' | 'med' | 'high' | 'ultra';
+  research_notebook?: {
+    id: string;
+    path: string;
+    entries: number;
+    updatedAt: string;
+  };
 }
 ```
 
@@ -691,7 +753,8 @@ interface ResearchJobRecord {
   query: string;
   history?: { role: string; content: string }[];
   mode: 'quick' | 'deep';
-  status: 'queued' | 'planning' | 'searching' | 'reviewing' | 'synthesizing' | 'running' | 'completed' | 'failed' | 'cancelled';
+  depth?: 'low' | 'med' | 'high' | 'ultra';
+  status: 'queued' | 'planning' | 'searching' | 'reviewing' | 'synthesizing' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
   createdAt: string;
   updatedAt: string;
   startedAt?: string;
@@ -711,6 +774,7 @@ interface ResearchBatchRecord {
   queries: string[];
   history?: { role: string; content: string }[];
   mode: 'quick' | 'deep';
+  depth?: 'low' | 'med' | 'high' | 'ultra';
   maxConcurrent: number;
   sharedCredits: number;
   perItemCredits: number;
@@ -819,6 +883,7 @@ key[0]+model[0] → key[1]+model[0] → key[2]+model[0] → key[0]+model[1] → 
 | Event | Emitted By | Description |
 |-------|-----------|-------------|
 | `step` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Agent step update (plan, search, analyze, synthesize, review) |
+| `progress` | `GET /research-jobs/:id/events` | Live budget, depth, round, and notebook stats while job is running |
 | `sources` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Sources discovered during search |
 | `token` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Streaming answer token |
 | `done` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Final result |

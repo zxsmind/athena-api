@@ -1,18 +1,32 @@
 import { randomUUID } from 'crypto';
 import type { AgentStep, SearchResponse, Source } from './schemas.js';
+import type { DeepDepth, ResolvedResearchPreset } from './engine/depth-presets.js';
+import { loadResearchCheckpoint, saveResearchCheckpoint, type ResearchCheckpoint } from './engine/checkpoint.js';
 
-export type ResearchJobStatus = 'queued' | 'planning' | 'searching' | 'reviewing' | 'synthesizing' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type ResearchJobStatus = 'queued' | 'planning' | 'searching' | 'reviewing' | 'synthesizing' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+
+export interface ResearchJobRuntime {
+  usedCredits: number;
+  remainingCredits: number;
+  round: number;
+  notebookId?: string;
+  openQuestionsCount?: number;
+  sourceMap?: import('./engine/types.js').SourceWithIndex[];
+}
 
 export interface ResearchJobRequest {
   query: string;
   history?: { role: string; content: string }[];
   mode?: 'quick' | 'deep';
+  depth?: DeepDepth;
   conversationId?: string;
+  preset?: ResolvedResearchPreset;
 }
 
 export type ResearchJobEvent =
   | { type: 'status'; status: ResearchJobStatus; detail?: string; timestamp: string }
   | { type: 'step'; data: AgentStep; timestamp: string }
+  | { type: 'progress'; data: import('./engine/types.js').ResearchProgressState; timestamp: string }
   | { type: 'token'; text: string; timestamp: string }
   | { type: 'sources'; sources: Source[]; timestamp: string }
   | { type: 'done'; response: SearchResponse; timestamp: string }
@@ -23,6 +37,8 @@ export interface ResearchJobRecord {
   query: string;
   history?: { role: string; content: string }[];
   mode: 'quick' | 'deep';
+  depth?: DeepDepth;
+  preset?: ResolvedResearchPreset;
   status: ResearchJobStatus;
   createdAt: string;
   updatedAt: string;
@@ -36,6 +52,7 @@ export interface ResearchJobRecord {
   events: ResearchJobEvent[];
   controller?: AbortController;
   conversationId?: string;
+  runtime?: ResearchJobRuntime;
 }
 
 const jobs = new Map<string, ResearchJobRecord>();
@@ -92,6 +109,8 @@ export function createResearchJob(req: ResearchJobRequest): ResearchJobRecord {
     query: req.query,
     history: req.history,
     mode: req.mode || 'quick',
+    depth: req.depth,
+    preset: req.preset,
     status: 'queued',
     createdAt: nowIso(),
     updatedAt: nowIso(),
@@ -117,6 +136,7 @@ export function listResearchJobs(): ResearchJobRecord[] {
 export function markResearchJobRunning(id: string): ResearchJobRecord | undefined {
   const job = jobs.get(id);
   if (!job) return undefined;
+  if (job.cancelled || job.status === 'completed' || job.status === 'failed') return undefined;
   job.status = 'running';
   job.startedAt = job.startedAt || nowIso();
   pushEvent(job, { type: 'status', status: 'running', timestamp: nowIso() });
@@ -158,9 +178,92 @@ export function setResearchJobStatus(id: string, status: ResearchJobStatus, deta
   const job = jobs.get(id);
   if (!job) return undefined;
   if (job.cancelled || job.status === 'completed' || job.status === 'failed') return job;
+  if (job.status === 'paused') return job;
   job.status = status;
   pushEvent(job, { type: 'status', status, detail, timestamp: nowIso() });
   notify(id);
+  return job;
+}
+
+export function setResearchJobRuntime(id: string, runtime: ResearchJobRuntime): ResearchJobRecord | undefined {
+  const job = jobs.get(id);
+  if (!job) return undefined;
+  job.runtime = runtime;
+  job.updatedAt = nowIso();
+  return job;
+}
+
+export function pauseResearchJob(id: string): ResearchJobRecord | undefined {
+  const job = jobs.get(id);
+  if (!job) return undefined;
+  if (job.status !== 'running' && job.status !== 'planning' && job.status !== 'searching' && job.status !== 'reviewing' && job.status !== 'synthesizing') {
+    return undefined;
+  }
+
+  job.status = 'paused';
+  job.updatedAt = nowIso();
+
+  if (job.mode === 'deep' && job.depth && job.preset && job.runtime?.notebookId) {
+    const existing = loadResearchCheckpoint(id);
+    saveResearchCheckpoint({
+      jobId: id,
+      query: job.query,
+      depth: job.depth,
+      preset: job.preset,
+      notebookId: job.runtime.notebookId,
+      usedCredits: job.runtime.usedCredits,
+      remainingCredits: job.runtime.remainingCredits,
+      round: job.runtime.round,
+      sourceMap: job.runtime.sourceMap ?? existing?.sourceMap ?? [],
+      lastUpdatedAt: nowIso(),
+    });
+  }
+
+  job.controller?.abort();
+  pushEvent(job, { type: 'status', status: 'paused', detail: 'Paused by user', timestamp: nowIso() });
+  notify(id);
+  return job;
+}
+
+export function resumeResearchJob(id: string): ResearchJobRecord | undefined {
+  const job = jobs.get(id);
+  if (!job || job.status !== 'paused') return undefined;
+  job.status = 'queued';
+  job.cancelled = false;
+  job.error = undefined;
+  job.finishedAt = undefined;
+  pushEvent(job, { type: 'status', status: 'queued', detail: 'Resuming from checkpoint', timestamp: nowIso() });
+  notify(id);
+  return job;
+}
+
+export function registerRecoveredJob(checkpoint: ResearchCheckpoint): ResearchJobRecord {
+  const existing = jobs.get(checkpoint.jobId);
+  if (existing) return existing;
+
+  const job: ResearchJobRecord = {
+    id: checkpoint.jobId,
+    query: checkpoint.query,
+    mode: 'deep',
+    depth: checkpoint.depth,
+    preset: checkpoint.preset,
+    status: 'queued',
+    createdAt: checkpoint.lastUpdatedAt,
+    updatedAt: nowIso(),
+    cancelled: false,
+    steps: [],
+    events: [],
+    runtime: {
+      usedCredits: checkpoint.usedCredits,
+      remainingCredits: checkpoint.remainingCredits,
+      round: checkpoint.round,
+      notebookId: checkpoint.notebookId,
+      sourceMap: checkpoint.sourceMap,
+    },
+  };
+  jobs.set(checkpoint.jobId, job);
+  pushEvent(job, { type: 'status', status: 'queued', detail: 'Recovered from checkpoint after server restart', timestamp: nowIso() });
+  trimJobs();
   return job;
 }
 
@@ -180,6 +283,7 @@ export function appendResearchJobEvent(id: string, event: ResearchJobEvent): Res
   const job = jobs.get(id);
   if (!job) return undefined;
   if (job.cancelled && event.type !== 'status') return job;
+  if (job.status === 'paused' && event.type !== 'status') return job;
   if (event.type === 'step') {
     job.steps!.push(event.data);
   }

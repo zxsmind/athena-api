@@ -1,4 +1,5 @@
-import type { Source, Message } from './api';
+import type { Source, Message, SearchResponse, ResearchProgressState, ConversationMeta, SearchMode, DeepDepth } from './api';
+import { getDefaultDepth, getDefaultMode } from '../hooks/useDefaultMode';
 
 export const STEP_LABELS: Record<string, string> = {
   plan: 'Plan',
@@ -11,7 +12,81 @@ export const STEP_LABELS: Record<string, string> = {
   'deep-analyze': 'Deep Analysis',
   'follow-up': 'Follow-up',
   webpage: 'Page',
+  notebook: 'Notebook',
+  verification: 'Verification',
+  cooldown: 'Pacing',
+  budget: 'Budget',
+  checkpoint: 'Checkpoint',
 };
+
+export function inferResearchFromMessages(messages: Message[]): { mode?: SearchMode; depth?: DeepDepth } {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const depth = messages[i]?.data?.research_depth;
+    if (depth) return { mode: 'deep', depth };
+  }
+  return {};
+}
+
+export function resolveConversationResearch(options: {
+  routeMode?: SearchMode;
+  routeDepth?: DeepDepth;
+  conversation?: Pick<ConversationMeta, 'mode' | 'depth'>;
+  messages?: Message[];
+}): { mode: SearchMode; depth: DeepDepth } {
+  if (options.routeMode) {
+    return {
+      mode: options.routeMode,
+      depth: options.routeDepth ?? (options.routeMode === 'deep' ? getDefaultDepth() : 'med'),
+    };
+  }
+  if (options.conversation?.mode) {
+    return {
+      mode: options.conversation.mode,
+      depth: options.conversation.depth ?? (options.conversation.mode === 'deep' ? getDefaultDepth() : 'med'),
+    };
+  }
+  const inferred = inferResearchFromMessages(options.messages ?? []);
+  if (inferred.mode) {
+    return {
+      mode: inferred.mode,
+      depth: inferred.depth ?? getDefaultDepth(),
+    };
+  }
+  return { mode: getDefaultMode(), depth: getDefaultDepth() };
+}
+
+export function mergeResearchProgress(
+  data: SearchResponse | undefined,
+  state: ResearchProgressState,
+): SearchResponse {
+  const limit = state.usedCredits + state.remainingCredits;
+  const base: SearchResponse = data ?? {
+    query: '',
+    answer: '',
+    sources: [],
+    steps: [],
+    results_count: 0,
+    elapsed_ms: 0,
+  };
+  return {
+    ...base,
+    research_budget: {
+      used: state.usedCredits,
+      limit,
+      exhausted: state.exhausted,
+    },
+    research_depth: state.depth ?? base.research_depth,
+    research_notebook: state.notebookId
+      ? {
+          id: state.notebookId,
+          path: base.research_notebook?.path ?? '',
+          entries: state.notebookEntries ?? base.research_notebook?.entries ?? 0,
+          updatedAt: base.research_notebook?.updatedAt ?? new Date().toISOString(),
+          openQuestions: state.openQuestionsCount,
+        }
+      : base.research_notebook,
+  };
+}
 
 export function sanitizeUrl(url: string): string {
   if (/^https?:\/\//i.test(url)) return url;
@@ -107,6 +182,21 @@ export function computeCitationTooltipPosition(
   top = clamp(top, margin, Math.max(margin, vh - tooltipSize.height - margin));
 
   return { left, top };
+}
+
+export function copyToClipboard(text: string): void {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).catch(() => {});
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
 }
 
 export const FAVICON_URL = 'https://www.google.com/s2/favicons?domain=${domain}&sz=16';

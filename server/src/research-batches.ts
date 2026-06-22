@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import type { SearchResponse, Source } from './schemas.js';
+import type { DeepDepth, ResolvedResearchPreset } from './engine/depth-presets.js';
 
 export type ResearchBatchStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -7,9 +8,11 @@ export interface ResearchBatchRequest {
   queries: string[];
   history?: { role: string; content: string }[];
   mode?: 'quick' | 'deep';
+  depth?: DeepDepth;
   maxConcurrent?: number;
   sharedCredits?: number;
   perItemCredits?: number;
+  preset?: ResolvedResearchPreset;
 }
 
 export interface ResearchBatchItem {
@@ -36,6 +39,8 @@ export interface ResearchBatchRecord {
   queries: string[];
   history?: { role: string; content: string }[];
   mode: 'quick' | 'deep';
+  depth?: DeepDepth;
+  preset?: ResolvedResearchPreset;
   maxConcurrent: number;
   sharedCredits: number;
   perItemCredits: number;
@@ -138,6 +143,8 @@ export function createResearchBatch(req: ResearchBatchRequest): ResearchBatchRec
     queries,
     history: req.history,
     mode: req.mode || 'quick',
+    depth: req.depth,
+    preset: req.preset,
     maxConcurrent: Math.max(1, req.maxConcurrent || 2),
     sharedCredits,
     perItemCredits,

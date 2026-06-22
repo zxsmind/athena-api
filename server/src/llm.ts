@@ -1,4 +1,5 @@
 import { loadSettings } from './settings-store.js';
+import { parseRetryAfterMs, recordRateLimitHit, recordRateLimitSuccess } from './engine/rate-signals.js';
 import fs from 'fs';
 import path from 'path';
 import { resolveTargets, modelSupportsTools, buildLLMRequestBody, learnedNoToolCalling } from './llm-utils.js';
@@ -43,6 +44,94 @@ export interface LLMResult {
   provider: string;
 }
 
+function convertToGeminiBody(body: Record<string, unknown>, model: string, provider?: { reasoningEffort?: string; includeThoughts?: boolean; disabledThinkingModels?: string[] }): Record<string, unknown> {
+  const messages = (body.messages || []) as Record<string, unknown>[];
+
+  const systemParts: string[] = [];
+  const chatMessages: Record<string, unknown>[] = [];
+  for (const msg of messages) {
+    if (msg.role === 'system') {
+      systemParts.push(String(msg.content || ''));
+    } else {
+      chatMessages.push(msg);
+    }
+  }
+
+  const toolCallIdToName = new Map<string, string>();
+  for (const msg of chatMessages) {
+    if (msg.role === 'assistant' && msg.tool_calls) {
+      for (const tc of (msg.tool_calls as Record<string, unknown>[])) {
+        toolCallIdToName.set(tc.id as string, ((tc.function as Record<string, unknown>)?.name) as string);
+      }
+    }
+  }
+
+  const contents: Record<string, unknown>[] = [];
+  for (const msg of chatMessages) {
+    if (msg.role === 'tool') {
+      const tcId = msg.tool_call_id as string;
+      const funcName = toolCallIdToName.get(tcId) || 'unknown';
+      const raw = msg.content;
+      let response: Record<string, unknown> = { result: String(raw || '') };
+      if (typeof raw === 'string') { try { const p = JSON.parse(raw); if (typeof p === 'object') response = p; } catch { /* tool payload is plain text */ } }
+      contents.push({ role: 'user', parts: [{ functionResponse: { name: funcName, response } }] });
+    } else if (msg.role === 'assistant') {
+      const parts: Record<string, unknown>[] = [];
+      if (msg.content) parts.push({ text: String(msg.content) });
+      if (msg.tool_calls) {
+        for (const tc of (msg.tool_calls as Record<string, unknown>[])) {
+          const func = tc.function as Record<string, unknown> || {};
+          let args: Record<string, unknown> = {};
+          if (typeof func.arguments === 'string') { try { args = JSON.parse(func.arguments); } catch { /* provider returned malformed tool args */ } }
+          else if (typeof func.arguments === 'object') args = func.arguments as Record<string, unknown>;
+          parts.push({ functionCall: { name: func.name, args: args || {} } });
+        }
+      }
+      contents.push({ role: 'model', parts });
+    } else {
+      const parts: Record<string, unknown>[] = [];
+      if (msg.content) parts.push({ text: String(msg.content) });
+      contents.push({ role: 'user', parts });
+    }
+  }
+
+  const geminiBody: Record<string, unknown> = { contents };
+  if (systemParts.length > 0) {
+    geminiBody.system_instruction = { parts: [{ text: systemParts.join('\n') }] };
+  }
+
+  const genConfig: Record<string, unknown> = {};
+  if (body.temperature != null) genConfig.temperature = body.temperature;
+  if (body.max_completion_tokens != null) genConfig.maxOutputTokens = body.max_completion_tokens as number;
+
+  const isFlash = /flash/i.test(model);
+  const disabled = provider?.disabledThinkingModels;
+  const isDisabled = Array.isArray(disabled) && disabled.includes(model);
+  if (!isFlash && !isDisabled && provider?.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+    genConfig.thinking_level = provider.reasoningEffort;
+  }
+
+  if (Object.keys(genConfig).length > 0) {
+    geminiBody.generationConfig = genConfig;
+  }
+
+  if (body.tools) {
+    const openAITools = body.tools as Record<string, unknown>[];
+    geminiBody.tools = openAITools.map(t => ({
+      functionDeclarations: [(t.function as Record<string, unknown>) || {}],
+    }));
+  }
+
+  return geminiBody;
+}
+
+function buildGeminiUrl(baseUrl: string, model: string, stream: boolean): string {
+  const base = baseUrl.replace(/\/+$/, '');
+  return stream
+    ? `${base}/models/${model}:streamGenerateContent`
+    : `${base}/models/${model}:generateContent`;
+}
+
 function normalizeGeminiResponse(data: unknown, model: string): unknown {
   const d = data as Record<string, unknown>;
   const candidates = (d.candidates || []) as unknown[];
@@ -52,7 +141,7 @@ function normalizeGeminiResponse(data: unknown, model: string): unknown {
   const parts = (content?.parts || []) as Record<string, unknown>[];
   const text = parts.filter(p => !p.thought).map(p => String(p.text || '')).join('');
   const reasoning = parts.filter(p => p.thought).map(p => String(p.text || '')).join('');
-  const finish = String(c.finishReason || 'stop');
+  let finish = String(c.finishReason || 'stop');
   const toolCalls: Record<string, unknown>[] = [];
   for (const p of parts) {
     const pp = p as Record<string, unknown>;
@@ -65,6 +154,7 @@ function normalizeGeminiResponse(data: unknown, model: string): unknown {
       });
     }
   }
+  if (toolCalls.length > 0 && finish === 'STOP') finish = 'tool_calls';
   const msg: Record<string, unknown> = { role: 'assistant', content: text || null };
   if (toolCalls.length > 0) msg.tool_calls = toolCalls;
   if (reasoning) msg.reasoning = reasoning;
@@ -135,12 +225,28 @@ export function stripThinkingTags(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*/g, '');
 }
 
-const GEMINI_CONTENT_FIELDS = ['content', 'text', 'message.content'];
 function extractDeltaText(delta: unknown): string {
   if (!delta) return '';
   const d = delta as Record<string, unknown>;
+
+  // Native Gemini streaming: candidates[0].content.parts[x].text
+  const candidates = d.candidates as Record<string, unknown>[] | undefined;
+  if (candidates?.length) {
+    const c = candidates[0];
+    const content = c?.content as Record<string, unknown> | undefined;
+    const parts = content?.parts as Record<string, unknown>[] | undefined;
+    if (parts?.length) {
+      const textParts = parts.filter(p => !p.thought).map(p => String(p.text || ''));
+      if (textParts.length > 0) return textParts.join('');
+      const thoughtParts = parts.filter(p => p.thought).map(p => String(p.text || ''));
+      if (thoughtParts.length > 0) return '';
+    }
+    return '';
+  }
+
+  // OpenAI-compatible format
+  const GEMINI_CONTENT_FIELDS = ['content', 'text', 'message.content'];
   if (d.reasoning_content || d.reasoning || d.thought) {
-    // only skip if there's no content at all (thought-only delta)
     for (const path of GEMINI_CONTENT_FIELDS) {
       const val = path.split('.').reduce((o: Record<string, unknown> | undefined, k: string) => o?.[k] as Record<string, unknown> | undefined, d);
       if (val) return String(val);
@@ -184,31 +290,42 @@ async function tryProvider(
     return null;
   }
 
-  const reqBody: Record<string, unknown> = { ...body, model, stream: false };
-  const supportsThinking = !provider.disabledThinkingModels || !provider.disabledThinkingModels.includes(model);
-  if (supportsThinking && target.id === 'gemini' && provider.reasoningEffort && ['minimal', 'low', 'medium', 'high'].includes(provider.reasoningEffort)) {
-    reqBody.thinkingConfig = {
-      thinking_level: provider.reasoningEffort,
-      thinking_summaries: provider.includeThoughts ? 'auto' : 'none',
-    };
-  } else if (supportsThinking && provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
-    reqBody.reasoning_effort = provider.reasoningEffort;
+  const isGemini = target.id === 'gemini';
+  const reqBody: Record<string, unknown> = isGemini
+    ? convertToGeminiBody(body, model, provider)
+    : { ...body, model, stream: false };
+
+  if (!isGemini) {
+    const supportsThinking = !provider.disabledThinkingModels || !provider.disabledThinkingModels.includes(model);
+    if (supportsThinking && provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+      reqBody.reasoning_effort = provider.reasoningEffort;
+    }
   }
+
+  const effectiveUrl = isGemini ? buildGeminiUrl(provider.url, model, false) : target.url;
 
   for (const apiKey of provider.keys) {
     try {
       const { signal, cleanup } = makeRequestSignal(30000, opts.signal);
       try {
-        const res = await fetch(target.url, {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (isGemini) {
+          headers['x-goog-api-key'] = apiKey;
+        } else {
+          headers['Authorization'] = `Bearer ${apiKey}`;
+        }
+
+        const res = await fetch(effectiveUrl, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify(reqBody),
           signal,
         });
 
         if (res.status === 429) {
+          recordRateLimitHit(parseRetryAfterMs(res));
           tried.push(`${target.id}/${model} -> rate limited (key ${apiKey.slice(-6)})`);
-          logError(label, target.url, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
+          logError(label, effectiveUrl, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
           continue;
         }
         if (res.status === 401) {
@@ -218,28 +335,29 @@ async function tryProvider(
         if (res.status === 400 || res.status === 404 || res.status === 413) {
           const errBody = await res.text().catch(() => '');
           tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-          logError(label, target.url, res.status, `Model: ${model}\n${errBody}`);
+          logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
           if (res.status === 400 && opts.tools) learnedNoToolCalling.add(model);
-          return null; // Hard error, skip remaining keys
+          return null;
         }
         if (!res.ok) {
           const errBody = await res.text().catch(() => '');
           tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-          logError(label, target.url, res.status, `Model: ${model}\n${errBody}`);
+          logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
           continue;
         }
 
         let data: unknown = await res.json();
-        if (target.id === 'gemini' || (data as Record<string, unknown>)?.candidates) {
+        if (isGemini || (data as Record<string, unknown>)?.candidates) {
           data = normalizeGeminiResponse(data, model);
         }
+        recordRateLimitSuccess();
         return { data, provider: target.id, model };
       } finally {
         cleanup();
       }
     } catch (err: unknown) {
       tried.push(`${target.id}/${model} -> request failed`);
-      logError(label, target.url, 0, `Model: ${model}\n${err instanceof Error ? err.message : String(err)}`);
+      logError(label, effectiveUrl, 0, `Model: ${model}\n${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return null;
@@ -265,31 +383,42 @@ async function tryProviderStream(
     return null;
   }
 
-  const reqBody: Record<string, unknown> = { ...body, model, stream: true };
-  const supportsThinking = !provider.disabledThinkingModels || !provider.disabledThinkingModels.includes(model);
-  if (supportsThinking && target.id === 'gemini' && provider.reasoningEffort && ['minimal', 'low', 'medium', 'high'].includes(provider.reasoningEffort)) {
-    reqBody.thinkingConfig = {
-      thinking_level: provider.reasoningEffort,
-      thinking_summaries: provider.includeThoughts ? 'auto' : 'none',
-    };
-  } else if (supportsThinking && provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
-    reqBody.reasoning_effort = provider.reasoningEffort;
+  const isGemini = target.id === 'gemini';
+  const reqBody: Record<string, unknown> = isGemini
+    ? convertToGeminiBody(body, model, provider)
+    : { ...body, model, stream: true };
+
+  if (!isGemini) {
+    const supportsThinking = !provider.disabledThinkingModels || !provider.disabledThinkingModels.includes(model);
+    if (supportsThinking && provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
+      reqBody.reasoning_effort = provider.reasoningEffort;
+    }
   }
+
+  const effectiveUrl = isGemini ? buildGeminiUrl(provider.url, model, true) : target.url;
 
   for (const apiKey of provider.keys) {
     try {
       const { signal, cleanup } = makeRequestSignal(opts.tools ? 60000 : 30000, opts.signal);
       try {
-        const res = await fetch(target.url, {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (isGemini) {
+          headers['x-goog-api-key'] = apiKey;
+        } else {
+          headers['Authorization'] = `Bearer ${apiKey}`;
+        }
+
+        const res = await fetch(effectiveUrl, {
           method: 'POST',
-          headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify(reqBody),
           signal,
         });
 
         if (res.status === 429) {
+          recordRateLimitHit(parseRetryAfterMs(res));
           tried.push(`${target.id}/${model} -> rate limited (key ${apiKey.slice(-6)})`);
-          logError(label, target.url, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
+          logError(label, effectiveUrl, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
           continue;
         }
         if (res.status === 401) {
@@ -299,20 +428,19 @@ async function tryProviderStream(
         if (res.status === 400 || res.status === 404 || res.status === 413) {
           const errBody = await res.text().catch(() => '');
           tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-          logError(label, target.url, res.status, `Model: ${model}\n${errBody}`);
+          logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
           if (res.status === 400 && opts.tools) learnedNoToolCalling.add(model);
           return null;
         }
         if (!res.ok) {
           const errBody = await res.text().catch(() => '');
           tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-          logError(label, target.url, res.status, `Model: ${model}\n${errBody}`);
+          logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
           continue;
         }
 
         let fullContent = '';
         const stripper = new ThinkStripper(opts.onToken, { value: '' });
-        const isGemini = target.id === 'gemini';
 
         if (!res.body) return null;
 
@@ -349,13 +477,14 @@ async function tryProviderStream(
         }
         stripper.flush();
 
+        recordRateLimitSuccess();
         return { data: null, fullContent, provider: target.id, model };
       } finally {
         cleanup();
       }
     } catch (err: unknown) {
       tried.push(`${target.id}/${model} -> request failed`);
-      logError(label, target.url, 0, `Model: ${model}\n${err instanceof Error ? err.message : String(err)}`);
+      logError(label, effectiveUrl, 0, `Model: ${model}\n${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return null;

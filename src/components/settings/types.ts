@@ -31,6 +31,28 @@ export interface ModelRouting {
   deep: ModelRoute;
 }
 
+export type DeepDepth = 'low' | 'med' | 'high' | 'ultra';
+
+export interface ResearchDepthPresetConfig {
+  budgetCredits: number;
+  maxRounds: number;
+  minCooldownMs: number;
+  maxCooldownMs: number;
+  notebookCadenceRawBlocks: number;
+  maxSearchesPerRound: number;
+  maxFetchesPerRound: number;
+  minIndependentSourcesForKeyClaims: number;
+  contradictionPass: boolean;
+  primarySourcePreference: boolean;
+  exhaustiveGapReview: boolean;
+  checkpointEveryRounds: number;
+}
+
+export interface ResearchDepthsSettings {
+  defaultDepth: DeepDepth;
+  presets: Record<DeepDepth, ResearchDepthPresetConfig>;
+}
+
 export interface ApiSettingsData {
   defaultMaxConcurrent: number;
   maxActiveJobs: number;
@@ -52,6 +74,7 @@ export interface SettingsData {
     maxCreditsPerQuery: number;
     maxFollowUpQueries: number;
   };
+  researchDepths: ResearchDepthsSettings;
   modelRouting: ModelRouting;
   api: ApiSettingsData;
   thinkingStripPatterns: string;
@@ -60,6 +83,15 @@ export interface SettingsData {
   showDebugContext?: boolean;
   autocompleteCount: number;
 }
+
+export const DEPTH_LABELS: Record<DeepDepth, string> = {
+  low: 'Deep Low',
+  med: 'Deep Med',
+  high: 'Deep High',
+  ultra: 'Deep Ultra',
+};
+
+export const DEPTH_KEYS: DeepDepth[] = ['low', 'med', 'high', 'ultra'];
 
 export const PROVIDER_KEYS = ['groq', 'gemini', 'vercel', 'openrouter', 'custom'] as const;
 export const PROVIDER_LABELS: Record<(typeof PROVIDER_KEYS)[number], string> = {

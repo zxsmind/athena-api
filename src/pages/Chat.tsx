@@ -1,42 +1,65 @@
-import { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
+import { useState, useEffect, useRef, useCallback, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useParams, useLocation } from 'react-router-dom';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { Menu } from 'lucide-react';
 import SearchInput from '../components/SearchInput';
-import { getDefaultMode } from '../hooks/useDefaultMode';
 import ActivityModal from '../components/ActivityModal';
 import DiagramOverlay from '../components/DiagramOverlay';
 import CitationTooltip from '../components/CitationTooltip';
 import SourcesPanel from '../components/chat/SourcesPanel';
 import { MessageUser, MessageLoading, MessageError, MessageComplete, MessageSearches } from '../components/chat/MessageComponents';
-import { search, subscribeToJobEvents, fetchMessages, saveMessages, type Message, type Source, type SearchResponse } from '../lib/api';
+import { search, subscribeToJobEvents, fetchMessages, saveMessages, pauseResearchJob, resumeResearchJob, updateConversationResearch, type ConversationMeta, type DeepDepth, type Message, type SearchMode, type Source, type SearchResponse, type ResearchJobStatus } from '../lib/api';
+
+type Conversation = Omit<ConversationMeta, 'timestamp'> & { timestamp: Date };
+import { setDefaultDepth, setDefaultMode } from '../hooks/useDefaultMode';
 import {
   normalizeSearchQuery,
+  mergeResearchProgress,
+  resolveConversationResearch,
   computeCitationTooltipPosition, estimateCitationTooltipSize,
   ABORT_TIMEOUT_MS, FALLBACK_FAVICON,
+  copyToClipboard,
   type CitationTooltipItem, type CitationTooltipPosition,
 } from '../lib/chat-utils';
 
 interface ChatProps {
   chatMessages: Record<string, Message[]>;
   onUpdateMessages: React.Dispatch<React.SetStateAction<Record<string, Message[]>>>;
-  conversations: { id: string; title: string | null; query: string; timestamp: Date }[];
+  conversations: Conversation[];
   onOpenSidebar?: () => void;
+  onConversationResearchUpdate?: (id: string, mode: SearchMode, depth?: DeepDepth) => void;
 }
 
-export default function Chat({ chatMessages, onUpdateMessages, conversations, onOpenSidebar }: ChatProps) {
+export default function Chat({ chatMessages, onUpdateMessages, conversations, onOpenSidebar, onConversationResearchUpdate }: ChatProps) {
   const { id } = useParams<{ id: string }>();
   const location = useLocation();
   const scrollRef = useRef<HTMLDivElement>(null);
   const convId = id ?? '';
   const isMobile = useMediaQuery('(max-width: 1023px)');
 
-  const initialQuery = (location.state as { query?: string; mode?: 'quick' | 'deep' } | null)?.query ?? '';
-  const initialMode = (location.state as { query?: string; mode?: 'quick' | 'deep' } | null)?.mode ?? getDefaultMode();
-  const conversationMode = useRef(initialMode);
+  const routeState = location.state as { query?: string; mode?: SearchMode; depth?: DeepDepth } | null;
+  const initialQuery = routeState?.query ?? '';
+  const currentConv = conversations.find(c => c.id === convId);
 
   const [messages, setMessages] = useState<Message[]>([]);
+  const conversationMode = useRef<SearchMode>('quick');
+  const conversationDepth = useRef<DeepDepth>('med');
+
+  const research = useMemo(
+    () => resolveConversationResearch({
+      routeMode: routeState?.mode,
+      routeDepth: routeState?.depth,
+      conversation: currentConv,
+      messages,
+    }),
+    [routeState?.mode, routeState?.depth, currentConv, messages],
+  );
+
+  useEffect(() => {
+    conversationMode.current = research.mode;
+    conversationDepth.current = research.depth;
+  }, [research.mode, research.depth]);
   const messagesRef = useRef<Message[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [diagramSvg, setDiagramSvg] = useState<string | null>(null);
@@ -115,10 +138,12 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     const srcs = msg?.type === 'assistant' && msg.data ? msg.data.sources : [];
     if (srcs.length > 0) {
       if (panelFadeTimer.current) clearTimeout(panelFadeTimer.current);
-      setPanelSources(srcs);
-      setPanelClosing(false);
+      queueMicrotask(() => {
+        setPanelSources(srcs);
+        setPanelClosing(false);
+      });
     } else {
-      setPanelClosing(true);
+      queueMicrotask(() => setPanelClosing(true));
       panelFadeTimer.current = setTimeout(() => { setPanelClosing(false); setPanelSources([]); }, 200);
     }
     return () => { if (panelFadeTimer.current) clearTimeout(panelFadeTimer.current); };
@@ -318,7 +343,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       rmOverlays();
       activeText = t;
       const rects = t.getClientRects();
-      let count = rects?.length || 0;
+      const count = rects?.length || 0;
       if (!count || (count === 1 && (!rects![0].width || !rects![0].height))) {
         // fallback
         const br = t.getBoundingClientRect();
@@ -414,7 +439,19 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     };
   }, []);
 
-  const runSearch = useCallback((q: string, history?: { role: string; content: string }[], mode?: 'quick' | 'deep') => {
+  const runSearch = useCallback((q: string, history?: { role: string; content: string }[], mode?: SearchMode, depth?: DeepDepth) => {
+    const effectiveMode = mode ?? conversationMode.current;
+    const effectiveDepth = depth ?? conversationDepth.current;
+    conversationMode.current = effectiveMode;
+    conversationDepth.current = effectiveDepth;
+    setDefaultMode(effectiveMode);
+    if (effectiveMode === 'deep') setDefaultDepth(effectiveDepth);
+    if (convId) {
+      void updateConversationResearch(convId, effectiveMode, effectiveMode === 'deep' ? effectiveDepth : undefined)
+        .then(() => onConversationResearchUpdate?.(convId, effectiveMode, effectiveMode === 'deep' ? effectiveDepth : undefined))
+        .catch(() => {});
+    }
+
     const myGen = ++runGenRef.current;
     if (searchingRef.current) searchingRef.current = false;
 
@@ -450,9 +487,19 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
 
     const isStale = () => myGen !== runGenRef.current;
 
-    search(q, history, mode, controller.signal, convId)
+    search(q, history, effectiveMode, effectiveDepth, controller.signal, convId)
       .then(({ id }) => {
         if (isStale()) return;
+
+        setMessages(prev => {
+          if (myGen !== runGenRef.current) return prev;
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.type === 'assistant') {
+            updated[updated.length - 1] = { ...last, jobId: id, jobStatus: 'running', data: { ...(last.data || { query: q, answer: '', sources: [], steps: [], results_count: 0, elapsed_ms: 0 }), research_depth: effectiveMode === 'deep' ? effectiveDepth : undefined } as SearchResponse };
+          }
+          return updated;
+        });
 
         const unsubscribe = subscribeToJobEvents(id, {
           onToken: (text) => {
@@ -517,6 +564,43 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
               if (last?.type === 'assistant') {
                 updated[updated.length - 1] = { ...last, searches: last.searches, data: { ...last.data, sources } as SearchResponse };
               }
+              return updated;
+            });
+          },
+          onStatus: (status: ResearchJobStatus) => {
+            if (isStale()) return;
+            if (status === 'paused') {
+              searchingRef.current = false;
+              searchStartRef.current = 0;
+              setIsSearching(false);
+            }
+            setMessages(prev => {
+              if (myGen !== runGenRef.current) return prev;
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last?.type === 'assistant') {
+                updated[updated.length - 1] = {
+                  ...last,
+                  jobStatus: status,
+                  paused: status === 'paused',
+                  loading: status !== 'paused' && status !== 'completed' && status !== 'failed' && status !== 'cancelled',
+                  streaming: status !== 'paused' && last.streaming,
+                };
+              }
+              return updated;
+            });
+          },
+          onProgress: (state) => {
+            if (isStale()) return;
+            setMessages(prev => {
+              if (myGen !== runGenRef.current) return prev;
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last?.type !== 'assistant') return prev;
+              updated[updated.length - 1] = {
+                ...last,
+                data: mergeResearchProgress(last.data, state),
+              };
               return updated;
             });
           },
@@ -595,13 +679,13 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
         searchStartRef.current = 0;
         setIsSearching(false);
       });
-  }, []);
+  }, [convId, onConversationResearchUpdate]);
 
   useEffect(() => {
     if (!initialQuery || !loaded || messages.length > 0) return;
     queueMicrotask(() => {
       setMessages([{ type: 'user', content: initialQuery }, { type: 'assistant', content: '', loading: true }]);
-      runSearch(initialQuery, undefined, initialMode);
+      runSearch(initialQuery, undefined, conversationMode.current, conversationDepth.current);
     });
   }, [initialQuery, loaded, messages.length, runSearch]);
 
@@ -613,15 +697,101 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     }
   }, [messages]);
 
-  const handleFollowUp = useCallback((q: string, mode?: 'quick' | 'deep') => {
+  const handlePauseJob = useCallback(async (jobId: string) => {
+    await pauseResearchJob(jobId);
+  }, []);
+
+  const handleResumeJob = useCallback(async (jobId: string) => {
+    const resumed = await resumeResearchJob(jobId);
+    if (!resumed) return;
+    searchingRef.current = true;
+    setIsSearching(true);
+    if (searchStartRef.current === 0) searchStartRef.current = Date.now();
+    setMessages(prev => {
+      const updated = [...prev];
+      const last = updated[updated.length - 1];
+      if (last?.type === 'assistant') {
+        updated[updated.length - 1] = { ...last, loading: true, paused: false, streaming: true, jobStatus: 'running', jobId };
+      }
+      return updated;
+    });
+    const myGen = runGenRef.current;
+    subscribeToJobEvents(jobId, {
+      onStatus: (status) => {
+        if (myGen !== runGenRef.current) return;
+        if (status === 'paused') {
+          searchingRef.current = false;
+          searchStartRef.current = 0;
+          setIsSearching(false);
+        }
+        setMessages(prev => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.type === 'assistant') {
+            updated[updated.length - 1] = {
+              ...last,
+              jobStatus: status,
+              paused: status === 'paused',
+              loading: status !== 'paused' && status !== 'completed' && status !== 'failed' && status !== 'cancelled',
+            };
+          }
+          return updated;
+        });
+      },
+      onProgress: (state) => {
+        if (myGen !== runGenRef.current) return;
+        setMessages(prev => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.type !== 'assistant') return prev;
+          updated[updated.length - 1] = {
+            ...last,
+            data: mergeResearchProgress(last.data, state),
+          };
+          return updated;
+        });
+      },
+      onDone: (response) => {
+        if (myGen !== runGenRef.current) return;
+        setMessages(prev => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.type === 'assistant') {
+            updated[updated.length - 1] = { ...last, content: response.answer, data: response, loading: false, streaming: false, timerMs: response.elapsed_ms, paused: false };
+          }
+          return updated;
+        });
+        searchingRef.current = false;
+        searchStartRef.current = 0;
+        setIsSearching(false);
+      },
+      onError: (message) => {
+        if (myGen !== runGenRef.current) return;
+        setMessages(prev => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last?.type === 'assistant') {
+            updated[updated.length - 1] = { ...last, error: message, loading: false, paused: false };
+          }
+          return updated;
+        });
+        searchingRef.current = false;
+        searchStartRef.current = 0;
+        setIsSearching(false);
+      },
+    });
+  }, []);
+
+  const handleFollowUp = useCallback((q: string, mode?: SearchMode, depth?: DeepDepth) => {
     if (searchingRef.current) return;
     if (mode) conversationMode.current = mode;
+    if (depth) conversationDepth.current = depth;
     const currentMessages = messagesRef.current;
     const history = [...currentMessages]
       .filter(m => m.content && !m.loading)
       .map(m => ({ role: m.type === 'user' ? 'user' as const : 'assistant' as const, content: m.content }));
     setMessages(prev => [...prev, { type: 'user', content: q }, { type: 'assistant', content: '', loading: true }]);
-    setTimeout(() => runSearch(q, history, conversationMode.current), 0);
+    setTimeout(() => runSearch(q, history, conversationMode.current, conversationDepth.current), 0);
   }, [runSearch]);
 
   const retryLast = useCallback(() => {
@@ -639,6 +809,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
     runSearch(q, [...currentMessages]
       .filter(m => m.content && !m.loading)
       .map(m => ({ role: m.type === 'user' ? 'user' as const : 'assistant' as const, content: m.content }))
+      , conversationMode.current, conversationDepth.current
     );
   }, [runSearch]);
 
@@ -671,11 +842,10 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       updated.push({ type: 'assistant', content: '', loading: true });
       return updated;
     });
-    runSearch(newText, history);
+    runSearch(newText, history, conversationMode.current, conversationDepth.current);
     setEditIndex(-1);
   }, [editText, runSearch]);
 
-  const currentConv = conversations.find(c => c.id === convId);
   const title = currentConv?.title ?? currentConv?.query ?? '';
 
   return (
@@ -760,7 +930,10 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
                   msg={msg} i={i} messages={messages}
                   displayMs={displayMs}
                   onDiagramClick={setDiagramSvg}
-                  onOpenModal={() => setModalOpen(true)}
+                  onOpenModal={() => { setModalMsgIdx(i); setModalOpen(true); }}
+                  showJobControls={(msg.data?.research_depth === 'high' || msg.data?.research_depth === 'ultra') && !!msg.jobId}
+                  onPause={msg.jobId ? () => { void handlePauseJob(msg.jobId!); } : undefined}
+                  onResume={msg.jobId ? () => { void handleResumeJob(msg.jobId!); } : undefined}
                 />
               ) : msg.error ? (
                 <MessageError msg={msg} onRetry={retryLast} />
@@ -771,7 +944,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
                   copiedIndex={copiedIndex}
                   onDiagramClick={setDiagramSvg}
                   onCopy={() => {
-                    navigator.clipboard.writeText(msg.content);
+                    copyToClipboard(msg.content);
                     setCopiedIndex(i);
                     setTimeout(() => setCopiedIndex(-1), 1200);
                   }}
@@ -787,11 +960,13 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
 
       <div style={{ flexShrink: 0, padding: `12px var(--chat-pad-x, 28px) 20px`, maxWidth: 720, margin: '0 auto', width: '100%' }}>
         <SearchInput
+          key={`${convId}-${research.mode}-${research.depth}`}
           onSubmit={handleFollowUp}
           compact
           dropdownUp
 autoFocus
-          initialMode={initialMode}
+          initialMode={research.mode}
+          initialDepth={research.depth}
           disabled={isSearching}
         />
       </div>
@@ -910,6 +1085,19 @@ autoFocus
             sources={modalMsg.data?.sources || []}
             finalContext={modalMsg.data?.finalContext}
             showDebugContext={debugContextEnabled}
+            researchMeta={modalMsg.data ? {
+              depth: modalMsg.data.research_depth,
+              budget: modalMsg.data.research_budget ? {
+                used: modalMsg.data.research_budget.used,
+                limit: modalMsg.data.research_budget.limit,
+                remaining: modalMsg.data.research_budget.limit - modalMsg.data.research_budget.used,
+              } : undefined,
+              notebook: modalMsg.data.research_notebook ? {
+                entries: modalMsg.data.research_notebook.entries,
+                updatedAt: modalMsg.data.research_notebook.updatedAt,
+                openQuestions: modalMsg.data.research_notebook.openQuestions,
+              } : undefined,
+            } : undefined}
           />
         ) : null;
       })()}

@@ -3,9 +3,13 @@ import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import type { Message } from './schemas.js';
+import type { DeepDepth } from './engine/depth-presets.js';
+import { normalizeDeepDepth } from './engine/depth-presets.js';
+
+export type ConversationMode = 'quick' | 'deep';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, '..', 'data');
+const DATA_DIR = process.env.ATHENA_DATA_DIR ?? join(__dirname, '..', 'data');
 const DB_FILE = join(DATA_DIR, 'db.json');
 
 export interface ConversationMeta {
@@ -13,6 +17,8 @@ export interface ConversationMeta {
   query: string;
   title: string | null;
   timestamp: string;
+  mode?: ConversationMode;
+  depth?: DeepDepth;
 }
 
 interface DbData {
@@ -55,14 +61,52 @@ export async function getConversations(): Promise<ConversationMeta[]> {
   return db.conversations;
 }
 
-export async function createConversation(id: string, query: string): Promise<ConversationMeta[]> {
+function normalizeConversationMode(value: unknown): ConversationMode {
+  return value === 'deep' ? 'deep' : 'quick';
+}
+
+export async function createConversation(
+  id: string,
+  query: string,
+  mode?: ConversationMode,
+  depth?: DeepDepth,
+): Promise<ConversationMeta[]> {
   return withLock(async () => {
     const db = await readDb();
     const exists = db.conversations.find(c => c.id === id);
     if (exists) return db.conversations;
-    db.conversations.unshift({ id, query, title: null, timestamp: new Date().toISOString() });
+    const normalizedMode = normalizeConversationMode(mode);
+    const entry: ConversationMeta = {
+      id,
+      query,
+      title: null,
+      timestamp: new Date().toISOString(),
+      mode: normalizedMode,
+      depth: normalizedMode === 'deep' ? normalizeDeepDepth(depth) : undefined,
+    };
+    db.conversations.unshift(entry);
     await writeDb(db);
     return db.conversations;
+  });
+}
+
+export async function updateConversationResearch(
+  id: string,
+  mode: ConversationMode,
+  depth?: DeepDepth,
+): Promise<void> {
+  return withLock(async () => {
+    const db = await readDb();
+    const conv = db.conversations.find(c => c.id === id);
+    if (!conv) return;
+    const normalizedMode = normalizeConversationMode(mode);
+    conv.mode = normalizedMode;
+    if (normalizedMode === 'deep') {
+      conv.depth = normalizeDeepDepth(depth);
+    } else {
+      delete conv.depth;
+    }
+    await writeDb(db);
   });
 }
 

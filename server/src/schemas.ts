@@ -1,6 +1,7 @@
 export interface SearchRequest {
   query: string;
   mode?: string;
+  depth?: import('./engine/depth-presets.js').DeepDepth;
   history?: { role: string; content: string }[];
   conversationId?: string;
 }
@@ -44,6 +45,13 @@ export interface SearchResponse {
     limit: number;
     exhausted: boolean;
   };
+  research_notebook?: {
+    id: string;
+    path: string;
+    entries: number;
+    updatedAt: string;
+  };
+  research_depth?: import('./engine/depth-presets.js').DeepDepth;
 }
 
 export interface Message {

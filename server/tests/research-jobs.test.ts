@@ -7,6 +7,8 @@ import {
   markResearchJobDone,
   markResearchJobFailed,
   cancelResearchJob,
+  pauseResearchJob,
+  resumeResearchJob,
   setResearchJobStatus,
   subscribeResearchJob,
 } from '../src/research-jobs.js';
@@ -131,5 +133,20 @@ describe('ResearchJobs', () => {
 
     markResearchJobRunning(job.id);
     expect(events.length).toBe(0);
+  });
+
+  it('should pause and resume a running job', () => {
+    const job = createResearchJob({ query: 'Pause test', mode: 'deep', depth: 'high' });
+    markResearchJobRunning(job.id);
+    setResearchJobStatus(job.id, 'searching');
+
+    const paused = pauseResearchJob(job.id);
+    expect(paused!.status).toBe('paused');
+
+    const resumed = resumeResearchJob(job.id);
+    expect(resumed!.status).toBe('queued');
+
+    markResearchJobRunning(job.id);
+    expect(getResearchJob(job.id)!.status).toBe('running');
   });
 });

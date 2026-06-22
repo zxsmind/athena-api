@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useColorMode } from '../context/ColorMode';
 import { useSettingsModal } from '../context/SettingsModal';
 import ContextMenu, { type ContextMenuItem } from './ContextMenu';
+import { copyToClipboard } from '../lib/chat-utils';
 
 interface CtxMenuState {
   x: number;
@@ -55,7 +56,7 @@ export default function ContextMenuProvider({ children }: { children: ReactNode 
           const contentEl = ctxEl.querySelector('[data-msg-content]');
           const content = contentEl?.textContent || '';
           const items: ContextMenuItem[] = [
-            { label: 'Copy', onClick: () => navigator.clipboard.writeText(content) },
+            { label: 'Copy', onClick: () => copyToClipboard(content) },
           ];
           if (msgType === 'assistant') {
             items.push({ label: 'Regenerate', onClick: () => window.dispatchEvent(new Event('athena:regenerate')) });
@@ -68,7 +69,7 @@ export default function ContextMenuProvider({ children }: { children: ReactNode 
           e.preventDefault();
           const title = ctxEl.textContent || '';
           show(e.clientX, e.clientY, [
-            { label: 'Copy', onClick: () => navigator.clipboard.writeText(title) },
+            { label: 'Copy', onClick: () => copyToClipboard(title) },
           ]);
           return;
         }

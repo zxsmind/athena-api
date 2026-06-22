@@ -5,8 +5,8 @@ import { Section, InputRow, ListSection, InfoPanel } from './settings/SharedComp
 import Dropdown from './Dropdown';
 import { ModelRouteEditor } from './settings/ModelEditor';
 import { PromptDialog } from './settings/PromptDialog';
-import type { SettingsData, ModelRouting, ModelRoute, ProviderConfig, TabKey } from './settings/types';
-import { PROVIDER_KEYS, ROLE_LABELS, TABS } from './settings/types';
+import type { SettingsData, ModelRouting, ModelRoute, ProviderConfig, TabKey, DeepDepth, ResearchDepthPresetConfig } from './settings/types';
+import { PROVIDER_KEYS, ROLE_LABELS, TABS, DEPTH_KEYS, DEPTH_LABELS } from './settings/types';
 
 interface SettingsModalProps {
   open: boolean;
@@ -32,6 +32,7 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
     value: string; onSubmit: (val: string) => void;
   }>({ open: false, title: '', placeholder: '', isPassword: false, value: '', onSubmit: () => {} });
   const [closing, setClosing] = useState(false);
+  const [editingDepth, setEditingDepth] = useState<DeepDepth>('med');
 
   const isMobile = useMediaQuery('(max-width: 1023px)');
 
@@ -97,6 +98,36 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
   const patchModelRouting = (patch: Partial<ModelRouting>) => {
     if (!data) return;
     setData({ ...data, modelRouting: { ...data.modelRouting, ...patch } }); setDirty(true);
+  };
+
+  const patchDepthPreset = (depth: DeepDepth, patch: Partial<ResearchDepthPresetConfig>) => {
+    if (!data) return;
+    setData({
+      ...data,
+      researchDepths: {
+        ...data.researchDepths,
+        presets: {
+          ...data.researchDepths.presets,
+          [depth]: { ...data.researchDepths.presets[depth], ...patch },
+        },
+      },
+    });
+    setDirty(true);
+  };
+
+  const resetDepthPresets = () => {
+    if (!data) return;
+    const defaults: SettingsData['researchDepths'] = {
+      defaultDepth: 'med',
+      presets: {
+        low: { budgetCredits: 20, maxRounds: 5, minCooldownMs: 5000, maxCooldownMs: 10000, notebookCadenceRawBlocks: 2, maxSearchesPerRound: 4, maxFetchesPerRound: 2, minIndependentSourcesForKeyClaims: 2, contradictionPass: false, primarySourcePreference: false, exhaustiveGapReview: false, checkpointEveryRounds: 0 },
+        med: { budgetCredits: 35, maxRounds: 8, minCooldownMs: 10000, maxCooldownMs: 15000, notebookCadenceRawBlocks: 2, maxSearchesPerRound: 5, maxFetchesPerRound: 3, minIndependentSourcesForKeyClaims: 2, contradictionPass: true, primarySourcePreference: false, exhaustiveGapReview: false, checkpointEveryRounds: 0 },
+        high: { budgetCredits: 50, maxRounds: 13, minCooldownMs: 20000, maxCooldownMs: 40000, notebookCadenceRawBlocks: 1, maxSearchesPerRound: 6, maxFetchesPerRound: 4, minIndependentSourcesForKeyClaims: 3, contradictionPass: true, primarySourcePreference: true, exhaustiveGapReview: false, checkpointEveryRounds: 2 },
+        ultra: { budgetCredits: 100, maxRounds: 30, minCooldownMs: 60000, maxCooldownMs: 60000, notebookCadenceRawBlocks: 1, maxSearchesPerRound: 8, maxFetchesPerRound: 6, minIndependentSourcesForKeyClaims: 3, contradictionPass: true, primarySourcePreference: true, exhaustiveGapReview: true, checkpointEveryRounds: 2 },
+      },
+    };
+    setData({ ...data, researchDepths: defaults });
+    setDirty(true);
   };
 
   const updateProvider = (key: string, patch: Partial<ProviderConfig>) => {
@@ -393,7 +424,70 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               <InputRow label="Follow-ups" value={String(data.research.maxFollowUpQueries)} onChange={v => patchData({ research: { ...data.research, maxFollowUpQueries: parseInt(v, 10) || 3 } })} placeholder="3" />
             </div>
           </Section>
-          <InfoPanel title="Research Budget" text="Credits are enforced per query. Follow-up query limits cap deep research expansion before synthesis." />
+          <Section title="Deep Depth Presets">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--athena-text-2)', width: 92 }}>Default depth</span>
+                <Dropdown
+                  value={data.researchDepths.defaultDepth}
+                  options={DEPTH_KEYS.map(d => ({ value: d, label: DEPTH_LABELS[d] }))}
+                  onChange={v => patchData({ researchDepths: { ...data.researchDepths, defaultDepth: v as DeepDepth } })}
+                  fontSize={10.5}
+                />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--athena-text-2)', width: 92 }}>Edit preset</span>
+                <Dropdown
+                  value={editingDepth}
+                  options={DEPTH_KEYS.map(d => ({ value: d, label: DEPTH_LABELS[d] }))}
+                  onChange={v => setEditingDepth(v as DeepDepth)}
+                  fontSize={10.5}
+                />
+              </div>
+              {(() => {
+                const p = data.researchDepths.presets[editingDepth];
+                const n = (field: keyof ResearchDepthPresetConfig, label: string, placeholder: string) => (
+                  <InputRow key={field} label={label} value={String(p[field])} onChange={v => {
+                    const boolFields: (keyof ResearchDepthPresetConfig)[] = ['contradictionPass', 'primarySourcePreference', 'exhaustiveGapReview'];
+                    if (boolFields.includes(field)) {
+                      patchDepthPreset(editingDepth, { [field]: v === 'true' || v === '1' });
+                    } else {
+                      patchDepthPreset(editingDepth, { [field]: parseInt(v, 10) || 0 });
+                    }
+                  }} placeholder={placeholder} />
+                );
+                return (
+                  <>
+                    {n('budgetCredits', 'Budget', '35')}
+                    {n('maxRounds', 'Max rounds', '8')}
+                    {n('minCooldownMs', 'Min cooldown (ms)', '10000')}
+                    {n('maxCooldownMs', 'Max cooldown (ms)', '15000')}
+                    {n('notebookCadenceRawBlocks', 'Notebook cadence', '2')}
+                    {n('maxSearchesPerRound', 'Searches / round', '5')}
+                    {n('maxFetchesPerRound', 'Fetches / round', '3')}
+                    {n('minIndependentSourcesForKeyClaims', 'Min sources / claim', '2')}
+                    {n('checkpointEveryRounds', 'Checkpoint every N rounds', '0')}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--athena-text-2)', width: 92 }}>Contradiction pass</span>
+                      <Dropdown value={p.contradictionPass ? '1' : '0'} options={[{ value: '1', label: 'On' }, { value: '0', label: 'Off' }]} onChange={v => patchDepthPreset(editingDepth, { contradictionPass: v === '1' })} fontSize={10.5} />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--athena-text-2)', width: 92 }}>Primary sources</span>
+                      <Dropdown value={p.primarySourcePreference ? '1' : '0'} options={[{ value: '1', label: 'On' }, { value: '0', label: 'Off' }]} onChange={v => patchDepthPreset(editingDepth, { primarySourcePreference: v === '1' })} fontSize={10.5} />
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ flexShrink: 0, fontSize: 10.5, color: 'var(--athena-text-2)', width: 92 }}>Gap review</span>
+                      <Dropdown value={p.exhaustiveGapReview ? '1' : '0'} options={[{ value: '1', label: 'On' }, { value: '0', label: 'Off' }]} onChange={v => patchDepthPreset(editingDepth, { exhaustiveGapReview: v === '1' })} fontSize={10.5} />
+                    </div>
+                  </>
+                );
+              })()}
+              <button type="button" onClick={resetDepthPresets} style={{ alignSelf: 'flex-start', padding: '6px 10px', borderRadius: 6, border: '0.5px solid var(--athena-border)', background: 'var(--glass-bg)', color: 'var(--athena-text-2)', fontSize: 10.5, cursor: 'pointer' }}>
+                Reset presets to defaults
+              </button>
+            </div>
+          </Section>
+          <InfoPanel title="Research Budget" text="Credits are enforced per query. Follow-up query limits cap deep research expansion before synthesis. Depth presets control budget, rounds, cooldown pacing, and notebook cadence per Deep Low/Med/High/Ultra." />
         </>
       );
     }
@@ -447,6 +541,8 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
                 { method: 'GET', path: '/research-jobs/:id', desc: 'Poll job status & result' },
                 { method: 'GET', path: '/research-jobs/:id/events', desc: 'SSE event stream' },
                 { method: 'POST', path: '/research-jobs/:id/cancel', desc: 'Cancel running job' },
+                { method: 'POST', path: '/research-jobs/:id/pause', desc: 'Pause running job (checkpoint saved)' },
+                { method: 'POST', path: '/research-jobs/:id/resume', desc: 'Resume paused job from checkpoint' },
               ]},
               { group: 'Batches', items: [
                 { method: 'GET', path: '/research-batches', desc: 'List all batches' },

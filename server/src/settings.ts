@@ -1,4 +1,4 @@
-import { loadSettings, saveSettings as storeSave, type SettingsStore } from './settings-store.js';
+import { loadSettings, saveSettings as storeSave, type SettingsStore, type ResearchDepthsSettings } from './settings-store.js';
 import { resetSerper } from './search.js';
 
 export interface ModelReference {
@@ -51,6 +51,7 @@ export interface SettingsData {
     maxCreditsPerQuery: number;
     maxFollowUpQueries: number;
   };
+  researchDepths: ResearchDepthsSettings;
   modelRouting: ModelRouting;
   api: ApiSettingsData;
   thinkingStripPatterns: string;
@@ -93,6 +94,7 @@ export function getSettings(): SettingsData {
     providers,
     serper: store.serper,
     research: store.research,
+    researchDepths: store.researchDepths,
     modelRouting: store.modelRouting,
     api: store.api,
     thinkingStripPatterns: store.general.thinkingStripPatterns,
@@ -112,6 +114,7 @@ export function saveSettings(data: SettingsData): void {
     providers: {},
     serper: data.serper,
     research: data.research,
+    researchDepths: data.researchDepths,
     modelRouting: data.modelRouting,
     api: data.api,
     general: {

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import SearchInput from '../components/SearchInput';
-import { getDefaultMode } from '../hooks/useDefaultMode';
+import { getDefaultDepth, getDefaultMode } from '../hooks/useDefaultMode';
+import type { DeepDepth, SearchMode } from '../lib/api';
 
 const HEADLINES = [
   'Know thyself.',
@@ -338,11 +339,12 @@ const PLACEHOLDERS = [
 ];
 
 interface LandingProps {
-  onSearch: (query: string, mode?: 'quick' | 'deep') => void;
+  onSearch: (query: string, mode?: SearchMode, depth?: DeepDepth) => void;
 }
 
 export default function Landing({ onSearch }: LandingProps) {
   const defaultMode = getDefaultMode();
+  const defaultDepth = getDefaultDepth();
   const [exiting, setExiting] = useState(false);
   const [shatter, setShatter] = useState(0);
   const [filterId] = useState(() => `shatter-${Math.random().toString(36).slice(2, 9)}`);
@@ -351,7 +353,7 @@ export default function Landing({ onSearch }: LandingProps) {
   const [footer] = useState(() => FOOTER_QUOTES[Math.floor(Math.random() * FOOTER_QUOTES.length)]);
   const [placeholder] = useState(() => PLACEHOLDERS[Math.floor(Math.random() * PLACEHOLDERS.length)]);
 
-  const handleSearch = (query: string, mode?: 'quick' | 'deep') => {
+  const handleSearch = (query: string, mode?: SearchMode, depth?: DeepDepth) => {
     setExiting(true);
     const start = performance.now();
     const duration = 500;
@@ -362,7 +364,7 @@ export default function Landing({ onSearch }: LandingProps) {
       if (t < 1) requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
-    setTimeout(() => onSearch(query, mode), 550);
+    setTimeout(() => onSearch(query, mode, depth), 550);
   };
 
   return (
@@ -455,7 +457,7 @@ export default function Landing({ onSearch }: LandingProps) {
             animation: 'fade-in-up 0.5s 0.18s var(--ease-out) both',
           }}
         >
-          <SearchInput onSubmit={handleSearch} autoFocus initialMode={defaultMode} placeholder={placeholder} />
+          <SearchInput onSubmit={handleSearch} autoFocus initialMode={defaultMode} initialDepth={defaultDepth} placeholder={placeholder} />
         </div>
 
         {/* Footer quote */}

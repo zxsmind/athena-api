@@ -6,6 +6,9 @@ export interface Source {
   image?: string | null;
 }
 
+export type SearchMode = 'quick' | 'deep';
+export type DeepDepth = 'low' | 'med' | 'high' | 'ultra';
+
 export interface AgentStep {
   type: string;
   query?: string;
@@ -30,6 +33,25 @@ export interface SearchResponse {
     limit: number;
     exhausted: boolean;
   };
+  research_depth?: DeepDepth;
+  research_notebook?: {
+    id: string;
+    path: string;
+    entries: number;
+    updatedAt: string;
+    openQuestions?: number;
+  };
+}
+
+export interface ResearchProgressState {
+  usedCredits: number;
+  remainingCredits: number;
+  exhausted: boolean;
+  round?: number;
+  depth?: DeepDepth;
+  notebookId?: string;
+  notebookEntries?: number;
+  openQuestionsCount?: number;
 }
 
 export interface Message {
@@ -42,6 +64,9 @@ export interface Message {
   timerMs?: number;
   activeSteps?: AgentStep[];
   searches?: { query: string; status: 'searching' | 'searched'; duration_ms?: number; type?: 'search' | 'webpage'; model?: string }[];
+  jobId?: string;
+  jobStatus?: ResearchJobStatus;
+  paused?: boolean;
 }
 
 export interface ConversationMeta {
@@ -49,21 +74,25 @@ export interface ConversationMeta {
   query: string;
   title: string | null;
   timestamp: string;
+  mode?: SearchMode;
+  depth?: DeepDepth;
 }
 
-export type ResearchJobStatus = 'queued' | 'planning' | 'searching' | 'reviewing' | 'synthesizing' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type ResearchJobStatus = 'queued' | 'planning' | 'searching' | 'reviewing' | 'synthesizing' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
 
 export interface ResearchJobRequest {
   query: string;
   history?: { role: string; content: string }[];
-  mode?: 'quick' | 'deep';
+  mode?: SearchMode;
+  depth?: DeepDepth;
 }
 
 export interface ResearchJobRecord {
   id: string;
   query: string;
   history?: { role: string; content: string }[];
-  mode: 'quick' | 'deep';
+  mode: SearchMode;
+  depth?: DeepDepth;
   status: ResearchJobStatus;
   createdAt: string;
   updatedAt: string;
@@ -80,7 +109,8 @@ export type ResearchBatchStatus = 'queued' | 'running' | 'completed' | 'failed' 
 export interface ResearchBatchRequest {
   queries: string[];
   history?: { role: string; content: string }[];
-  mode?: 'quick' | 'deep';
+  mode?: SearchMode;
+  depth?: DeepDepth;
   maxConcurrent?: number;
   sharedCredits?: number;
   perItemCredits?: number;
@@ -99,7 +129,8 @@ export interface ResearchBatchRecord {
   id: string;
   queries: string[];
   history?: { role: string; content: string }[];
-  mode: 'quick' | 'deep';
+  mode: SearchMode;
+  depth?: DeepDepth;
   maxConcurrent: number;
   sharedCredits: number;
   perItemCredits: number;
@@ -129,6 +160,7 @@ async function checkResponse<T>(res: Response): Promise<T> {
 export type ResearchJobEvent =
   | { type: 'status'; status: ResearchJobStatus; detail?: string; timestamp: string }
   | { type: 'step'; data: AgentStep; timestamp: string }
+  | { type: 'progress'; data: ResearchProgressState; timestamp: string }
   | { type: 'token'; text: string; timestamp: string }
   | { type: 'sources'; sources: Source[]; timestamp: string }
   | { type: 'done'; response: SearchResponse; timestamp: string }
@@ -141,14 +173,15 @@ export interface SearchResult {
 export async function search(
   query: string,
   history?: { role: string; content: string }[],
-  mode?: 'quick' | 'deep',
+  mode?: SearchMode,
+  depth?: DeepDepth,
   signal?: AbortSignal,
   conversationId?: string,
 ): Promise<SearchResult> {
   const res = await fetch(`${BASE}/search`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, history, mode, conversationId }),
+    body: JSON.stringify({ query, history, mode, depth, conversationId }),
     signal,
   });
   return checkResponse<SearchResult>(res);
@@ -161,6 +194,7 @@ export interface JobEventCallbacks {
   onDone?: (response: SearchResponse) => void;
   onError?: (message: string, finalContext?: string) => void;
   onStatus?: (status: ResearchJobStatus) => void;
+  onProgress?: (state: ResearchProgressState) => void;
 }
 
 export function subscribeToJobEvents(
@@ -178,7 +212,7 @@ export function subscribeToJobEvents(
     source.close();
   };
 
-  const eventTypes = ['status', 'step', 'token', 'sources', 'done', 'error'] as const;
+  const eventTypes = ['status', 'step', 'token', 'sources', 'done', 'error', 'progress'] as const;
   for (const type of eventTypes) {
     source.addEventListener(type, (e: MessageEvent) => {
       if (signal?.aborted) return;
@@ -191,6 +225,7 @@ export function subscribeToJobEvents(
           case 'step': callbacks.onStep?.(data.data); break;
           case 'sources': callbacks.onSources?.(data.sources); break;
           case 'status': callbacks.onStatus?.(data.status); break;
+          case 'progress': callbacks.onProgress?.(data.data); break;
         }
       } catch { /* skip malformed */ }
     });
@@ -214,13 +249,31 @@ export async function fetchConversations(): Promise<ConversationMeta[]> {
   return res.json();
 }
 
-export async function createConversation(id: string, query: string): Promise<ConversationMeta[]> {
+export async function createConversation(
+  id: string,
+  query: string,
+  mode?: SearchMode,
+  depth?: DeepDepth,
+): Promise<ConversationMeta[]> {
   const res = await fetch(`${BASE}/conversations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id, query }),
+    body: JSON.stringify({ id, query, mode, depth }),
   });
   return checkResponse<ConversationMeta[]>(res);
+}
+
+export async function updateConversationResearch(
+  id: string,
+  mode: SearchMode,
+  depth?: DeepDepth,
+): Promise<void> {
+  const res = await fetch(`${BASE}/conversations/${id}/research`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode, depth }),
+  });
+  if (!res.ok) throw new Error(`Failed to update conversation research settings: HTTP ${res.status}`);
 }
 
 export async function fetchMessages(conversationId: string): Promise<Message[]> {
@@ -273,6 +326,18 @@ export async function cancelResearchJob(id: string): Promise<ResearchJobRecord |
   const res = await fetch(`${BASE}/research-jobs/${id}/cancel`, {
     method: 'POST',
   });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function pauseResearchJob(id: string): Promise<ResearchJobRecord | null> {
+  const res = await fetch(`${BASE}/research-jobs/${id}/pause`, { method: 'POST' });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export async function resumeResearchJob(id: string): Promise<ResearchJobRecord | null> {
+  const res = await fetch(`${BASE}/research-jobs/${id}/resume`, { method: 'POST' });
   if (!res.ok) return null;
   return res.json();
 }
