@@ -347,12 +347,14 @@ app.put('/conversations/:id/research', async (req, res) => {
 });
 
 async function generateTitle(conversationId: string, query: string) {
+  const now = new Date();
+  const today = `${now.toLocaleDateString('en-US', { month: 'long' })} ${now.getDate()}, ${now.getFullYear()}`;
   const prompt = `Generate a short title (max 7 words) for this search query. The title must be in the SAME language as the query. Reply with ONLY the title, no quotes, no punctuation, no explanation.\n\nQuery: "${query}"\n\nTitle:`;
 
   try {
     const { data } = await callLLM({
       messages: [
-        { role: 'system', content: 'You generate concise titles.' },
+        { role: 'system', content: `You generate concise titles. Today's date: ${today}.` },
         { role: 'user', content: prompt },
       ],
       temperature: 0.3,
