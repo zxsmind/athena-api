@@ -365,3 +365,18 @@ export async function cancelResearchBatch(id: string): Promise<ResearchBatchReco
   if (!res.ok) return null;
   return res.json();
 }
+
+export interface ResearchNotebookRecord {
+  id: string;
+  query: string;
+  createdAt: string;
+  updatedAt: string;
+  appendCount: number;
+  content: string;
+}
+
+export async function fetchNotebook(id: string): Promise<ResearchNotebookRecord | null> {
+  const res = await fetch(`${BASE}/notebooks/${id}`);
+  if (!res.ok) return null;
+  return res.json();
+}

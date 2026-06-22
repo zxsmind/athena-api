@@ -12,6 +12,7 @@ import type { SearchRequest, SearchResponse } from './schemas.js';
 import type { EngineEvent } from './engine.js';
 import { loadSettings } from './settings-store.js';
 import { resolveResearchPreset } from './engine/depth-presets.js';
+import { loadNotebook, readNotebookBody } from './engine/notebook.js';
 import {
   createResearchJob,
   getResearchJob,
@@ -630,6 +631,24 @@ app.put('/conversations/:id/messages', async (req, res) => {
   const { messages } = req.body as { messages: unknown[] };
   await saveMessages(req.params.id, messages as import('./schemas.js').Message[]);
   res.json({ ok: true });
+});
+
+/* ── Notebooks ── */
+app.get('/notebooks/:id', (req, res) => {
+  const notebook = loadNotebook(req.params.id);
+  if (!notebook) {
+    res.status(404).json({ error: 'Notebook not found' });
+    return;
+  }
+  const body = readNotebookBody(notebook);
+  res.json({
+    id: notebook.id,
+    query: notebook.query,
+    createdAt: notebook.createdAt,
+    updatedAt: notebook.updatedAt,
+    appendCount: notebook.appendCount,
+    content: body,
+  });
 });
 
 /* ── Conversation management ── */

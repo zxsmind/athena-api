@@ -527,7 +527,11 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
                 return false;
               });
               if (matchIdx >= 0) {
-                activeSteps = activeSteps.map((s, idx) => idx === matchIdx ? { ...s, ...step } : s);
+                activeSteps = activeSteps.map((s, idx) =>
+                  idx === matchIdx
+                    ? { ...s, ...step, duration_ms: step.duration_ms || s.duration_ms, result_count: step.result_count || s.result_count }
+                    : s
+                );
               } else {
                 activeSteps = [...activeSteps, step];
               }
@@ -790,6 +794,8 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
 
   const handleFollowUp = useCallback((q: string, mode?: SearchMode, depth?: DeepDepth) => {
     if (searchingRef.current) return;
+    const resolvedMode = mode ?? conversationMode.current;
+    const resolvedDepth = depth ?? conversationDepth.current;
     if (mode) conversationMode.current = mode;
     if (depth) conversationDepth.current = depth;
     const currentMessages = messagesRef.current;
@@ -797,7 +803,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
       .filter(m => m.content && !m.loading)
       .map(m => ({ role: m.type === 'user' ? 'user' as const : 'assistant' as const, content: m.content }));
     setMessages(prev => [...prev, { type: 'user', content: q }, { type: 'assistant', content: '', loading: true }]);
-    setTimeout(() => runSearch(q, history, conversationMode.current, conversationDepth.current), 0);
+    setTimeout(() => runSearch(q, history, resolvedMode, resolvedDepth), 0);
   }, [runSearch]);
 
   const retryLast = useCallback(() => {
@@ -1099,6 +1105,7 @@ autoFocus
                 remaining: modalMsg.data.research_budget.limit - modalMsg.data.research_budget.used,
               } : undefined,
               notebook: modalMsg.data.research_notebook ? {
+                id: modalMsg.data.research_notebook.id,
                 updates: modalMsg.data.research_notebook.updates,
                 updatedAt: modalMsg.data.research_notebook.updatedAt,
               } : undefined,

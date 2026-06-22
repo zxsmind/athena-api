@@ -350,6 +350,18 @@ async function tryProvider(
         if (isGemini || (data as Record<string, unknown>)?.candidates) {
           data = normalizeGeminiResponse(data, model);
         }
+
+        const d = data as { choices?: { message?: { content?: string | null; tool_calls?: unknown }; finish_reason?: string }[] };
+        const choice = d?.choices?.[0];
+        const contentStr = choice?.message?.content;
+        const hasContent = typeof contentStr === 'string' && contentStr.trim().length > 0;
+        const hasToolCalls = Array.isArray(choice?.message?.tool_calls) && choice.message.tool_calls.length > 0;
+
+        if (!hasContent && !hasToolCalls) {
+          tried.push(`${target.id}/${model} -> empty content or safety block (finish_reason: ${choice?.finish_reason || 'unknown'})`);
+          continue;
+        }
+
         recordRateLimitSuccess();
         return { data, provider: target.id, model };
       } finally {

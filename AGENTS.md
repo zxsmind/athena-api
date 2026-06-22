@@ -267,7 +267,7 @@ Modlar:
 
 > **Not:** Deep modda `write_notebook` (Markdown append) ve `read_notebook` tool'ları aktiftir. Notebook `server/data/notebooks/{id}.md` dosyasına yazılır; context'e truncate edilmiş working view enjekte edilir. Raw search/fetch payload'ları notebook yazımından sonra kompaktlanır. Notebook cadence eşiği depth presetine göre belirlenir.
 
-> **Not:** Deep modda `engine/research-ledger.ts` bellek içi bir ledger tutar (checkpoint resume'da sıfırlanır). Tamamlanan arama/fetch kayıtları normalize query/URL ile dedup edilir; duplicate tool call'lar kredi harcamadan reddedilir. Her LLM turunda ledger + notebook system context'e eklenir. Bütçe tükendiğinde model'e yapılandırılmış "cevap yaz" rehberi gönderilir (boşluk doldurma teşviki yok).
+> **Not:** Deep modda `engine/research-ledger.ts` bellek içi bir ledger tutar (checkpoint resume'da sıfırlanır). Tamamlanan arama/fetch kayıtları normalize query/URL ile dedup edilir; duplicate tool call'lar kredi harcamadan reddedilir. Her LLM turunda ledger + notebook + o ana kadar keşfedilen tüm kaynakların başlık/URL ve index eşleşmelerini tutan "Source Index Mapping" listesi system context'e eklenir. Böylece ham araç çıktıları sıkıştırılsa (compaction) dahi model her kaynağı her zaman doğru atıf numarasıyla (`[N]`) eşleştirebilir. Token birikmesini ve çelişkili talimatları önlemek amacıyla, `toolCallingRound` başında önceki turlardan kalan dinamik system mesajları temizlenir; sadece ilk base system prompt (messages[0]) ve o anki turun en güncel ledger/budget system mesajı bağlamda tutulur. Bütçe tükendiğinde model'e yapılandırılmış "cevap yaz" rehberi gönderilir (boşluk doldurma teşviki yok).
 
 > **Not:** Deep modda search/fetch batch sonrası `engine/cooldown.ts` depth preset'e göre dinamik cooldown uygular (low 5-10s, med 10-15s, high 20-40s, ultra min 60s). Hata oranı, 429, `Retry-After` (`engine/rate-signals.ts`) ve latency sinyalleri cooldown'ı artırır; başarı serisi low/med'de hafif azaltır. Cooldown SSE step olarak `type: 'cooldown'` ile gönderilir; notebook yazımına uygulanmaz. Canlı bütçe/notebook durumu `progress` SSE event'i ile iletilir.
 
@@ -275,7 +275,7 @@ Modlar:
 
 > **Not:** Cevap modelin kendi `toolCallingRound` yanıtından gelir ve non-streaming `callLLM` ile alınır; tek bir `{ type: 'token', text }` olayı olarak gönderilir. Eski "synthesis" ve "synthesis-fallback" fazları (ve `SYNTHESIS_PROMPT`) kaldırılmıştır.
 
-> **Önemli — finalContext ayrı SSE event'i:** LLM konuşma geçmişi (`finalContext`) büyük olabileceği (50KB+) için `done` SSE event'i için browser EventSource'da silent drop'u önlemek amacıyla **ayrı bir `context` SSE event'i** olarak gönderilir (`engine.ts`). Sıralama: `context` (büyük payload) → `done`/`error` (küçük). `context` event'i düşse bile message completion etkilenmez. `makeFinalContextJson(messages)` modül seviyesi helper fonksiyonu tüm call site'larda kullanılır. `finalContext`'e yeni alan eklenmesi gerekiyorsa `makeFinalContextJson` güncellenmelidir.
+> **Önemli — finalContext ayrı SSE event'i:** LLM konuşma geçmişi (`finalContext`) büyük olabileceği (50KB+) için `done` SSE event'i için browser EventSource'da silent drop'u önlemek amacıyla **ayrı bir `context` SSE event'i** olarak gönderilir (`engine.ts`). Sıralama: `context` (büyük payload) → `done`/`error` (küçük). `context` event'i düşse bile message completion etkilenmez. Hata ayıklama (debug) kolaylığı için `finalContext` üzerindeki tüm karakter ve mesaj limitleri kaldırılmış olup, tüm konuşma geçmişi kesilmeden iletilmektedir. `makeFinalContextJson(messages)` modül seviyesi helper fonksiyonu tüm call site'larda kullanılır.
 
 ### 5.2. LLM Yönlendirme (`server/src/llm.ts`)
 
@@ -330,6 +330,7 @@ Ayar şeması v2 ana bölümleri:
 - `GET/POST /research-batches` → toplu araştırma işleri.
 - `GET /settings`, `PUT /settings` → ayarları oku/yaz.
 - `GET /conversations`, `POST /conversations` (accepts optional `mode`, `depth`), `PUT /conversations/:id/research`, `GET/PUT /conversations/:id/messages`, `PUT /conversations/:id/rename`, `DELETE /conversations/:id`.
+- `GET /notebooks/:id` → Araştırma not defterinin (notebook) metaverisini ve Markdown içeriğini döner.
 - `GET /autocomplete?q=...` → Google autocomplete proxy.
 - `GET /config`, `GET /health`, `GET /ping`, `POST /test-llm`.
 

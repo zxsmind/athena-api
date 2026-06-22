@@ -1,11 +1,13 @@
-import { useState } from 'react';
-import type { AgentStep, Source, DeepDepth } from '../lib/api';
+import { useState, useEffect } from 'react';
+import type { AgentStep, Source, DeepDepth, ResearchNotebookRecord } from '../lib/api';
+import { fetchNotebook } from '../lib/api';
 import { Globe, FileText, Cpu, Sparkles, Search, X, ExternalLink, ChevronDown, ChevronRight } from 'lucide-react';
+import { renderMarkdown } from './markdown';
 
 export interface ResearchActivityMeta {
   depth?: DeepDepth;
   budget?: { used: number; limit: number; remaining?: number };
-  notebook?: { updates: number; updatedAt: string };
+  notebook?: { id?: string; updates: number; updatedAt: string };
 }
 
 interface ActivityModalProps {
@@ -180,6 +182,43 @@ function RawContextBlock({ context }: { context: string }) {
 }
 
 export default function ActivityModal({ open, onClose, steps, sources, finalContext, showDebugContext, researchMeta }: ActivityModalProps) {
+  const [activeTab, setActiveTab] = useState<'activity' | 'notebook'>('activity');
+  const [notebook, setNotebook] = useState<ResearchNotebookRecord | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const notebookId = researchMeta?.notebook?.id;
+
+  useEffect(() => {
+    if (activeTab === 'notebook' && notebookId && !notebook) {
+      setLoading(true);
+      setError(null);
+      fetchNotebook(notebookId)
+        .then((data) => {
+          if (data) {
+            setNotebook(data);
+          } else {
+            setError('Notebook not found.');
+          }
+        })
+        .catch((err) => {
+          setError(err?.message || 'Failed to load notebook.');
+        })
+        .finally(() => {
+          setLoading(false);
+        });
+    }
+  }, [activeTab, notebookId, notebook]);
+
+  // Reset tab when modal closes/opens
+  useEffect(() => {
+    if (open) {
+      setActiveTab('activity');
+      setNotebook(null);
+      setError(null);
+    }
+  }, [open]);
+
   if (!open) return null;
 
   const searchSteps = steps.filter(s => s.type.startsWith('search'));
@@ -250,236 +289,302 @@ export default function ActivityModal({ open, onClose, steps, sources, finalCont
           </button>
         </div>
 
-        {/* Body */}
-        <div style={{ flex: 1, overflow: 'hidden auto', padding: '16px 18px 18px' }}>
-          {/* Summary bar */}
-          <div style={{
-            display: 'flex',
-            gap: 12,
-            marginBottom: 16,
-            flexWrap: 'wrap',
-          }}>
-            <SummaryChip icon={<Globe size={10} />} label={`${searchSteps.length} searches`} />
-            <SummaryChip icon={<Cpu size={10} />} label={`${reasonSteps.length} reasoning steps`} />
-            {steps[0]?.model && (
-              <SummaryChip icon={<FileText size={10} />} label={steps[0].model} />
-            )}
-            <SummaryChip icon={<Sparkles size={10} />} label={`${sources.length} sources`} />
-            {researchMeta?.depth && (
-              <SummaryChip icon={<FileText size={10} />} label={`Deep ${researchMeta.depth.toUpperCase()}`} />
-            )}
-            {researchMeta?.budget && (
-              <SummaryChip icon={<Cpu size={10} />} label={`${researchMeta.budget.used}/${researchMeta.budget.limit} credits`} />
-            )}
-            {researchMeta?.notebook && (
-              <SummaryChip icon={<FileText size={10} />} label={`${researchMeta.notebook.updates} notebook update(s)`} />
-            )}
+        {/* Tabs */}
+        {notebookId && (
+          <div
+            style={{
+              display: 'flex',
+              borderBottom: '0.5px solid var(--athena-border)',
+              padding: '0 18px',
+              gap: 8,
+              background: 'rgba(255, 255, 255, 0.01)',
+            }}
+          >
+            <button
+              onClick={() => setActiveTab('activity')}
+              style={{
+                background: 'none',
+                border: 'none',
+                borderBottom: activeTab === 'activity' ? '2px solid var(--athena-accent)' : '2px solid transparent',
+                color: activeTab === 'activity' ? 'var(--athena-text)' : 'var(--athena-text-3)',
+                padding: '10px 8px',
+                fontSize: 11,
+                fontWeight: activeTab === 'activity' ? 600 : 500,
+                cursor: 'pointer',
+                transition: 'all 120ms',
+              }}
+            >
+              Activity Timeline
+            </button>
+            <button
+              onClick={() => setActiveTab('notebook')}
+              style={{
+                background: 'none',
+                border: 'none',
+                borderBottom: activeTab === 'notebook' ? '2px solid var(--athena-accent)' : '2px solid transparent',
+                color: activeTab === 'notebook' ? 'var(--athena-text)' : 'var(--athena-text-3)',
+                padding: '10px 8px',
+                fontSize: 11,
+                fontWeight: activeTab === 'notebook' ? 600 : 500,
+                cursor: 'pointer',
+                transition: 'all 120ms',
+              }}
+            >
+              Research Notebook
+            </button>
           </div>
+        )}
 
-          {/* Timeline */}
-          {steps.length > 0 && (
-            <div style={{ position: 'relative' }}>
-              {/* Vertical line */}
-              <div style={{
-                position: 'absolute',
-                left: 8,
-                top: 12,
-                bottom: 12,
-                width: 1,
-                background: 'var(--athena-border)',
-              }} />
+        {/* Body Content */}
+        {activeTab === 'activity' ? (
+          <div style={{ flex: 1, overflow: 'hidden auto', padding: '16px 18px 18px' }}>
+            {/* Summary bar */}
+            <div style={{
+              display: 'flex',
+              gap: 12,
+              marginBottom: 16,
+              flexWrap: 'wrap',
+            }}>
+              <SummaryChip icon={<Globe size={10} />} label={`${searchSteps.length} searches`} />
+              <SummaryChip icon={<Cpu size={10} />} label={`${reasonSteps.length} reasoning steps`} />
+              {steps[0]?.model && (
+                <SummaryChip icon={<FileText size={10} />} label={steps[0].model} />
+              )}
+              <SummaryChip icon={<Sparkles size={10} />} label={`${sources.length} sources`} />
+              {researchMeta?.depth && (
+                <SummaryChip icon={<FileText size={10} />} label={`Deep ${researchMeta.depth.toUpperCase()}`} />
+              )}
+              {researchMeta?.budget && (
+                <SummaryChip icon={<Cpu size={10} />} label={`${researchMeta.budget.used}/${researchMeta.budget.limit} credits`} />
+              )}
+              {researchMeta?.notebook && (
+                <SummaryChip icon={<FileText size={10} />} label={`${researchMeta.notebook.updates} notebook update(s)`} />
+              )}
+            </div>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {steps.map((step, i) => (
-                  <div
-                    key={i}
-                    style={{
-                        display: 'flex',
-                        gap: 10,
-                        padding: '8px 0',
-                        position: 'relative',
-                        animation: `fade-in 0.2s ${i * 0.03}s var(--ease-out) both`,
-                      }}
-                    >
-                      {/* Timeline dot */}
-                      <div style={{
-                        width: 17,
-                        flexShrink: 0,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'center',
-                      }}>
+            {/* Timeline */}
+            {steps.length > 0 && (
+              <div style={{ position: 'relative' }}>
+                {/* Vertical line */}
+                <div style={{
+                  position: 'absolute',
+                  left: 8,
+                  top: 12,
+                  bottom: 12,
+                  width: 1,
+                  background: 'var(--athena-border)',
+                }} />
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {steps.map((step, i) => (
+                    <div
+                      key={i}
+                      style={{
+                          display: 'flex',
+                          gap: 10,
+                          padding: '8px 0',
+                          position: 'relative',
+                          animation: `fade-in 0.2s ${i * 0.03}s var(--ease-out) both`,
+                        }}
+                      >
+                        {/* Timeline dot */}
                         <div style={{
                           width: 17,
-                          height: 17,
-                          borderRadius: '50%',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          background: step.type === 'synthesize'
-                            ? 'rgba(var(--athena-accent-rgb), 0.12)'
-                            : 'rgba(var(--athena-accent-rgb), 0.06)',
-                          color: step.type === 'synthesize'
-                            ? 'var(--athena-accent)'
-                            : 'var(--athena-text-3)',
                           flexShrink: 0,
-                          position: 'relative',
-                          zIndex: 1,
-                        }}>
-                          <StepIcon type={step.type} size={8} />
-                        </div>
-                      </div>
-
-                      {/* Content */}
-                      <div style={{ flex: 1, minWidth: 0, paddingTop: 0 }}>
-                        <div style={{
                           display: 'flex',
+                          flexDirection: 'column',
                           alignItems: 'center',
-                          gap: 6,
-                          flexWrap: 'wrap',
                         }}>
-                          <span style={{
-                            fontSize: 10.5,
-                            fontWeight: 600,
-                            color: 'var(--athena-text)',
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.03em',
+                          <div style={{
+                            width: 17,
+                            height: 17,
+                            borderRadius: '50%',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            background: step.type === 'synthesize'
+                              ? 'rgba(var(--athena-accent-rgb), 0.12)'
+                              : 'rgba(var(--athena-accent-rgb), 0.06)',
+                            color: step.type === 'synthesize'
+                              ? 'var(--athena-accent)'
+                              : 'var(--athena-text-3)',
+                            flexShrink: 0,
+                            position: 'relative',
+                            zIndex: 1,
                           }}>
-                            {stepDisplay(step).label}
-                          </span>
-                          {step.model && (
-                            <span style={{
-                              fontSize: 8.5,
-                              color: 'var(--athena-text-3)',
-                              background: 'rgba(var(--athena-accent-rgb), 0.04)',
-                              padding: '1px 5px',
-                              borderRadius: 3,
-                            }}>
-                              {step.model}
-                            </span>
-                          )}
-                          {step.duration_ms !== undefined && (
-                            <span style={{
-                              fontSize: 8.5,
-                              color: 'var(--athena-text-3)',
-                              fontVariantNumeric: 'tabular-nums',
-                            }}>
-                              {(step.duration_ms / 1000).toFixed(2)}s
-                            </span>
-                          )}
-                          {step.result_count !== undefined && (
-                            <span style={{
-                              fontSize: 8.5,
-                              color: 'var(--athena-text-3)',
-                            }}>
-                              {step.result_count} results
-                            </span>
-                          )}
+                            <StepIcon type={step.type} size={8} />
+                          </div>
                         </div>
 
-                        {step.query && (
+                        {/* Content */}
+                        <div style={{ flex: 1, minWidth: 0, paddingTop: 0 }}>
                           <div style={{
-                            fontSize: 10.5,
-                            color: 'var(--athena-text-2)',
-                            marginTop: 2,
-                            fontStyle: 'italic',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6,
+                            flexWrap: 'wrap',
                           }}>
-                          {(() => {
-                            let displayQ = step.query!;
-                            if (step.type === 'webpage') {
-                              try { displayQ = new URL(step.query!).hostname; } catch { /* empty */ }
-                            }
-                            return `"${displayQ}"`;
-                          })()}
+                            <span style={{
+                              fontSize: 10.5,
+                              fontWeight: 600,
+                              color: 'var(--athena-text)',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.03em',
+                            }}>
+                              {stepDisplay(step).label}
+                            </span>
+                            {step.model && (
+                              <span style={{
+                                fontSize: 8.5,
+                                color: 'var(--athena-text-3)',
+                                background: 'rgba(var(--athena-accent-rgb), 0.04)',
+                                padding: '1px 5px',
+                                borderRadius: 3,
+                              }}>
+                                {step.model}
+                              </span>
+                            )}
+                            {step.duration_ms !== undefined && (
+                              <span style={{
+                                fontSize: 8.5,
+                                color: 'var(--athena-text-3)',
+                                fontVariantNumeric: 'tabular-nums',
+                              }}>
+                                {(step.duration_ms / 1000).toFixed(2)}s
+                              </span>
+                            )}
+                            {step.result_count !== undefined && (
+                              <span style={{
+                                fontSize: 8.5,
+                                color: 'var(--athena-text-3)',
+                              }}>
+                                {step.result_count} results
+                              </span>
+                            )}
                           </div>
-                        )}
 
-                        {(step.type === 'reason' || step.type === 'plan-analyze' || step.type === 'analyze' || step.type === 'plan') && step.note && (
-                          <ReasoningBlock text={step.note} />
-                        )}
+                          {step.query && (
+                            <div style={{
+                              fontSize: 10.5,
+                              color: 'var(--athena-text-2)',
+                              marginTop: 2,
+                              fontStyle: 'italic',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}>
+                            {(() => {
+                              let displayQ = step.query!;
+                              if (step.type === 'webpage') {
+                                try { displayQ = new URL(step.query!).hostname; } catch { /* empty */ }
+                              }
+                              return `"${displayQ}"`;
+                            })()}
+                            </div>
+                          )}
 
-                        {step.note && step.type !== 'reason' && step.type !== 'plan-analyze' && step.type !== 'analyze' && step.type !== 'plan' && (
-                          <div style={{
-                            fontSize: 10,
-                            color: 'var(--athena-text-3)',
-                            marginTop: 2,
-                          }}>
-                            {step.note}
-                          </div>
-                        )}
+                          {(step.type === 'reason' || step.type === 'plan-analyze' || step.type === 'analyze' || step.type === 'plan') && step.note && (
+                            <ReasoningBlock text={step.note} />
+                          )}
 
+                          {step.note && step.type !== 'reason' && step.type !== 'plan-analyze' && step.type !== 'analyze' && step.type !== 'plan' && (
+                            <div style={{
+                              fontSize: 10,
+                              color: 'var(--athena-text-3)',
+                              marginTop: 2,
+                            }}>
+                              {step.note}
+                            </div>
+                          )}
+
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* Debug context */}
-          {showDebugContext && finalContext && (
-            <RawContextBlock context={finalContext} />
-          )}
+            {/* Debug context */}
+            {showDebugContext && finalContext && (
+              <RawContextBlock context={finalContext} />
+            )}
 
-          {/* Sources section */}
-          {sources.length > 0 && (
-            <div style={{ marginTop: 20 }}>
-              <div
-                className="font-mono"
-                style={{
-                  fontSize: 9,
-                  fontWeight: 500,
-                  letterSpacing: '0.14em',
-                  textTransform: 'uppercase',
-                  color: 'var(--athena-text-3)',
-                  marginBottom: 8,
-                }}
-              >
-                Sources ({sources.length})
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                {sources.map((src, i) => (
-                  <a
-                    key={i}
-                    href={src.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      padding: '4px 8px',
-                      borderRadius: 6,
-                      textDecoration: 'none',
-                      fontSize: 11,
-                      color: 'var(--athena-text-2)',
-                      transition: 'background 120ms',
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(var(--athena-accent-rgb), 0.04)'; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
-                  >
-                    <span
-                      className="font-mono"
+            {/* Sources section */}
+            {sources.length > 0 && (
+              <div style={{ marginTop: 20 }}>
+                <div
+                  className="font-mono"
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 500,
+                    letterSpacing: '0.14em',
+                    textTransform: 'uppercase',
+                    color: 'var(--athena-text-3)',
+                    marginBottom: 8,
+                  }}
+                >
+                  Sources ({sources.length})
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {sources.map((src, i) => (
+                    <a
+                      key={i}
+                      href={src.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
                       style={{
-                        fontSize: 8.5,
-                        color: 'var(--athena-text-3)',
-                        flexShrink: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        padding: '4px 8px',
+                        borderRadius: 6,
+                        textDecoration: 'none',
+                        fontSize: 11,
+                        color: 'var(--athena-text-2)',
+                        transition: 'background 120ms',
                       }}
+                      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(var(--athena-accent-rgb), 0.04)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.background = 'none'; }}
                     >
-                      {i + 1}.
-                    </span>
-                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {src.title || src.domain}
-                    </span>
-                    <ExternalLink size={8} style={{ flexShrink: 0, color: 'var(--athena-text-3)' }} />
-                  </a>
-                ))}
+                      <span
+                        className="font-mono"
+                        style={{
+                          fontSize: 8.5,
+                          color: 'var(--athena-text-3)',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {i + 1}.
+                      </span>
+                      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {src.title || src.domain}
+                      </span>
+                      <ExternalLink size={8} style={{ flexShrink: 0, color: 'var(--athena-text-3)' }} />
+                    </a>
+                  ))}
+                </div>
               </div>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ flex: 1, overflow: 'hidden auto', padding: '16px 18px 18px' }}>
+            {loading && (
+              <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--athena-text-3)', fontSize: 11 }}>
+                Loading notebook...
+              </div>
+            )}
+            {error && (
+              <div style={{ textAlign: 'center', padding: '32px 0', color: 'var(--athena-accent)', fontSize: 11 }}>
+                {error}
+              </div>
+            )}
+            {notebook && (
+              <div className="athena-prose" style={{ fontSize: 11.5 }}>
+                {renderMarkdown(notebook.content, sources)}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

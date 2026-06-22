@@ -50,7 +50,7 @@ export type { EngineEvent, ResearchRunOptions, ResearchBudgetState } from './eng
 interface LLMMessage {
   role: string;
   content?: string | null;
-  tool_calls?: unknown;
+  tool_calls?: { id?: string; function: { name: string; arguments: string } }[];
   tool_call_id?: string;
 }
 
@@ -62,21 +62,25 @@ interface DeepResearchState {
 }
 
 function makeFinalContextJson(messages: LLMMessage[]): string {
-  const MAX_CTX_KB = 10;
-  const MAX_CTX_MSGS = 20;
   const all = messages.map(m => ({ role: m.role, content: m.content })).filter((m): m is { role: string; content: string } => typeof m.content === 'string' && m.content.length > 0);
-  const trimmed = all.length > MAX_CTX_MSGS ? all.slice(-MAX_CTX_MSGS) : all;
-  let json = JSON.stringify(trimmed);
-  if (json.length > MAX_CTX_KB * 1024) {
-    json = json.slice(0, MAX_CTX_KB * 1024) + '\n...TRUNCATED';
-  }
-  return json;
+  return JSON.stringify(all);
 }
 
-function deepResearchContextBlock(deepState: DeepResearchState, cadenceInstruction: string): string {
+function sourceListBlock(allSources: Map<string, SourceWithIndex>): string {
+  if (allSources.size === 0) return 'No sources cited yet.';
+  const sorted = Array.from(allSources.values()).sort((a, b) => a.source_index - b.source_index);
+  return sorted.map(s => `- [Source #${s.source_index}] Title: "${s.title}" | URL: ${s.url}`).join('\n');
+}
+
+function deepResearchContextBlock(
+  deepState: DeepResearchState,
+  cadenceInstruction: string,
+  allSources: Map<string, SourceWithIndex>,
+): string {
   return [
     `Research ledger (completed searches/fetches — do not repeat these queries):\n${ledgerContextBlock(deepState.ledger)}`,
     `Deep research notebook (Markdown):\n${notebookContext(deepState.notebook)}`,
+    `Source index mapping (use these [Source #N] numbers for inline citations [N]):\n${sourceListBlock(allSources)}`,
     'Use write_notebook to append Markdown notes after digesting raw results. Use read_notebook if the notebook is truncated and you need earlier sections. Do not repeat ledger queries.',
     'Write the final answer from the notebook, ledger, and source list. State what is verified, what is uncertain, and what could not be confirmed. Do not invent facts.',
     cadenceInstruction,
@@ -115,9 +119,34 @@ async function toolCallingRound(
 ): Promise<RoundResult> {
   if (signal?.aborted) return { kind: 'error' };
 
+  // Keep the first base system prompt, but filter out system messages from previous rounds
+  // to avoid ledger/budget instruction bloat and contradictory statements.
+  if (messages.length > 1) {
+    const baseSystem = messages[0];
+    const rest = messages.slice(1).filter(msg => msg.role !== 'system');
+    messages.length = 0;
+    messages.push(baseSystem, ...rest);
+  }
+
   const budgetExhausted = budget.remainingCredits <= 0;
   const roundsExhausted = round >= maxRounds;
   const researchExhausted = budgetExhausted || roundsExhausted;
+
+  let hasWrittenNotebookInExhaustion = false;
+  if (researchExhausted && deepState) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (msg.role === 'assistant') {
+        if (msg.tool_calls?.some(tc => tc.function.name === 'web_search' || tc.function.name === 'fetch_url')) {
+          break;
+        }
+        if (msg.tool_calls?.some(tc => tc.function.name === 'write_notebook')) {
+          hasWrittenNotebookInExhaustion = true;
+          break;
+        }
+      }
+    }
+  }
 
   const stepType = round === 0 ? 'plan-analyze' : 'analyze';
   const step: AgentStep = { type: stepType, note: round === 0 ? 'Analyzing question...' : 'Thinking...' };
@@ -128,7 +157,9 @@ async function toolCallingRound(
     if (budgetExhausted) budget.exhausted = true;
     onRoundProgress?.();
     const warning = deepState
-      ? (roundsExhausted ? roundsExhaustedDeepMessage() : budgetExhaustedDeepMessage())
+      ? (hasWrittenNotebookInExhaustion
+          ? `⚠️ **Research budget or rounds exhausted.** You have already updated the notebook. DO NOT call any tools (including write_notebook or read_notebook). Write your final answer now using ONLY the notebook and cited sources. Cite with [N].`
+          : (roundsExhausted ? roundsExhaustedDeepMessage() : budgetExhaustedDeepMessage()))
       : `⚠️ **Research budget or rounds exhausted.** Answer based on the information you already have. If you lack sufficient data, state what you know and what is missing.`;
     messages.push({ role: 'system', content: warning });
     steps.push({ type: 'budget', note: roundsExhausted ? 'Round limit reached — model will answer from existing data.' : 'Budget exhausted — model will answer from existing data.' });
@@ -157,14 +188,14 @@ async function toolCallingRound(
       : '';
     messages.push({
       role: 'system',
-      content: deepResearchContextBlock(deepState, cadenceInstruction),
+      content: deepResearchContextBlock(deepState, cadenceInstruction, allSources),
     });
   }
 
   const temp = temperatureForRound(round);
   let llmResult: LLMResult;
   const tools = researchExhausted
-    ? (deepState ? [WRITE_NOTEBOOK_TOOL, READ_NOTEBOOK_TOOL] : undefined)
+    ? (deepState && !hasWrittenNotebookInExhaustion ? [WRITE_NOTEBOOK_TOOL, READ_NOTEBOOK_TOOL] : undefined)
     : (deepState ? [SEARCH_TOOL, FETCH_URL_TOOL, WRITE_NOTEBOOK_TOOL, READ_NOTEBOOK_TOOL] : [SEARCH_TOOL, FETCH_URL_TOOL]);
   try {
     llmResult = await callLLM({
@@ -172,6 +203,19 @@ async function toolCallingRound(
       onModelSelected: (selectedModel) => { step.model = selectedModel; onEvent({ type: 'step', data: step }); },
       label: `tool-round-${round}`,
     });
+
+    const d = llmResult.data as { choices: { message: { role: string; content: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[]; reasoning?: string; reasoning_content?: string }; finish_reason: string }[] } | undefined;
+    const choice = d?.choices?.[0];
+    if (!choice) {
+      throw new Error('Model response contains no choices.');
+    }
+    const msg = choice.message;
+    const cleanedContent = msg.content ? stripThinkingTags(msg.content) : null;
+    const hasContent = typeof cleanedContent === 'string' && cleanedContent.trim().length > 0;
+    const hasToolCalls = Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0;
+    if (!hasContent && !hasToolCalls) {
+      throw new Error(`Model returned an empty completion (finish_reason: ${choice.finish_reason || 'unknown'}).`);
+    }
   } catch (err: unknown) {
     onEvent({ type: 'context', finalContext: makeFinalContextJson(messages) });
     onEvent({ type: 'error', message: (err as Error).message || 'No available model responded' });
@@ -328,7 +372,7 @@ async function toolCallingRound(
           const notes = duplicateToolNotes.get(s.tcId) ?? [];
           notes.push(duplicateSearchToolMessage(prior));
           duplicateToolNotes.set(s.tcId, notes);
-          const dupStep: AgentStep = { type: 'search', query: s.query, note: 'Skipped duplicate query — see research ledger', model: currentModel };
+          const dupStep: AgentStep = { type: 'search', query: s.query, note: 'Skipped duplicate query — see research ledger', model: currentModel, duration_ms: 0, result_count: 0 };
           steps.push(dupStep);
           onEvent({ type: 'step', data: dupStep });
           continue;
@@ -345,7 +389,7 @@ async function toolCallingRound(
           const notes = duplicateToolNotes.get(f.tcId) ?? [];
           notes.push(duplicateFetchToolMessage(prior));
           duplicateToolNotes.set(f.tcId, notes);
-          const dupStep: AgentStep = { type: 'webpage', query: f.url, note: 'Skipped duplicate fetch — see research ledger', model: currentModel };
+          const dupStep: AgentStep = { type: 'webpage', query: f.url, note: 'Skipped duplicate fetch — see research ledger', model: currentModel, duration_ms: 0, result_count: 0 };
           steps.push(dupStep);
           onEvent({ type: 'step', data: dupStep });
           continue;
@@ -494,7 +538,7 @@ async function toolCallingRound(
           const prior = findPriorSearch(deepState.ledger, q);
           if (prior) {
             inlineDuplicateNotes.push(duplicateSearchToolMessage(prior));
-            const dupStep: AgentStep = { type: 'search', query: q, note: 'Skipped duplicate query — see research ledger', model: currentModel };
+            const dupStep: AgentStep = { type: 'search', query: q, note: 'Skipped duplicate query — see research ledger', model: currentModel, duration_ms: 0, result_count: 0 };
             steps.push(dupStep);
             onEvent({ type: 'step', data: dupStep });
             continue;
