@@ -2,7 +2,8 @@ import { loadSettings } from './settings-store.js';
 import { parseRetryAfterMs, recordRateLimitHit, recordRateLimitSuccess } from './engine/rate-signals.js';
 import fs from 'fs';
 import path from 'path';
-import { resolveTargets, modelSupportsTools, buildLLMRequestBody, learnedNoToolCalling } from './llm-utils.js';
+import { buildLLMRequestBody } from './llm-utils.js';
+import { smartRouting } from './smart-routing-bridge.js';
 
 const LOG_FILE = path.resolve(process.cwd(), 'llm-errors.log');
 
@@ -104,11 +105,28 @@ function convertToGeminiBody(body: Record<string, unknown>, model: string, provi
   if (body.temperature != null) genConfig.temperature = body.temperature;
   if (body.max_completion_tokens != null) genConfig.maxOutputTokens = body.max_completion_tokens as number;
 
-  const isFlash = /flash/i.test(model);
   const disabled = provider?.disabledThinkingModels;
   const isDisabled = Array.isArray(disabled) && disabled.includes(model);
-  if (!isFlash && !isDisabled && provider?.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
-    genConfig.thinking_level = provider.reasoningEffort;
+  if (!isDisabled) {
+    let budget = -1; // Default dynamic budget
+    if (provider?.reasoningEffort === 'none' || provider?.reasoningEffort === 'minimal') {
+      budget = 0; // Disable thinking
+    } else if (provider?.reasoningEffort === 'low') {
+      budget = 2048;
+    } else if (provider?.reasoningEffort === 'medium') {
+      budget = 8192;
+    } else if (provider?.reasoningEffort === 'high') {
+      budget = 16384;
+    }
+    genConfig.thinkingConfig = {
+      thinkingBudget: budget,
+      includeThoughts: budget !== 0,
+    };
+  } else {
+    genConfig.thinkingConfig = {
+      thinkingBudget: 0,
+      includeThoughts: false,
+    };
   }
 
   if (Object.keys(genConfig).length > 0) {
@@ -128,8 +146,71 @@ function convertToGeminiBody(body: Record<string, unknown>, model: string, provi
 function buildGeminiUrl(baseUrl: string, model: string, stream: boolean): string {
   const base = baseUrl.replace(/\/+$/, '');
   return stream
-    ? `${base}/models/${model}:streamGenerateContent`
+    ? `${base}/models/${model}:streamGenerateContent?alt=sse`
     : `${base}/models/${model}:generateContent`;
+}
+
+function parseNonSseGeminiResponse(
+  data: unknown,
+  fullContentRef: { value: string },
+  toolCallAccumulators: Map<number, Record<string, unknown>>,
+  onToken?: (text: string) => void,
+): void {
+  const items = Array.isArray(data) ? data : [data];
+  for (const item of items) {
+    const candidates = (item as Record<string, unknown>)?.candidates as Record<string, unknown>[] | undefined;
+    if (!candidates?.length) continue;
+    const content = (candidates[0]?.content as Record<string, unknown> | undefined);
+    const parts = content?.parts as Record<string, unknown>[] | undefined;
+    if (!parts) continue;
+    for (const part of parts) {
+      if (part.text && !part.thought) {
+        const text = String(part.text);
+        fullContentRef.value += text;
+        onToken?.(text);
+      }
+      const fc = part.functionCall as Record<string, unknown> | undefined;
+      if (fc) {
+        const tcIndex = toolCallAccumulators.size;
+        toolCallAccumulators.set(tcIndex, {
+          id: `call_${Date.now()}_${tcIndex}`,
+          type: 'function',
+          function: { name: fc.name as string, arguments: JSON.stringify(fc.args || {}) },
+        });
+      }
+    }
+  }
+}
+
+function parseNonSseOpenAiResponse(
+  data: unknown,
+  fullContentRef: { value: string },
+  toolCallAccumulators: Map<number, Record<string, unknown>>,
+  onToken?: (text: string) => void,
+): void {
+  const d = data as Record<string, unknown>;
+  const choices = d.choices as Record<string, unknown>[] | undefined;
+  if (!choices?.length) return;
+  const msg = choices[0].message as Record<string, unknown> | undefined;
+  if (!msg) return;
+  if (msg.content) {
+    const text = stripThinkingTags(String(msg.content));
+    if (text) {
+      fullContentRef.value += text;
+      onToken?.(text);
+    }
+  }
+  const toolCalls = msg.tool_calls as Record<string, unknown>[] | undefined;
+  if (toolCalls) {
+    for (const tc of toolCalls) {
+      const tcIndex = toolCallAccumulators.size;
+      toolCallAccumulators.set(tcIndex, {
+        id: tc.id as string || `call_${Date.now()}_${tcIndex}`,
+        type: 'function',
+        function: tc.function as Record<string, unknown>,
+      });
+    }
+  }
 }
 
 function normalizeGeminiResponse(data: unknown, model: string): unknown {
@@ -270,18 +351,61 @@ function makeRequestSignal(timeoutMs: number, external?: AbortSignal): { signal:
   return { signal: controller.signal, cleanup: () => clearTimeout(timer) };
 }
 
+import type { CapacityObservation } from '@mindbox/smart-routing-core';
+
+type ProviderErrorKind = 'rate-limit' | 'auth' | 'transient';
+
+type ProviderSuccess = { ok: true; data: unknown; provider: string; model: string; observations?: CapacityObservation[]; usage?: { tokens?: number; requests?: number } };
+type ProviderFailure = { ok: false; reason: ProviderErrorKind; observations?: CapacityObservation[] };
+type ProviderResult = ProviderSuccess | ProviderFailure | null;
+
+function parseRateLimitHeaders(res: Response, scopeId: string): CapacityObservation[] {
+  const obs: CapacityObservation[] = [];
+  const now = new Date().toISOString();
+
+  const reqLimit = res.headers.get('x-ratelimit-limit-requests');
+  const reqRemaining = res.headers.get('x-ratelimit-remaining-requests');
+  const reqReset = res.headers.get('x-ratelimit-reset-requests');
+  if (reqLimit || reqRemaining || reqReset) {
+    obs.push({
+      scopeId,
+      source: 'response-header',
+      observedAt: now,
+      request: {
+        limit: reqLimit ? parseInt(reqLimit, 10) || null : null,
+        remaining: reqRemaining ? parseInt(reqRemaining, 10) || null : null,
+        resetAt: reqReset ? new Date(parseInt(reqReset, 10) * 1000).toISOString() : null,
+      },
+    });
+  }
+
+  const tokLimit = res.headers.get('x-ratelimit-limit-tokens');
+  const tokRemaining = res.headers.get('x-ratelimit-remaining-tokens');
+  const tokReset = res.headers.get('x-ratelimit-reset-tokens');
+  if (tokLimit || tokRemaining || tokReset) {
+    obs.push({
+      scopeId,
+      source: 'response-header',
+      observedAt: now,
+      tokens: {
+        limit: tokLimit ? parseInt(tokLimit, 10) || null : null,
+        remaining: tokRemaining ? parseInt(tokRemaining, 10) || null : null,
+        resetAt: tokReset ? new Date(parseInt(tokReset, 10) * 1000).toISOString() : null,
+      },
+    });
+  }
+
+  return obs;
+}
+
 async function tryProvider(
   target: TargetReference,
   opts: LLMOptions,
   body: Record<string, unknown>,
   label: string,
   tried: string[],
-): Promise<{ data: unknown; provider: string; model: string } | null> {
+): Promise<ProviderResult> {
   const model = target.model;
-  if (opts.tools && !modelSupportsTools(model)) {
-    tried.push(`${target.id}/${model} -> skipped (no tool calling support)`);
-    return null;
-  }
 
   const store = loadSettings();
   const provider = store.providers[target.id];
@@ -297,12 +421,18 @@ async function tryProvider(
 
   if (!isGemini) {
     const supportsThinking = !provider.disabledThinkingModels || !provider.disabledThinkingModels.includes(model);
-    if (supportsThinking && provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
-      reqBody.reasoning_effort = provider.reasoningEffort;
+    if (supportsThinking && provider.reasoningEffort) {
+      const allowedValues = target.id === 'groq' ? ['none', 'default'] : ['low', 'medium', 'high'];
+      if (allowedValues.includes(provider.reasoningEffort)) {
+        reqBody.reasoning_effort = provider.reasoningEffort;
+      }
     }
   }
 
   const effectiveUrl = isGemini ? buildGeminiUrl(provider.url, model, false) : target.url;
+
+  let lastError: ProviderErrorKind | null = null;
+  let lastErrorObservations: CapacityObservation[] | null = null;
 
   for (const apiKey of provider.keys) {
     try {
@@ -323,26 +453,36 @@ async function tryProvider(
         });
 
         if (res.status === 429) {
-          recordRateLimitHit(parseRetryAfterMs(res));
+          const retryAfterMs = parseRetryAfterMs(res);
+          recordRateLimitHit(retryAfterMs);
           tried.push(`${target.id}/${model} -> rate limited (key ${apiKey.slice(-6)})`);
           logError(label, effectiveUrl, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
+          lastError = 'rate-limit';
+          lastErrorObservations = [{
+            scopeId: `${target.id}/${model}`,
+            source: 'retry-after',
+            observedAt: new Date().toISOString(),
+            retryAfterSeconds: retryAfterMs && retryAfterMs > 0 ? retryAfterMs / 1000 : null,
+          }];
           continue;
         }
         if (res.status === 401) {
           tried.push(`${target.id}/${model} -> unauthorized (key ${apiKey.slice(-6)})`);
+          if (lastError !== 'rate-limit') lastError = 'auth';
           continue;
         }
         if (res.status === 400 || res.status === 404 || res.status === 413) {
           const errBody = await res.text().catch(() => '');
           tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
           logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
-          if (res.status === 400 && opts.tools) learnedNoToolCalling.add(model);
-          return null;
+          if (!lastError) lastError = 'transient';
+          continue;
         }
         if (!res.ok) {
           const errBody = await res.text().catch(() => '');
           tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
           logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
+          if (!lastError) lastError = 'transient';
           continue;
         }
 
@@ -359,20 +499,23 @@ async function tryProvider(
 
         if (!hasContent && !hasToolCalls) {
           tried.push(`${target.id}/${model} -> empty content or safety block (finish_reason: ${choice?.finish_reason || 'unknown'})`);
+          if (!lastError) lastError = 'transient';
           continue;
         }
 
         recordRateLimitSuccess();
-        return { data, provider: target.id, model };
+        const obs = parseRateLimitHeaders(res, `${target.id}/${model}`);
+        return { ok: true, data, provider: target.id, model, observations: obs.length > 0 ? obs : undefined };
       } finally {
         cleanup();
       }
     } catch (err: unknown) {
       tried.push(`${target.id}/${model} -> request failed`);
       logError(label, effectiveUrl, 0, `Model: ${model}\n${err instanceof Error ? err.message : String(err)}`);
+      if (!lastError) lastError = 'transient';
     }
   }
-  return null;
+  return lastError ? { ok: false, reason: lastError, observations: lastErrorObservations ?? undefined } : null;
 }
 
 async function tryProviderStream(
@@ -381,12 +524,8 @@ async function tryProviderStream(
   body: Record<string, unknown>,
   label: string,
   tried: string[],
-): Promise<{ data: unknown; fullContent: string; provider: string; model: string } | null> {
+): Promise<ProviderSuccess & { fullContent?: string } | ProviderFailure | null> {
   const model = target.model;
-  if (opts.tools && !modelSupportsTools(model)) {
-    tried.push(`${target.id}/${model} -> skipped (no tool calling support)`);
-    return null;
-  }
 
   const store = loadSettings();
   const provider = store.providers[target.id];
@@ -402,12 +541,18 @@ async function tryProviderStream(
 
   if (!isGemini) {
     const supportsThinking = !provider.disabledThinkingModels || !provider.disabledThinkingModels.includes(model);
-    if (supportsThinking && provider.reasoningEffort && ['low', 'medium', 'high'].includes(provider.reasoningEffort)) {
-      reqBody.reasoning_effort = provider.reasoningEffort;
+    if (supportsThinking && provider.reasoningEffort) {
+      const allowedValues = target.id === 'groq' ? ['none', 'default'] : ['low', 'medium', 'high'];
+      if (allowedValues.includes(provider.reasoningEffort)) {
+        reqBody.reasoning_effort = provider.reasoningEffort;
+      }
     }
   }
 
   const effectiveUrl = isGemini ? buildGeminiUrl(provider.url, model, true) : target.url;
+
+  let lastError: ProviderErrorKind | null = null;
+  let lastErrorObservations: CapacityObservation[] | null = null;
 
   for (const apiKey of provider.keys) {
     try {
@@ -428,33 +573,57 @@ async function tryProviderStream(
         });
 
         if (res.status === 429) {
-          recordRateLimitHit(parseRetryAfterMs(res));
+          const retryAfterMs = parseRetryAfterMs(res);
+          recordRateLimitHit(retryAfterMs);
           tried.push(`${target.id}/${model} -> rate limited (key ${apiKey.slice(-6)})`);
           logError(label, effectiveUrl, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
+          lastError = 'rate-limit';
+          lastErrorObservations = [{
+            scopeId: `${target.id}/${model}`,
+            source: 'retry-after',
+            observedAt: new Date().toISOString(),
+            retryAfterSeconds: retryAfterMs && retryAfterMs > 0 ? retryAfterMs / 1000 : null,
+          }];
           continue;
         }
         if (res.status === 401) {
           tried.push(`${target.id}/${model} -> unauthorized`);
+          if (lastError !== 'rate-limit') lastError = 'auth';
           continue;
         }
         if (res.status === 400 || res.status === 404 || res.status === 413) {
           const errBody = await res.text().catch(() => '');
           tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
           logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
-          if (res.status === 400 && opts.tools) learnedNoToolCalling.add(model);
-          return null;
+          if (!lastError) lastError = 'transient';
+          continue;
         }
         if (!res.ok) {
           const errBody = await res.text().catch(() => '');
           tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
           logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
+          if (!lastError) lastError = 'transient';
           continue;
         }
 
         let fullContent = '';
         const stripper = new ThinkStripper(opts.onToken, { value: '' });
 
-        if (!res.body) return null;
+        if (!res.body) {
+          console.log(`[LLM] [${label}] ${target.id}/${model}: response body is empty (no stream)`);
+          if (!lastError) lastError = 'transient';
+          continue;
+        }
+
+        // Accumulators for tool calls and finish reason
+        const toolCallAccumulators = new Map<number, Record<string, unknown>>();
+        let lastFinishReason: string | null = null;
+        let sseLinesSeen = 0;
+        let jsonLinesParsed = 0;
+        let jsonParseErrors = 0;
+        let contentChunksSeen = 0;
+        let toolCallChunksSeen = 0;
+        let nonSseBuffer = '';
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
@@ -469,75 +638,241 @@ async function tryProviderStream(
 
           for (const line of lines) {
             const trimmed = line.trim();
-            if (!trimmed || trimmed === 'data: [DONE]') continue;
-            if (trimmed.startsWith('data: ')) {
-              try {
-                const json = JSON.parse(trimmed.slice(6));
-                if (isGemini) {
-                  const text = extractDeltaText(json);
-                  if (text) { stripper.process(text); fullContent += text; }
-                } else {
-                  const delta = json.choices?.[0]?.delta;
-                  if (delta?.content) {
-                    const cleaned = stripThinkingTags(delta.content);
-                    if (cleaned) { stripper.process(cleaned); fullContent += cleaned; }
+            if (!trimmed) continue;
+            if (trimmed === 'data: [DONE]') {
+              console.log(`[LLM] [${label}] ${target.id}/${model}: stream [DONE] received`);
+              continue;
+            }
+            if (!trimmed.startsWith('data: ')) {
+              nonSseBuffer += trimmed;
+              console.log(`[LLM] [${label}] ${target.id}/${model}: non-SSE line (buffered): ${trimmed.slice(0, 200)}`);
+              continue;
+            }
+            sseLinesSeen++;
+            try {
+              const json = JSON.parse(trimmed.slice(6));
+              jsonLinesParsed++;
+
+              const choiceFinish = json.choices?.[0]?.finish_reason as string | undefined;
+              const candidateFinish = json.candidates?.[0]?.finishReason as string | undefined;
+              if (choiceFinish) lastFinishReason = choiceFinish;
+              if (candidateFinish) lastFinishReason = candidateFinish;
+
+              if (isGemini) {
+                const text = extractDeltaText(json);
+                if (text) {
+                  contentChunksSeen++;
+                  stripper.process(text); fullContent += text;
+                }
+                const candidates = json.candidates as Record<string, unknown>[] | undefined;
+                if (candidates?.length) {
+                  const parts = (candidates[0]?.content as Record<string, unknown> | undefined)?.parts as Record<string, unknown>[] | undefined;
+                  if (parts) {
+                    for (const part of parts) {
+                      const fc = part.functionCall as Record<string, unknown> | undefined;
+                      if (fc) {
+                        toolCallChunksSeen++;
+                        const tcIndex = toolCallAccumulators.size;
+                        toolCallAccumulators.set(tcIndex, {
+                          id: `call_${Date.now()}_${tcIndex}`,
+                          type: 'function',
+                          function: { name: fc.name as string, arguments: JSON.stringify(fc.args || {}) },
+                        });
+                      }
+                    }
                   }
                 }
-              } catch { /* skip malformed */ }
+              } else {
+                const delta = json.choices?.[0]?.delta;
+                if (delta?.content) {
+                  contentChunksSeen++;
+                  const cleaned = stripThinkingTags(delta.content);
+                  if (cleaned) { stripper.process(cleaned); fullContent += cleaned; }
+                }
+                if (delta?.tool_calls) {
+                  toolCallChunksSeen++;
+                  for (const tc of (delta.tool_calls as Record<string, unknown>[])) {
+                    const idx = tc.index as number;
+                    let acc = toolCallAccumulators.get(idx);
+                    if (!acc) {
+                      acc = { id: '', type: 'function', function: { name: '', arguments: '' } };
+                      toolCallAccumulators.set(idx, acc);
+                    }
+                    if (tc.id) acc.id = tc.id as string;
+                    const fn = acc.function as Record<string, unknown>;
+                    const tcFn = tc.function as Record<string, unknown> | undefined;
+                    if (tcFn?.name) fn.name = tcFn.name as string;
+                    if (tcFn?.arguments) fn.arguments = (fn.arguments as string) + (tcFn.arguments as string);
+                  }
+                }
+              }
+            } catch (err) {
+              jsonParseErrors++;
+              console.log(`[LLM] [${label}] ${target.id}/${model}: malformed JSON in SSE line: ${trimmed.slice(0, 200)} — ${err instanceof Error ? err.message : String(err)}`);
             }
           }
         }
         stripper.flush();
 
+        if (sseLinesSeen === 0 && nonSseBuffer.trim().length > 0) {
+          try {
+            const parsed = JSON.parse(nonSseBuffer.trim());
+            console.log(`[LLM] [${label}] ${target.id}/${model}: non-SSE fallback parse succeeded`);
+            if (isGemini) {
+              parseNonSseGeminiResponse(parsed, { value: fullContent }, toolCallAccumulators, opts.onToken);
+            } else {
+              parseNonSseOpenAiResponse(parsed, { value: fullContent }, toolCallAccumulators, opts.onToken);
+            }
+          } catch (err) {
+            console.log(`[LLM] [${label}] ${target.id}/${model}: non-SSE fallback parse failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        console.log(`[LLM] [${label}] ${target.id}/${model}: stream summary — sseLines=${sseLinesSeen}, parsed=${jsonLinesParsed}, parseErrors=${jsonParseErrors}, contentChunks=${contentChunksSeen}, toolCallChunks=${toolCallChunksSeen}, finishReason=${lastFinishReason ?? '(none)'}, fullContentBytes=${fullContent.length}, toolCalls=${toolCallAccumulators.size}`);
+
+        const hasContent = fullContent.trim().length > 0;
+        const hasToolCalls = toolCallAccumulators.size > 0;
+        if (!hasContent && !hasToolCalls) {
+          tried.push(`${target.id}/${model} -> empty stream (finish_reason: ${lastFinishReason || 'unknown'})`);
+          console.log(`[LLM] [${label}] ${target.id}/${model}: empty stream, will try next key/provider`);
+          if (!lastError) lastError = 'transient';
+          continue;
+        }
+
         recordRateLimitSuccess();
-        return { data: null, fullContent, provider: target.id, model };
+
+        const accumulatedTools = Array.from(toolCallAccumulators.values());
+        const finishReason = lastFinishReason || 'stop';
+        const normalizedFinishReason = finishReason === 'STOP' ? 'stop' : (finishReason === 'TOOL_CALLS' ? 'tool_calls' : finishReason.toLowerCase());
+        const message: Record<string, unknown> = { role: 'assistant', content: fullContent || null };
+        if (accumulatedTools.length > 0) message.tool_calls = accumulatedTools;
+
+        const data = {
+          id: `stream-${model}-${Date.now()}`,
+          object: 'chat.completion',
+          created: Math.floor(Date.now() / 1000),
+          model,
+          choices: [{ index: 0, message, finish_reason: normalizedFinishReason }],
+        };
+
+        const obs = parseRateLimitHeaders(res, `${target.id}/${model}`);
+        return { ok: true, data, fullContent, provider: target.id, model, observations: obs.length > 0 ? obs : undefined };
       } finally {
         cleanup();
       }
     } catch (err: unknown) {
       tried.push(`${target.id}/${model} -> request failed`);
       logError(label, effectiveUrl, 0, `Model: ${model}\n${err instanceof Error ? err.message : String(err)}`);
+      if (!lastError) lastError = 'transient';
     }
   }
-  return null;
+  return lastError ? { ok: false, reason: lastError, observations: lastErrorObservations ?? undefined } : null;
 }
 
-async function globalRetryBackoff(globalAttempt: number, opts: LLMOptions, label: string) {
-  const backoffMs = Math.pow(2, globalAttempt) * 1000;
-  console.log(`[LLM] [Deep Mode] All targets exhausted. Waiting ${backoffMs / 1000}s before global retry ${globalAttempt}...`);
-  const startTime = Date.now();
-  while (Date.now() - startTime < backoffMs) {
-    if (opts.signal?.aborted) throw new Error(`${label} cancelled`);
+async function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < ms) {
+    if (signal?.aborted) throw new Error('cancelled');
     await new Promise(resolve => setTimeout(resolve, 200));
   }
 }
 
 export async function callLLM(opts: LLMOptions): Promise<LLMResult> {
   const label = opts.label || 'callLLM';
-  const { uniqTargets, tried } = resolveTargets(opts.role, label, opts.signal);
   const body = buildLLMRequestBody(opts);
-  const maxGlobalAttempts = opts.role === 'deep' ? 5 : 1;
-  for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
-    if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
-    for (const target of uniqTargets) {
-      const result = await tryProvider(target, opts, body, label, tried);
-      if (result) return result;
+  const tried: string[] = [];
+  const startTime = Date.now();
+  const MAX_LOOP_MS = 120000;
+
+  while (Date.now() - startTime < MAX_LOOP_MS) {
+    if (opts.signal?.aborted) throw new Error(`${label} cancelled`);
+
+    const selection = smartRouting.selectTarget(opts.role);
+    if (!selection) {
+      const waitMs = smartRouting.getMinRecoveryMs();
+      if (waitMs && waitMs > 0) {
+        await sleepWithSignal(Math.min(waitMs, 30000), opts.signal);
+        continue;
+      }
+      throw new Error(`${label} — all targets are blocked or unavailable.\n${tried.map(r => `  • ${r}`).join('\n')}`);
     }
+
+    if (opts.onModelSelected) {
+      opts.onModelSelected(selection.target.model, selection.target.id);
+    }
+
+    const result = await tryProvider(selection.target, opts, body, label, tried);
+    if (result && result.ok) {
+      smartRouting.recordOutcome(selection.leaseId, 'success', {
+        observations: result.observations,
+        usage: result.usage,
+        detail: `${selection.target.id}/${selection.target.model}`,
+      });
+      smartRouting.saveSnapshot();
+      return { data: result.data, model: result.model, provider: result.provider };
+    }
+
+    if (result === null) {
+      smartRouting.recordOutcome(selection.leaseId, 'transient-failure', { detail: 'Model skipped (no keys or unsupported)' });
+    } else {
+      const kind = result.reason === 'auth' ? 'auth-failure' : result.reason === 'transient' ? 'transient-failure' : result.reason;
+      smartRouting.recordOutcome(selection.leaseId, kind, {
+        observations: result.observations,
+        detail: `${selection.target.id}/${selection.target.model} -> ${result.reason}`,
+      });
+    }
+    smartRouting.saveSnapshot();
   }
-  throw new Error(`${label} — all targets failed after ${maxGlobalAttempts} global attempt(s).\n${tried.map(r => `  • ${r}`).join('\n')}`);
+
+  throw new Error(`${label} — all targets exhausted or timed out.\n${tried.map(r => `  • ${r}`).join('\n')}`);
 }
 
 export async function callLLMStream(opts: LLMOptions): Promise<LLMResult> {
   const label = opts.label || 'callLLMStream';
-  const { uniqTargets, tried } = resolveTargets(opts.role, label, opts.signal);
   const body = buildLLMRequestBody(opts);
-  const maxGlobalAttempts = opts.role === 'deep' ? 5 : 1;
-  for (let attempt = 0; attempt < maxGlobalAttempts; attempt++) {
-    if (attempt > 0) await globalRetryBackoff(attempt, opts, label);
-    for (const target of uniqTargets) {
-      const result = await tryProviderStream(target, opts, body, label, tried);
-      if (result) return result;
+  const tried: string[] = [];
+  const startTime = Date.now();
+  const MAX_LOOP_MS = 120000;
+
+  while (Date.now() - startTime < MAX_LOOP_MS) {
+    if (opts.signal?.aborted) throw new Error(`${label} cancelled`);
+
+    const selection = smartRouting.selectTarget(opts.role);
+    if (!selection) {
+      const waitMs = smartRouting.getMinRecoveryMs();
+      if (waitMs && waitMs > 0) {
+        await sleepWithSignal(Math.min(waitMs, 30000), opts.signal);
+        continue;
+      }
+      throw new Error(`${label} — all targets are blocked or unavailable.\n${tried.map(r => `  • ${r}`).join('\n')}`);
     }
+
+    if (opts.onModelSelected) {
+      opts.onModelSelected(selection.target.model, selection.target.id);
+    }
+
+    const result = await tryProviderStream(selection.target, opts, body, label, tried);
+    if (result && result.ok) {
+      smartRouting.recordOutcome(selection.leaseId, 'success', {
+        observations: result.observations,
+        usage: result.usage,
+        detail: `${selection.target.id}/${selection.target.model}`,
+      });
+      smartRouting.saveSnapshot();
+      return { data: result.data, fullContent: result.fullContent, model: result.model, provider: result.provider };
+    }
+
+    if (result === null) {
+      smartRouting.recordOutcome(selection.leaseId, 'transient-failure', { detail: 'Model skipped (no keys or unsupported)' });
+    } else {
+      const kind = result.reason === 'auth' ? 'auth-failure' : result.reason === 'transient' ? 'transient-failure' : result.reason;
+      smartRouting.recordOutcome(selection.leaseId, kind, {
+        observations: result.observations,
+        detail: `${selection.target.id}/${selection.target.model} -> ${result.reason}`,
+      });
+    }
+    smartRouting.saveSnapshot();
   }
-  throw new Error(`${label} — all targets failed after ${maxGlobalAttempts} global attempt(s).\n${tried.map(r => `  • ${r}`).join('\n')}`);
+
+  throw new Error(`${label} — all targets exhausted or timed out.\n${tried.map(r => `  • ${r}`).join('\n')}`);
 }

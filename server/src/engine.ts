@@ -1,4 +1,4 @@
-import { callLLM, stripThinkingTags, type LLMRole } from './llm.js';
+import { callLLMStream, stripThinkingTags, type LLMRole } from './llm.js';
 import type { LLMResult } from './llm.js';
 import { fetchResults, fetchPageContent } from './search.js';
 import type { SearchResponse, Source, AgentStep } from './schemas.js';
@@ -198,10 +198,11 @@ async function toolCallingRound(
     ? (deepState && !hasWrittenNotebookInExhaustion ? [WRITE_NOTEBOOK_TOOL, READ_NOTEBOOK_TOOL] : undefined)
     : (deepState ? [SEARCH_TOOL, FETCH_URL_TOOL, WRITE_NOTEBOOK_TOOL, READ_NOTEBOOK_TOOL] : [SEARCH_TOOL, FETCH_URL_TOOL]);
   try {
-    llmResult = await callLLM({
+    llmResult = await callLLMStream({
       messages, temperature: temp, tools, toolChoice: tools ? 'auto' : 'none', role, signal,
       onModelSelected: (selectedModel) => { step.model = selectedModel; onEvent({ type: 'step', data: step }); },
       label: `tool-round-${round}`,
+      onToken: (text: string) => onEvent({ type: 'token', text }),
     });
 
     const d = llmResult.data as { choices: { message: { role: string; content: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[]; reasoning?: string; reasoning_content?: string }; finish_reason: string }[] } | undefined;
@@ -227,7 +228,6 @@ async function toolCallingRound(
   const choice = d!.choices[0];
   const msg = choice.message;
   if (msg.content) msg.content = stripThinkingTags(msg.content);
-  const finish = choice.finish_reason;
   const currentModel = model;
 
   const reasoningText = msg.reasoning || msg.reasoning_content;
@@ -235,7 +235,7 @@ async function toolCallingRound(
   step.model = currentModel;
   onEvent({ type: 'step', data: step });
 
-  if (finish === 'tool_calls' && msg.tool_calls) {
+  if (msg.tool_calls) {
     messages.push({ role: msg.role, content: msg.content, tool_calls: msg.tool_calls });
 
     const searchTasks: { tcId: string; query: string; type: string; stepIndex: number }[] = [];
@@ -816,7 +816,6 @@ export async function agenticResearchStream(
   if (answerMsg?.content) {
     const elapsed = Math.round(performance.now() - start);
     if (options.jobId) deleteResearchCheckpoint(options.jobId);
-    onEvent({ type: 'token', text: answerMsg.content });
     onEvent({ type: 'context', finalContext: finalContextJson() });
     onEvent({ type: 'done', response: { query, answer: answerMsg.content, sources: finalSources, steps, results_count: allSources.size, elapsed_ms: elapsed, research_budget: { used: budget.usedCredits, limit: budget.usedCredits + budget.remainingCredits, exhausted: budget.exhausted }, research_depth: mode === 'deep' ? preset.depth : undefined, research_notebook: deepState ? { id: deepState.notebook.id, path: deepState.notebook.path, updates: deepState.notebook.appendCount, updatedAt: deepState.notebook.updatedAt } : undefined } as SearchResponse });
     return;

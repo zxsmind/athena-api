@@ -82,6 +82,7 @@ Authentication is not implemented. The server is designed for local/trusted-netw
 | `PUT` | `/conversations/:id/research` | Update conversation mode/depth |
 | `PUT` | `/conversations/:id/rename` | Rename conversation |
 | `DELETE` | `/conversations/:id` | Delete conversation |
+| `GET` | `/notebooks/:id` | Get research notebook metadata and Markdown content |
 | `GET` | `/health` | Server health check |
 | `GET` | `/config` | Public configuration (key count, provider count) |
 | `GET` | `/autocomplete` | Google Suggest-based search suggestions |
@@ -160,6 +161,7 @@ data: {"type":"error","message":"Provider unavailable","timestamp":"..."}
 | `step` | `{ type: "step", data: AgentStep, timestamp }` | Research phase update (plan, search, analyze, synthesize) |
 | `progress` | `{ type: "progress", data: ResearchProgressState, timestamp }` | Live budget, depth, round, notebook stats during active job |
 | `sources` | `{ type: "sources", sources: Source[], timestamp }` | Sources found during search |
+| `context` | `{ type: "context", finalContext: string, timestamp }` | Full LLM conversation history (sent once before `done`) |
 | `token` | `{ type: "token", text: string, timestamp }` | Streaming answer token |
 | `done` | `{ type: "done", response: SearchResponse, timestamp }` | Final result with complete answer and sources |
 | `error` | `{ type: "error", message: string, timestamp }` | Error occurred, stream ended |
@@ -493,6 +495,15 @@ Returns the full settings object. Keys are masked in the response.
     "maxRetentionMinutes": 1440,
     "defaultMode": "quick"
   },
+  "researchDepths": {
+    "defaultDepth": "med",
+    "presets": {
+      "low": { "budgetCredits": 20, "maxRounds": 5, "minCooldownMs": 5000, "maxCooldownMs": 10000, "notebookCadenceRawBlocks": 4, "maxSearchesPerRound": 3, "maxFetchesPerRound": 1, "minIndependentSourcesForKeyClaims": 2, "contradictionPass": false, "primarySourcePreference": false, "exhaustiveGapReview": false, "checkpointEveryRounds": 0 },
+      "med": { "budgetCredits": 35, "maxRounds": 8, "minCooldownMs": 10000, "maxCooldownMs": 15000, "notebookCadenceRawBlocks": 6, "maxSearchesPerRound": 3, "maxFetchesPerRound": 2, "minIndependentSourcesForKeyClaims": 3, "contradictionPass": false, "primarySourcePreference": true, "exhaustiveGapReview": false, "checkpointEveryRounds": 0 },
+      "high": { "budgetCredits": 50, "maxRounds": 13, "minCooldownMs": 20000, "maxCooldownMs": 40000, "notebookCadenceRawBlocks": 10, "maxSearchesPerRound": 4, "maxFetchesPerRound": 2, "minIndependentSourcesForKeyClaims": 3, "contradictionPass": true, "primarySourcePreference": true, "exhaustiveGapReview": true, "checkpointEveryRounds": 4 },
+      "ultra": { "budgetCredits": 100, "maxRounds": 30, "minCooldownMs": 60000, "maxCooldownMs": 120000, "notebookCadenceRawBlocks": 12, "maxSearchesPerRound": 5, "maxFetchesPerRound": 3, "minIndependentSourcesForKeyClaims": 4, "contradictionPass": true, "primarySourcePreference": true, "exhaustiveGapReview": true, "checkpointEveryRounds": 8 }
+    }
+  },
   "thinkingStripPatterns": "",
   "maxSources": 8,
   "deepIterations": 3
@@ -641,7 +652,7 @@ Proxies Google Suggest autocomplete. Requires minimum 2 characters.
 { "suggestions": ["search term meaning", "search term definition", ...] }
 ```
 
-Maximum 6 suggestions returned.
+Maximum ${autocompleteCount} suggestions returned (default: 5).
 
 ### `GET /ping`
 
@@ -741,6 +752,7 @@ interface AgentStep {
   note?: string;
   model?: string;
   reasoning?: string;
+  context?: string;
   duration_ms?: number;
 }
 ```
@@ -845,12 +857,12 @@ Completed search responses include `research_budget`:
 | ID | Label | Default URL |
 |----|-------|-------------|
 | `groq` | Groq | `https://api.groq.com/openai/v1/chat/completions` |
-| `gemini` | Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions` |
+| `gemini` | Gemini | `https://generativelanguage.googleapis.com/v1beta` |
 | `vercel` | Vercel AI Gateway | (user-configured) |
 | `openrouter` | OpenRouter | `https://openrouter.ai/api/v1/chat/completions` |
 | `custom` | Custom | (user-configured) |
 
-Providers must be OpenAI-compatible (standard chat completions API format).
+Providers must be OpenAI-compatible (standard chat completions API format). **Exception:** Gemini uses its native REST API format (`/v1beta/models/{model}:generateContent`); the backend automatically converts between formats.
 
 ### Model Roles
 
@@ -885,6 +897,7 @@ key[0]+model[0] → key[1]+model[0] → key[2]+model[0] → key[0]+model[1] → 
 | `step` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Agent step update (plan, search, analyze, synthesize, review) |
 | `progress` | `GET /research-jobs/:id/events` | Live budget, depth, round, and notebook stats while job is running |
 | `sources` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Sources discovered during search |
+| `context` | `GET /research-jobs/:id/events` | Full LLM conversation history (sent once before `done`) |
 | `token` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Streaming answer token |
 | `done` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Final result |
 | `error` | `GET /research-jobs/:id/events`, `GET /research-batches/:id/events` | Error |
@@ -902,6 +915,9 @@ data: {"type":"token","text":"partial answer","timestamp":"..."}
 
 event: done
 data: {"type":"done","response":{"query":"...","answer":"...","sources":[...]},"timestamp":"..."}
+
+event: context
+data: {"type":"context","finalContext":"...full LLM conversation history...","timestamp":"..."}
 
 event: error
 data: {"type":"error","message":"Provider unavailable","timestamp":"..."}

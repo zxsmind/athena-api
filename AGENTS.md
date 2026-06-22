@@ -74,6 +74,8 @@ Bu paket, LLM çağrılarında birden fazla provider/key/model kombinasyonu aras
 
 > **Not:** `docs/settings-modal-redesign-plan.md` artık büyük ölçüde implemente edilmiştir; mevcut `SettingsModal.tsx` 5 sekme (General, Providers, Models, Advanced, API) içerir.
 
+> **Not:** Smart routing artık **aktif olarak** `server/src/smart-routing-bridge.ts` üzerinden kullanılmaktadır. Entegrasyon 6 adımda tamamlanmıştır (detay: `docs/smart-routing-integration-plan.md`).
+
 ### 2.5. Veri Saklama
 
 - **Sohbetler / Mesajlar**: `server/data/db.json` JSON dosyası (`db.ts`). Her sohbet kaydı (`ConversationMeta`) `mode` (`quick`|`deep`) ve isteğe bağlı `depth` (`low`|`med`|`high`|`ultra`) taşır; F5 ve sidebar navigasyonunda araştırma modu bu metadata'dan restore edilir. Follow-up aramalarda `PUT /conversations/:id/research` ile güncellenir.
@@ -82,7 +84,7 @@ Bu paket, LLM çağrılarında birden fazla provider/key/model kombinasyonu aras
 - **Ayarlar**: `server/data/settings.json` (v2 şema), `settings-store.ts` tarafından yüklenir ve normalize edilir.
 - **Deep research notebook'ları**: `server/data/notebooks/{id}.md` altında Markdown olarak tutulur; engine metadata `{id}.meta.json` sidecar dosyasında (model yazmaz). Deep modda model `write_notebook` ile Markdown append eder, `read_notebook` ile (gerekirse) tam/önceki bölümleri okur. Context'e notebook son kısmı en fazla ~10KB olarak enjekte edilir; notebook yazıldıktan sonra raw search/fetch payload'ları kompaktlanır. Eski `{id}.json` notebook'lar ilk yüklemede otomatik `.md`'ye migrate edilir.
 - **Research ledger (bellek içi)**: Deep modda `engine/research-ledger.ts` her job için tamamlanan arama/sorgu ve fetch geçmişini tutar; LLM context compaction'dan bağımsızdır. Normalize edilmiş sorgu dedup ile tekrarlayan `web_search` / `fetch_url` çağrıları kredi harcamadan atlanır. Ledger + notebook her tur system context'e enjekte edilir.
-- **Gemini provider**: Artık **native REST API** kullanır (`/v1beta/models/{model}:generateContent`), OpenAI-compatible endpoint değil. Auth `x-goog-api-key` header ile yapılır. İstek gövdesi `convertToGeminiBody()` ile OpenAI formatından Gemini native formatına çevrilir. Varsayılan URL: `https://generativelanguage.googleapis.com/v1beta`.
+- **Gemini provider**: Artık **native REST API** kullanır (`/v1beta/models/{model}:generateContent`), OpenAI-compatible endpoint değil. Auth `x-goog-api-key` header ile yapılır. İstek gövdesi `convertToGeminiBody()` ile OpenAI formatından Gemini native formatına çevrilir. Gemini modelleri için `thinkingConfig` (budget ve `includeThoughts`) parametreleri doğru REST şemasıyla iletilerek düşünme/reasoning çıktıları toplanır. Varsayılan URL: `https://generativelanguage.googleapis.com/v1beta`.
 
 ---
 
@@ -124,6 +126,7 @@ ATHENA-001/
 │   │   ├── index.ts              # Express uygulaması, route tanımları, SSE
 │   │   ├── engine.ts             # Agentic araştırma motoru (plan/search/analyze/answer)
 │   │   ├── llm.ts                # LLM çağrıları, fallback, smart routing entegrasyonu
+│   │   ├── smart-routing-bridge.ts # SmartRoutingEngine wrapper'ı (bakınız docs/smart-routing-integration-plan.md)
 │   │   ├── search.ts             # Serper API ve web sayfası içeriği çekme
 │   │   ├── settings.ts           # API response için settings dönüştürme katmanı
 │   │   ├── settings-store.ts     # settings.json disk okuma/yazma, normalize, cache
@@ -188,7 +191,8 @@ ATHENA-001/
 │   ├── API.md                    # API referansı (v2, Node backend)
 │   ├── agent-strategy.md         # Ajan mimarisi v2 planı
 │   ├── deep-depth-presets-plan.md # Deep Low/Med/High/Ultra preset tasarım planı
-│   └── settings-modal-redesign-plan.md
+│   ├── settings-modal-redesign-plan.md
+│   └── smart-routing-integration-plan.md # Smart routing entegrasyon planı (6 adım)
 │
 ├── Websearchworkersmart.py       # Bağımsız Python CLI betiği (paralel Serper+Groq)
 ├── vite.config.ts                # Vite yapılandırması + /api proxy
@@ -263,6 +267,8 @@ Modlar:
 
 > **Önemli — Tur Hesaplaması:** Derin araştırma modlarında `maxRounds` (tur sınırı) yalnızca **gerçek araştırma işlemleri** (arama ve fetch) yapıldığında artar. `write_notebook` ve `read_notebook` gibi meta-araç çağrıları araştırma turu bütçesini tüketmez. Ayrıca, notebook işlemlerinin kısır döngüye girmesini önlemek için `maxTotalTurns` adında bir güvenlik sınırı bulunur (varsayılan: `Math.max(50, maxRounds * 3)`). Tur sınırı aşıldığında veya bütçe bittiğinde arama/fetch araçları kapatılır ve modelin sadece `write_notebook` yapmasına ve cevabı tamamlamasına izin verilir.
 
+> **Not:** `callLLM` ve `callLLMStream` artık `smart-routing-bridge.ts` üzerinden skor tabanlı rota seçimi yapar. Eski linear fallback döngüsü (primary→fallback→tüm provider'lar) kaldırılmıştır. `llm-utils.ts`'deki `resolveTargets`, `resolveRoleTargetReferences`, `iterateProviderReferences`, `modelSupportsTools` ve `learnedNoToolCalling` fonksiyonları temizlenmiştir. Tool calling desteği olmayan modeller smart routing tarafından transient-failure olarak işaretlenir.
+
 > **Dikkat:** Ayarlarda bulunan `general.deepIterations` ve `research.maxFollowUpQueries` alanları şu anda `engine.ts` içinde aktif olarak kullanılmıyor. Deep mod tur sayısı `engine/depth-presets.ts` presetlerinden gelir; follow-up limiti bütçe, tur sayısı ve per-round search/fetch limitleri tarafından dolaylı olarak sınırlanır. Bu ayarları devreye sokacak bir değişiklik yapmadan önce bu dokümanı ve ilgili kodu güncelleyin.
 
 > **Not:** Deep modda `write_notebook` (Markdown append) ve `read_notebook` tool'ları aktiftir. Notebook `server/data/notebooks/{id}.md` dosyasına yazılır; context'e truncate edilmiş working view enjekte edilir. Raw search/fetch payload'ları notebook yazımından sonra kompaktlanır. Notebook cadence eşiği depth presetine göre belirlenir.
@@ -273,7 +279,9 @@ Modlar:
 
 > **Not:** High/Ultra presetlerinde `checkpointEveryRounds` > 0 ise engine `server/data/research-checkpoints/{jobId}.json` dosyasına checkpoint yazar; aynı job yeniden başlarsa notebook, budget, round ve kaynak haritasından resume eder. Başarılı tamamlamada checkpoint silinir. Sunucu restart sonrası kalan checkpoint dosyaları otomatik recover edilir. `POST /research-jobs/:id/pause` ve `POST /research-jobs/:id/resume` endpoint'leri High/Ultra job kontrolü içindir.
 
-> **Not:** Cevap modelin kendi `toolCallingRound` yanıtından gelir ve non-streaming `callLLM` ile alınır; tek bir `{ type: 'token', text }` olayı olarak gönderilir. Eski "synthesis" ve "synthesis-fallback" fazları (ve `SYNTHESIS_PROMPT`) kaldırılmıştır.
+> **Not:** `toolCallingRound` artık `callLLMStream` ile streaming yapar. Cevap model yanıtı sırasında gelen token'lar `onToken` callback'i ile anında frontend'e `{ type: 'token', text }` olayları olarak gönderilir. Araç çağrısı (tool call) round'larında da streaming token'lar iletilir. Eski "synthesis" ve "synthesis-fallback" fazları (ve `SYNTHESIS_PROMPT`) kaldırılmıştır.
+>
+> **Not:** Gemini streaming için `buildGeminiUrl()` `?alt=sse` query parametresi ekler; bu olmadan Gemini düz JSON döndürür ve SSE parser içerik göremez. Groq provider'ı `reasoning_effort` olarak sadece `none`/`default` değerlerini kabul eder; `low`/`medium`/`high` değerleri sadece OpenAI uyumlu provider'lara gönderilir. `tryProviderStream` artık non-SSE yanıtları da fallback olarak parse edebilir (örneğin provider `stream: true` yerine düz JSON döndürürse).
 
 > **Önemli — finalContext ayrı SSE event'i:** LLM konuşma geçmişi (`finalContext`) büyük olabileceği (50KB+) için `done` SSE event'i için browser EventSource'da silent drop'u önlemek amacıyla **ayrı bir `context` SSE event'i** olarak gönderilir (`engine.ts`). Sıralama: `context` (büyük payload) → `done`/`error` (küçük). `context` event'i düşse bile message completion etkilenmez. Hata ayıklama (debug) kolaylığı için `finalContext` üzerindeki tüm karakter ve mesaj limitleri kaldırılmış olup, tüm konuşma geçmişi kesilmeden iletilmektedir. `makeFinalContextJson(messages)` modül seviyesi helper fonksiyonu tüm call site'larda kullanılır.
 
@@ -289,15 +297,19 @@ Modlar:
 
 > **Dikkat:** `reasoning` rolü ayarlarda tanımlı olsa da, şu anda `engine.ts` içinde doğrudan kullanılmıyor. Gelecekte ayrı bir analiz/reasoning aşaması eklenecekse bu rol devreye girecektir.
 
-### 5.3. Smart Routing (`smart-routing-core`) — paket mevcut, backend'de henüz bağlı değil
+### 5.3. Smart Routing (`smart-routing-core`) — integrasyon planı docs/smart-routing-integration-plan.md
 
-`@mindbox/smart-routing-core` `server/package.json` içinde yerel paket olarak tanımlıdır ve deploy sırasında build edilir; ancak **`server/src/` altında hiçbir dosya bu paketi import etmez**. Aktif LLM yönlendirmesi `llm.ts` + `llm-utils.ts` ile yapılır (rol bazlı primary/fallback, provider/key rotasyonu, deep mod global retry).
+`@mindbox/smart-routing-core` `server/package.json` içinde yerel paket olarak tanımlıdır ve deploy sırasında build edilir. Smart routing entegrasyonu `docs/smart-routing-integration-plan.md`'deki 6 adımlı plana göre yapılır. Her ajan, smart routing ile ilgili kod değişikliğine başlamadan ÖNCE bu planı okumalıdır.
 
-Paket yetenekleri (gelecek entegrasyon için):
+Paket yetenekleri:
 - `createSmartRoutingEngine()`, `selectRoute()`, `recordOutcome()`
 - Runtime learned capacity, 429/retry-after, burst episode, provider pressure
+- Sticky-incumbent politikası, probasyon durumu, kota hipotezi çıkarımı
 
-**Şu anki alternatif:** Deep mod dinamik cooldown için `engine/rate-signals.ts` kullanılır — LLM 429 + `Retry-After` sinyallerini toplar ve `engine/cooldown.ts` içindeki `computeCooldownMs()`'e `providerPressure` / `retryAfterMs` olarak iletir. Tam smart-routing entegrasyonu ayrı bir görevdir.
+**Entegrasyon sonrası notlar:**
+- Deep mod dinamik cooldown `engine/cooldown.ts` tarafından yönetilir (smart routing'den bağımsız, round pacing içindir)
+- `engine/rate-signals.ts` hâlâ `parseRetryAfterMs()` için kullanılmaktadır; tamamen kaldırılması ayrı bir görevdir
+- `server/data/smart-routing-snapshot.json` dosyası smart routing'in öğrenilmiş durumunu saklar (gitignore'da değildir)
 
 ### 5.4. Ayarlar Sistemi (`settings-store.ts` + `settings.ts`)
 
@@ -334,7 +346,7 @@ Ayar şeması v2 ana bölümleri:
 - `GET /autocomplete?q=...` → Google autocomplete proxy.
 - `GET /config`, `GET /health`, `GET /ping`, `POST /test-llm`.
 
-> **Dikkat:** `GET /config` şu anda sadece `keyCount` (Groq anahtar sayısı), `serperKeyCount` ve `providerCount` döner (`config.ts`). API dokümantasyonu (`docs/API.md`) daha geniş alanlar gösteriyor olabilir; bu iki kaynak arasında tutarsızlık varsa `config.ts` ve/veya `docs/API.md` güncellenmelidir.
+> `GET /config`: `keyCount` (Groq anahtar sayısı), `serperKeyCount` ve `providerCount` döner (`config.ts`).
 
 Detaylı dokümantasyon: `docs/API.md`.
 
@@ -369,6 +381,7 @@ Detaylı dokümantasyon: `docs/API.md`.
 - In-memory job/batch yönetiminde `MAX_JOBS` / `MAX_BATCHES` limitleri aşılırsa en eski kayıtlar silinir.
 - `db.json` yazma işlemleri `withLock` ile seri hale getirilmiştir; race condition yoktur.
 - **Static files**: Backend, `server/dist/public/` varsa bu dizini `express.static` ile serve eder. Bu, build edilmiş frontend'in backend ile aynı porta düşmesini sağlar. Deploy script `dist/` (Vite build) → `server/dist/public/` kopyalar.
+- `smart-routing-bridge.ts` singleton olarak `smartRouting` export eder; `llm.ts` bu bridge üzerinden rota seçimi ve outcome kaydı yapar. Snapshot `server/data/smart-routing-snapshot.json` dosyasına her başarılı/başarısız çağrı sonrası yazılır (hızlı, küçük dosya).
 
 ### 6.4. Smart Routing Core Özel
 
@@ -501,6 +514,20 @@ node scripts/deploy-simple.mjs
 
 Script otomatik olarak `DEPLOY_SECRET` ile şifreli bağlantıyı çözer, remote'da `git pull` çeker, rebuild eder ve PM2 restart yapar. Agent şifreyi görmez, hiçbir şey sormaz.
 
+**Settings temizliği / senkronizasyonu:**
+
+Eğer settings.json'da geçersiz model isimleri varsa veya deep mode sadece tek bir provider'a bağımlıysa:
+
+```powershell
+# 1. Local settings.json'i düzelt (gemini-3-flash kaldırır, deep mode'a fallback ekler)
+node scripts/fix-settings.mjs
+
+# 2. Düzeltilmiş settings.json'i remote sunucuya gönder
+node scripts/sync-settings.mjs
+```
+
+`fix-settings.mjs` her çalışmadan önce `settings.json.backup` oluşturur. API anahtarları içerdiği için `settings.json` ve `settings.json.backup` asla commit edilmemelidir.
+
 > **Uyarı:** Eğer `DEPLOY_SECRET` env var ayarlı değilse script hata verir. Kullanıcıya bildir, devam etme.
 
 ---
@@ -543,6 +570,9 @@ Eğer testler mevcut değilse veya değişiklik yeni bir modül etkiliyorsa, mev
 | Frontend `/api` 404 | Backend çalışmıyor veya proxy hatalı | `server/` çalıştırıldığından emin olun; `vite.config.ts` proxy kontrol edin. |
 | `Module not found` (backend) | `.js` import uzantısı unutulmuş | Node.js backend'de import yolları `.js` ile bitmeli. |
 | Derleme hatası `noUnusedLocals` | Kullanılmayan değişken/import | Silin veya `// eslint-disable` değil, gerçekten kullanılmayanı kaldırın. |
+| Deep mode "Model could not produce an answer" | Seçili deep route'daki tüm modeller 404/429/503 dönüyor | `node scripts/fix-settings.mjs` çalıştır veya Settings > Models'dan deep rolüne farklı provider/model fallback ekle. |
+| `all targets are blocked` (yeni) | Smart routing tüm route'ları bloke etti (rate limit, transient failure) | Birkaç dakika bekle, smart routing `blockedUntil` süresi dolunca otomatik dener. |
+| `smart-routing-snapshot.json` bozuk | Dosya yarım yazılmış | Sil, bridge başlangıçta sıfırdan başlar. |
 
 ---
 
@@ -552,6 +582,7 @@ Eğer testler mevcut değilse veya değişiklik yeni bir modül etkiliyorsa, mev
 - **Ajan stratejisi planı**: `docs/agent-strategy.md`
 - **Deep depth preset planı**: `docs/deep-depth-presets-plan.md`
 - **Ayarlar modalı yeniden tasarım planı**: `docs/settings-modal-redesign-plan.md`
+- **Smart routing entegrasyon planı**: `docs/smart-routing-integration-plan.md`
 - **README** (kullanıcıya yönelik): `README.md` (şu anda Vite template açıklaması; proje özgü bilgi eklenebilir).
 - **Bu dosyayı güncelle**: Eğer proje yapısı, teknoloji yığını veya kritik kurallar değişirse bu `AGENTS.md` dosyasını da güncelleyin. Ayrıntılı kural için 0. ve 12. bölümlere bakın.
 
