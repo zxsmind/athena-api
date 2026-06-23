@@ -195,6 +195,7 @@ function createSSEEndpoint<T extends { events: { type: string }[]; status: strin
       try { res.end(); } catch { /* client may have disconnected */ }
     };
 
+    const activeStatuses = new Set(['running', 'planning', 'searching', 'reviewing', 'synthesizing']);
     const flush = (current: T) => {
       if (res.writableEnded || closed) return;
       for (const ev of current.events) {
@@ -203,7 +204,7 @@ function createSSEEndpoint<T extends { events: { type: string }[]; status: strin
           sentEvents.add(ev);
         }
       }
-      if (current.status !== 'running') close();
+      if (!activeStatuses.has(current.status)) close();
     };
 
     flush(record);
