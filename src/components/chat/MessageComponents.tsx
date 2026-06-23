@@ -15,43 +15,42 @@ function CollapsibleText({ text, render }: { text: string; render: (t: string) =
 
   const truncated = text.slice(0, Math.floor(COLLAPSE_THRESHOLD * 0.4));
 
-  return (
-    <div style={{ position: 'relative' }}>
-      {render(expanded ? text : truncated)}
-      {!expanded && (
-        <div onClick={() => setExpanded(true)}
-          style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0, cursor: 'pointer',
-            background: 'linear-gradient(to bottom, transparent 0%, var(--athena-bg) 70%)',
-            paddingTop: 64, paddingBottom: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-          }}
-        >
-          <span style={{
-            fontSize: 12, color: 'var(--athena-text-3)', fontWeight: 500,
-            padding: '4px 12px', borderRadius: 6,
-            transition: 'color 0.15s', marginBottom: 2,
-            background: 'var(--athena-bg)',
-            boxShadow: '0 0 0 0.5px var(--athena-border)',
-          }}
-            onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text)'}
-            onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text-3)'}
-          >
-            Show more — {(byteLen / 1024).toFixed(1)}KB
-          </span>
-        </div>
-      )}
-      {expanded && (
+  if (expanded) {
+    return (
+      <div>
+        {render(text)}
         <span onClick={() => setExpanded(false)}
           style={{
-            display: 'inline-block', fontSize: 12, color: 'var(--athena-text-3)', fontWeight: 500,
-            cursor: 'pointer', marginTop: 4, transition: 'color 0.15s',
+            display: 'inline', fontSize: 11.5, color: 'var(--athena-text-3)', fontWeight: 500,
+            cursor: 'pointer', letterSpacing: '0.01em',
           }}
           onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text)'}
           onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text-3)'}
         >
           Show less
         </span>
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{
+        WebkitMaskImage: 'linear-gradient(to bottom, black 72%, transparent 100%)',
+        maskImage: 'linear-gradient(to bottom, black 72%, transparent 100%)',
+      }}>
+        {render(truncated)}
+      </div>
+      <span onClick={() => setExpanded(true)}
+        style={{
+          display: 'inline', fontSize: 11.5, color: 'var(--athena-text-3)', fontWeight: 500,
+          cursor: 'pointer', letterSpacing: '0.01em',
+        }}
+        onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text)'}
+        onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text-3)'}
+      >
+        Show more — {(byteLen / 1024).toFixed(1)}KB
+      </span>
     </div>
   );
 }
@@ -268,11 +267,9 @@ export function MessageComplete({
 }) {
   return (
     <>
-      <CollapsibleText text={msg.content} render={t => (
-        <div className="athena-prose" data-msg-content="true">
-          {renderMarkdown(t, getSourcesForMessage(msg, i, messages), onDiagramClick)}
-        </div>
-      )} />
+      <div className="athena-prose" data-msg-content="true">
+        {renderMarkdown(msg.content, getSourcesForMessage(msg, i, messages), onDiagramClick)}
+      </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, opacity: 0, transition: 'opacity 0.15s' }}
         className="footer-actions">
         {msg.data && msg.data.sources.length > 0 && (
