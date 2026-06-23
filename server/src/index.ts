@@ -157,8 +157,19 @@ function createSSEEndpoint<T extends { events: { type: string }[]; status: strin
       Connection: 'keep-alive',
     });
 
+    /*
+     * Node.js v20+ behaviour change: res.write() on a finished/ended response
+     * no longer throws synchronously — it emits an 'error' event asynchronously
+     * via process.nextTick(). A try-catch around res.write() cannot catch this.
+     * Without res.on('error'), the async error event becomes an unhandled
+     * exception and crashes the process.
+     */
+    let closed = false;
+    res.on('error', () => { if (!closed) { closed = true; try { res.end(); } catch { /* */ } } });
+
     const sentEvents = new Set<unknown>();
     const send = (event: string, data: object) => {
+      if (closed || res.writableEnded) return;
       let payload: string;
       try {
         payload = JSON.stringify(data);
@@ -177,12 +188,15 @@ function createSSEEndpoint<T extends { events: { type: string }[]; status: strin
     let heartbeat: ReturnType<typeof setInterval> | null = null;
 
     const close = () => {
+      if (closed) return;
+      closed = true;
       if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
       if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
       try { res.end(); } catch { /* client may have disconnected */ }
     };
 
     const flush = (current: T) => {
+      if (res.writableEnded || closed) return;
       for (const ev of current.events) {
         if (!sentEvents.has(ev)) {
           send(ev.type, ev);
@@ -195,6 +209,7 @@ function createSSEEndpoint<T extends { events: { type: string }[]; status: strin
     flush(record);
     if (record.status === 'running' || record.status === 'planning' || record.status === 'searching' || record.status === 'reviewing' || record.status === 'synthesizing') {
       heartbeat = setInterval(() => {
+        if (closed || res.writableEnded) { close(); return; }
         try { res.write(': heartbeat\n\n'); } catch { close(); }
       }, 10000);
       const unsubscribe = subscribe(id, flush);
