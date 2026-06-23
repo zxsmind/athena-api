@@ -16,7 +16,7 @@ export interface ToolOutcome {
 export interface CooldownInput {
   preset: ResolvedResearchPreset;
   state: ResearchCooldownState;
-  remainingRounds: number;
+  currentRound: number;
   providerPressure?: number;
   retryAfterMs?: number;
 }
@@ -30,13 +30,12 @@ export function createCooldownState(): ResearchCooldownState {
   };
 }
 
-function randomBetween(min: number, max: number): number {
-  if (max <= min) return min;
-  return min + Math.random() * (max - min);
-}
-
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * clamp(t, 0, 1);
 }
 
 function recentErrorRate(state: ResearchCooldownState, window = 10): number {
@@ -68,12 +67,13 @@ export function recordToolOutcomes(state: ResearchCooldownState, outcomes: ToolO
 }
 
 export function computeCooldownMs(input: CooldownInput): { ms: number; reason: string } {
-  const { preset, state, remainingRounds, providerPressure = 0, retryAfterMs } = input;
+  const { preset, state, currentRound, providerPressure = 0, retryAfterMs } = input;
 
   if (preset.mode === 'quick' || preset.maxCooldownMs <= 0) {
     return { ms: 0, reason: 'no cooldown for instant mode' };
   }
 
+  /* Retry-After from upstream provider takes priority */
   if (retryAfterMs && retryAfterMs > 0) {
     const ms = preset.depth === 'ultra'
       ? Math.max(retryAfterMs, preset.minCooldownMs)
@@ -81,27 +81,36 @@ export function computeCooldownMs(input: CooldownInput): { ms: number; reason: s
     return { ms, reason: `provider retry-after ${Math.round(ms / 1000)}s` };
   }
 
-  const base = randomBetween(preset.minCooldownMs, preset.maxCooldownMs);
-  const errorPenalty = recentErrorRate(state) * 2.0;
-  const rateLimitPenalty = state.recent429Count > 0 ? 1.5 : 0;
-  const latencyPenalty = avgLatencyMs(state) > 20_000 ? 0.5 : 0;
-  const pressurePenalty = providerPressure;
-  const healthyBonus = state.successStreak >= 5 ? -0.25 : 0;
-  const urgentBonus = remainingRounds <= 2 && preset.depth !== 'ultra' ? -0.15 : 0;
+  /* Progressive base: short early, longer as research deepens */
+  const progress = preset.maxRounds > 0
+    ? clamp(currentRound / preset.maxRounds, 0, 1)
+    : 1;
+  const baseMs = lerp(preset.minCooldownMs, preset.maxCooldownMs, progress);
 
-  const multiplier = 1 + errorPenalty + rateLimitPenalty + latencyPenalty + pressurePenalty + healthyBonus + urgentBonus;
-  const maxCap = preset.depth === 'ultra' ? Math.max(preset.maxCooldownMs * 5, 300_000) : preset.maxCooldownMs * 4;
-  let ms = clamp(base * multiplier, preset.minCooldownMs, maxCap);
+  /* Dynamic adjustments */
+  const errorRate = recentErrorRate(state);
+  const errorMultiplier = 1 + errorRate * 3;
 
-  if (preset.depth === 'ultra') {
-    ms = Math.max(ms, preset.minCooldownMs);
-  }
+  const streakDiscount = state.successStreak >= 3
+    ? Math.max(0.5, 1 - (state.successStreak - 2) * 0.05)
+    : 1;
 
-  const parts: string[] = [`deep-${preset.depth} pacing ${Math.round(ms / 1000)}s`];
-  if (errorPenalty > 0) parts.push('recent errors');
-  if (rateLimitPenalty > 0) parts.push('rate limits');
-  if (latencyPenalty > 0) parts.push('high latency');
-  if (healthyBonus < 0) parts.push('healthy streak');
+  const rateLimitPenalty = state.recent429Count > 0 ? 1.3 : 1;
+  const latencyPenalty = avgLatencyMs(state) > 30_000 ? 1.25 : 1;
+  const pressurePenalty = 1 + providerPressure;
+
+  let ms = baseMs * errorMultiplier * streakDiscount * rateLimitPenalty * latencyPenalty * pressurePenalty;
+
+  /* Cap: never below start, never above 5x end */
+  const hardMin = preset.minCooldownMs;
+  const hardMax = Math.max(preset.maxCooldownMs * 5, 300_000);
+  ms = clamp(ms, hardMin, hardMax);
+
+  const parts: string[] = [`deep-${preset.depth} round ${currentRound + 1} pacing ${Math.round(ms / 1000)}s`];
+  if (errorRate > 0) parts.push(`errors ${Math.round(errorRate * 100)}%`);
+  if (state.recent429Count > 0) parts.push('rate limited');
+  if (latencyPenalty > 1) parts.push('high latency');
+  if (streakDiscount < 1) parts.push('good streak');
 
   return { ms: Math.round(ms), reason: parts.join(', ') };
 }
@@ -111,21 +120,41 @@ export async function waitCooldown(
   reason: string,
   signal?: AbortSignal,
   onWait?: (note: string) => void,
+  onHeartbeat?: (note: string) => void,
 ): Promise<boolean> {
   if (ms <= 0 || signal?.aborted) return !signal?.aborted;
 
   const note = `Waiting ${Math.round(ms / 1000)}s — ${reason}`;
   onWait?.(note);
 
+  const heartbeatIntervalMs = 8_000;
+  const startedAt = Date.now();
   return new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => resolve(true), ms);
+    const mainTimer = setTimeout(() => {
+      clearInterval(heartbeatTimer);
+      resolve(true);
+    }, ms);
+    const heartbeatTimer = setInterval(() => {
+      if (signal?.aborted) {
+        clearInterval(heartbeatTimer);
+        clearTimeout(mainTimer);
+        resolve(false);
+        return;
+      }
+      const elapsedMs = Date.now() - startedAt;
+      const remainingMs = Math.max(0, ms - elapsedMs);
+      const remainingSec = Math.round(remainingMs / 1000);
+      onHeartbeat?.(`Still waiting ${remainingSec}s — ${reason}`);
+    }, heartbeatIntervalMs);
     if (signal) {
       const onAbort = () => {
-        clearTimeout(timer);
+        clearInterval(heartbeatTimer);
+        clearTimeout(mainTimer);
         resolve(false);
       };
       if (signal.aborted) {
-        clearTimeout(timer);
+        clearInterval(heartbeatTimer);
+        clearTimeout(mainTimer);
         resolve(false);
         return;
       }

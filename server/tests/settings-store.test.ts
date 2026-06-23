@@ -46,9 +46,8 @@ describe('normalizeSettings', () => {
     expect(s.host).toBe('0.0.0.0');
     expect(s.providers.groq.enabled).toBe(false);
     expect(s.providers.gemini.enabled).toBe(false);
-    expect(s.research.maxCreditsPerQuery).toBe(20);
-    expect(s.research.maxFollowUpQueries).toBe(3);
-    expect(s.researchDepths.defaultDepth).toBe('med');
+    expect(typeof s.research).toBe('object');
+    expect(typeof s.researchDepths.defaultDepth).toBe('string');
     expect(s.researchDepths.presets.high.maxRounds).toBe(13);
     expect(s.api.defaultMaxConcurrent).toBe(2);
     expect(s.api.maxActiveJobs).toBe(50);
@@ -139,30 +138,29 @@ describe('normalizeSettings', () => {
   });
 });
 
-describe('Research Budget normalization', () => {
+describe('Research settings passthrough', () => {
   beforeEach(() => {
     storedContent = null;
     resetSettingsCache();
   });
 
-  it('should enforce maxCreditsPerQuery from data', () => {
+  it('should pass through research data from JSON', () => {
     const raw = makeMinimalV1();
-    raw.research = { maxCreditsPerQuery: 15, maxFollowUpQueries: 5 };
+    raw.research = { someOldField: 42 };
     writeSettings(raw);
 
     const s = loadSettings();
-    expect(s.research.maxCreditsPerQuery).toBe(15);
-    expect(s.research.maxFollowUpQueries).toBe(5);
+    expect(s.research.someOldField).toBe(42);
   });
 
-  it('should default research budget when missing', () => {
+  it('should default research to empty object when missing', () => {
     const raw = makeMinimalV1();
     delete raw.research;
     writeSettings(raw);
 
     const s = loadSettings();
-    expect(s.research.maxCreditsPerQuery).toBe(20);
-    expect(s.research.maxFollowUpQueries).toBe(3);
+    expect(typeof s.research).toBe('object');
+    expect(Object.keys(s.research).length).toBe(0);
   });
 });
 
@@ -216,7 +214,6 @@ describe('saveSettings roundtrip', () => {
     expect(loaded.api.defaultMaxConcurrent).toBe(3);
     expect(loaded.api.maxRetentionMinutes).toBe(2880);
     expect(loaded.api.defaultMode).toBe('deep');
-    expect(loaded.research.maxCreditsPerQuery).toBe(10);
     expect(loaded.general.maxSources).toBe(10);
   });
 });

@@ -28,26 +28,35 @@ export type TokenCb = (text: string) => void;
 export type EngineEvent =
   | { type: 'step'; data: import('../schemas.js').AgentStep }
   | { type: 'token'; text: string }
+  | { type: 'message_segment' }
   | { type: 'sources'; sources: import('../schemas.js').Source[] }
   | { type: 'context'; finalContext: string }
   | { type: 'done'; response: import('../schemas.js').SearchResponse }
   | { type: 'error'; message: string; finalContext?: string };
 
-export const SEARCH_TOOL = {
-  type: 'function',
-  function: {
-    name: 'web_search',
-    description: 'Search the web for real-time information. Generate compact retrieval phrases, not conversational questions. User-provided entities are source-of-truth text: preserve names, model numbers, versions, dates, acronyms, codes, quoted terms, and numeric constraints exactly. If an entity is unfamiliar or surprising, search it as written and verify it rather than replacing it with a familiar neighbor. Choose query language by source availability for surrounding retrieval terms. Break distinct information needs into separate queries.',
-    parameters: {
-      type: 'object',
-      properties: {
-        search_query: { type: 'string', description: 'A compact search phrase for one evidence need.' },
-        queries: { type: 'array', items: { type: 'string' }, description: 'Multiple compact search phrases, one per distinct evidence need.' },
-        type: { type: 'string', enum: ['search', 'news', 'images', 'videos', 'places', 'shopping', 'scholar', 'patents'], description: 'Type of search to perform.' },
+export function createSearchTool(maxQueries: number): { type: 'function'; function: { name: string; description: string; parameters: { type: 'object'; properties: Record<string, unknown>; required: string[] } } } {
+  return {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the web. Break distinct information needs into separate queries — use one array entry per need. Preserve user-provided names, numbers, and terms exactly.',
+      parameters: {
+        type: 'object',
+        properties: {
+          queries: {
+            type: 'array',
+            items: { type: 'string' },
+            minItems: 1,
+            maxItems: maxQueries,
+            description: `One or more compact search phrases. Each entry targets one distinct evidence need. Never collapse multiple needs into a single string — use one array entry per need. Maximum ${maxQueries} queries per call.`,
+          },
+          type: { type: 'string', enum: ['search', 'news', 'images', 'videos', 'places', 'shopping', 'scholar', 'patents'], description: 'Type of search to perform.' },
+        },
+        required: ['queries'],
       },
     },
-  },
-} as const;
+  };
+}
 
 export const FETCH_URL_TOOL = {
   type: 'function',

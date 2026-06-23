@@ -10,8 +10,6 @@ export interface ResearchDepthPreset {
   minCooldownMs: number;
   maxCooldownMs: number;
   notebookCadenceRawBlocks: number;
-  maxSearchesPerRound: number;
-  maxFetchesPerRound: number;
   minIndependentSourcesForKeyClaims: number;
   contradictionPass: boolean;
   primarySourcePreference: boolean;
@@ -27,13 +25,11 @@ export const DEFAULT_DEEP_DEPTH: DeepDepth = 'med';
 export const DEFAULT_RESEARCH_DEPTH_PRESETS: Record<DeepDepth, ResearchDepthPreset> = {
   low: {
     depth: 'low',
-    budgetCredits: 20,
+    budgetCredits: 25,
     maxRounds: 5,
     minCooldownMs: 5_000,
-    maxCooldownMs: 10_000,
-    notebookCadenceRawBlocks: 2,
-    maxSearchesPerRound: 4,
-    maxFetchesPerRound: 2,
+    maxCooldownMs: 12_000,
+    notebookCadenceRawBlocks: 4,
     minIndependentSourcesForKeyClaims: 2,
     contradictionPass: false,
     primarySourcePreference: false,
@@ -42,13 +38,11 @@ export const DEFAULT_RESEARCH_DEPTH_PRESETS: Record<DeepDepth, ResearchDepthPres
   },
   med: {
     depth: 'med',
-    budgetCredits: 35,
+    budgetCredits: 50,
     maxRounds: 8,
-    minCooldownMs: 10_000,
-    maxCooldownMs: 15_000,
+    minCooldownMs: 8_000,
+    maxCooldownMs: 25_000,
     notebookCadenceRawBlocks: 2,
-    maxSearchesPerRound: 5,
-    maxFetchesPerRound: 3,
     minIndependentSourcesForKeyClaims: 2,
     contradictionPass: true,
     primarySourcePreference: false,
@@ -57,13 +51,11 @@ export const DEFAULT_RESEARCH_DEPTH_PRESETS: Record<DeepDepth, ResearchDepthPres
   },
   high: {
     depth: 'high',
-    budgetCredits: 50,
+    budgetCredits: 80,
     maxRounds: 13,
-    minCooldownMs: 20_000,
+    minCooldownMs: 12_000,
     maxCooldownMs: 40_000,
     notebookCadenceRawBlocks: 1,
-    maxSearchesPerRound: 6,
-    maxFetchesPerRound: 4,
     minIndependentSourcesForKeyClaims: 3,
     contradictionPass: true,
     primarySourcePreference: true,
@@ -72,13 +64,11 @@ export const DEFAULT_RESEARCH_DEPTH_PRESETS: Record<DeepDepth, ResearchDepthPres
   },
   ultra: {
     depth: 'ultra',
-    budgetCredits: 100,
+    budgetCredits: 150,
     maxRounds: 30,
-    minCooldownMs: 60_000,
-    maxCooldownMs: 60_000,
+    minCooldownMs: 20_000,
+    maxCooldownMs: 80_000,
     notebookCadenceRawBlocks: 1,
-    maxSearchesPerRound: 8,
-    maxFetchesPerRound: 6,
     minIndependentSourcesForKeyClaims: 3,
     contradictionPass: true,
     primarySourcePreference: true,
@@ -119,14 +109,12 @@ export function resolveResearchPreset(
   const base: ResearchDepthPreset = settingsOverride
     ? { ...baseDefaults, depth: normalizedDepth, ...settingsOverride }
     : baseDefaults;
-  const legacyLimit = Math.max(1, settings.research.maxCreditsPerQuery || base.budgetCredits);
-  const finalBudget = Math.max(base.budgetCredits, legacyLimit);
-  const finalMaxRounds = Math.max(base.maxRounds, Math.ceil(finalBudget / 2));
+  const finalMaxRounds = Math.max(base.maxRounds, Math.ceil(base.budgetCredits / 2));
   return {
     ...base,
     mode,
     maxRounds: finalMaxRounds,
-    budgetCredits: finalBudget,
+    budgetCredits: base.budgetCredits,
   };
 }
 
@@ -135,9 +123,7 @@ export function depthBehaviorBlock(preset: ResolvedResearchPreset): string {
 
   const lines = [
     `**Depth profile:** Deep ${preset.depth.toUpperCase()}.`,
-    `- Research budget: ${preset.budgetCredits} search/fetch credits.`,
     `- Notebook cadence: write the notebook when ${preset.notebookCadenceRawBlocks} raw evidence block(s) are still uncompacted.`,
-    `- Per round target: no more than ${preset.maxSearchesPerRound} searches and ${preset.maxFetchesPerRound} fetches unless a critical gap requires it.`,
     `- Key claims should have at least ${preset.minIndependentSourcesForKeyClaims} independent supporting source(s) when available.`,
   ];
 

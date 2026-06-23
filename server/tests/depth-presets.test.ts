@@ -35,7 +35,7 @@ function minimalSettings(): SettingsStore {
       deep: { primary: null, fallback: [] },
     },
     serper: { keys: [] },
-    research: { maxCreditsPerQuery: 35, maxFollowUpQueries: 5 },
+    research: { maxFollowUpQueries: 5 },
     researchDepths: {
       defaultDepth: 'med',
       presets,
@@ -74,21 +74,20 @@ describe('depth-presets', () => {
 
   it('resolves deep depth budgets and rounds', () => {
     const settings = minimalSettings();
-    expect(resolveResearchPreset('deep', 'low', settings).budgetCredits).toBe(35);
-    expect(resolveResearchPreset('deep', 'med', settings).budgetCredits).toBe(35);
-    expect(resolveResearchPreset('deep', 'high', settings).budgetCredits).toBe(50);
-    expect(resolveResearchPreset('deep', 'ultra', settings).budgetCredits).toBe(100);
+    expect(resolveResearchPreset('deep', 'low', settings).budgetCredits).toBe(25);
+    expect(resolveResearchPreset('deep', 'med', settings).budgetCredits).toBe(50);
+    expect(resolveResearchPreset('deep', 'high', settings).budgetCredits).toBe(80);
+    expect(resolveResearchPreset('deep', 'ultra', settings).budgetCredits).toBe(150);
   });
 
   it('defaults deep without depth to med', () => {
     const preset = resolveResearchPreset('deep', undefined, minimalSettings());
     expect(preset.depth).toBe('med');
-    expect(preset.budgetCredits).toBe(35);
+    expect(preset.budgetCredits).toBe(50);
   });
 
   it('applies settings depth preset overrides', () => {
     const settings = minimalSettings();
-    settings.research.maxCreditsPerQuery = 20;
     settings.researchDepths.presets.low.budgetCredits = 25;
     settings.researchDepths.presets.low.maxRounds = 6;
     const preset = resolveResearchPreset('deep', 'low', settings);
@@ -100,16 +99,17 @@ describe('cooldown', () => {
   it('returns zero cooldown for quick mode', () => {
     const state = createCooldownState();
     const preset = resolveResearchPreset('quick', undefined, minimalSettings());
-    const { ms } = computeCooldownMs({ preset, state, remainingRounds: 2 });
+    const { ms } = computeCooldownMs({ preset, state, currentRound: 2 });
     expect(ms).toBe(0);
   });
 
   it('clamps deep-med cooldown within preset bounds', () => {
     const state = createCooldownState();
     const preset = resolveResearchPreset('deep', 'med', minimalSettings());
-    const { ms } = computeCooldownMs({ preset, state, remainingRounds: 5 });
+    const { ms } = computeCooldownMs({ preset, state, currentRound: 5 });
     expect(ms).toBeGreaterThanOrEqual(preset.minCooldownMs);
     expect(ms).toBeLessThanOrEqual(preset.maxCooldownMs * 4);
+    expect(ms).toBeGreaterThan(0);
   });
 
   it('increases cooldown after errors', () => {
@@ -120,8 +120,8 @@ describe('cooldown', () => {
       { ok: false, latencyMs: 1000 },
       { ok: false, latencyMs: 1000 },
     ]);
-    const healthy = computeCooldownMs({ preset, state: createCooldownState(), remainingRounds: 5 });
-    const stressed = computeCooldownMs({ preset, state, remainingRounds: 5 });
+    const healthy = computeCooldownMs({ preset, state: createCooldownState(), currentRound: 5 });
+    const stressed = computeCooldownMs({ preset, state, currentRound: 5 });
     expect(stressed.ms).toBeGreaterThan(healthy.ms);
   });
 
@@ -129,7 +129,7 @@ describe('cooldown', () => {
     const state = createCooldownState();
     recordToolOutcomes(state, Array.from({ length: 10 }, () => ({ ok: true, latencyMs: 500 })));
     const preset = resolveResearchPreset('deep', 'ultra', minimalSettings());
-    const { ms } = computeCooldownMs({ preset, state, remainingRounds: 20 });
+    const { ms } = computeCooldownMs({ preset, state, currentRound: 20 });
     expect(ms).toBeGreaterThanOrEqual(DEFAULT_RESEARCH_DEPTH_PRESETS.ultra.minCooldownMs);
   });
 });

@@ -160,6 +160,7 @@ export type ResearchJobEvent =
   | { type: 'step'; data: AgentStep; timestamp: string }
   | { type: 'progress'; data: ResearchProgressState; timestamp: string }
   | { type: 'token'; text: string; timestamp: string }
+  | { type: 'message_segment'; timestamp: string }
   | { type: 'sources'; sources: Source[]; timestamp: string }
   | { type: 'context'; finalContext: string; timestamp: string }
   | { type: 'done'; response: SearchResponse; timestamp: string }
@@ -188,6 +189,7 @@ export async function search(
 
 export interface JobEventCallbacks {
   onToken?: (text: string) => void;
+  onMessageSegment?: () => void;
   onStep?: (step: AgentStep) => void;
   onSources?: (sources: Source[]) => void;
   onContext?: (finalContext: string) => void;
@@ -212,7 +214,7 @@ export function subscribeToJobEvents(
     source.close();
   };
 
-  const eventTypes = ['status', 'step', 'token', 'sources', 'context', 'done', 'error', 'progress'] as const;
+  const eventTypes = ['status', 'step', 'token', 'message_segment', 'sources', 'context', 'done', 'error', 'progress'] as const;
   for (const type of eventTypes) {
     source.addEventListener(type, (e: MessageEvent) => {
       if (signal?.aborted) return;
@@ -222,6 +224,7 @@ export function subscribeToJobEvents(
           case 'done': terminal(); callbacks.onDone?.(data.response); break;
           case 'error': terminal(); callbacks.onError?.(data.message, data.finalContext); break;
           case 'token': callbacks.onToken?.(data.text); break;
+          case 'message_segment': callbacks.onMessageSegment?.(); break;
           case 'step': callbacks.onStep?.(data.data); break;
           case 'sources': callbacks.onSources?.(data.sources); break;
           case 'context': callbacks.onContext?.(data.finalContext); break;

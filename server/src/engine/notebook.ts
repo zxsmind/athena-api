@@ -251,7 +251,7 @@ export const WRITE_NOTEBOOK_TOOL = {
   type: 'function',
   function: {
     name: 'write_notebook',
-    description: 'Deep Research only. Append a Markdown research note after reading search/fetch results. Write plain Markdown: findings, source URLs, open gaps, next steps. Do not use JSON.',
+    description: 'Append a Markdown research note after reading search/fetch results. Write plain Markdown: findings, source URLs, open gaps, next steps. Do not use JSON.',
     parameters: {
       type: 'object',
       properties: {

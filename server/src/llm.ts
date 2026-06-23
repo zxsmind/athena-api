@@ -75,7 +75,7 @@ function convertToGeminiBody(body: Record<string, unknown>, model: string, provi
       const raw = msg.content;
       let response: Record<string, unknown> = { result: String(raw || '') };
       if (typeof raw === 'string') { try { const p = JSON.parse(raw); if (typeof p === 'object') response = p; } catch { /* tool payload is plain text */ } }
-      contents.push({ role: 'user', parts: [{ functionResponse: { name: funcName, response } }] });
+      contents.push({ role: 'function', parts: [{ functionResponse: { name: funcName, response } }] });
     } else if (msg.role === 'assistant') {
       const parts: Record<string, unknown>[] = [];
       if (msg.content) parts.push({ text: String(msg.content) });
@@ -85,7 +85,10 @@ function convertToGeminiBody(body: Record<string, unknown>, model: string, provi
           let args: Record<string, unknown> = {};
           if (typeof func.arguments === 'string') { try { args = JSON.parse(func.arguments); } catch { /* provider returned malformed tool args */ } }
           else if (typeof func.arguments === 'object') args = func.arguments as Record<string, unknown>;
-          parts.push({ functionCall: { name: func.name, args: args || {} } });
+          const ts = tc.thought_signature as string | undefined;
+          const fcPart: Record<string, unknown> = { functionCall: { name: func.name, args: args || {} } };
+          if (ts) fcPart.thoughtSignature = ts;
+          parts.push(fcPart);
         }
       }
       contents.push({ role: 'model', parts });
@@ -172,11 +175,13 @@ function parseNonSseGeminiResponse(
       const fc = part.functionCall as Record<string, unknown> | undefined;
       if (fc) {
         const tcIndex = toolCallAccumulators.size;
-        toolCallAccumulators.set(tcIndex, {
+        const tc: Record<string, unknown> = {
           id: `call_${Date.now()}_${tcIndex}`,
           type: 'function',
           function: { name: fc.name as string, arguments: JSON.stringify(fc.args || {}) },
-        });
+        };
+        if (part.thoughtSignature) tc.thought_signature = part.thoughtSignature as string;
+        toolCallAccumulators.set(tcIndex, tc);
       }
     }
   }
@@ -228,11 +233,13 @@ function normalizeGeminiResponse(data: unknown, model: string): unknown {
     const pp = p as Record<string, unknown>;
     if (pp.functionCall) {
       const fc = pp.functionCall as Record<string, unknown>;
-      toolCalls.push({
+      const tc: Record<string, unknown> = {
         id: `call_${Date.now()}_${toolCalls.length}`,
         type: 'function',
         function: { name: fc.name, arguments: JSON.stringify(fc.args || {}) },
-      });
+      };
+      if (pp.thoughtSignature) tc.thought_signature = pp.thoughtSignature as string;
+      toolCalls.push(tc);
     }
   }
   if (toolCalls.length > 0 && finish === 'STOP') finish = 'tool_calls';
@@ -673,11 +680,13 @@ async function tryProviderStream(
                       if (fc) {
                         toolCallChunksSeen++;
                         const tcIndex = toolCallAccumulators.size;
-                        toolCallAccumulators.set(tcIndex, {
+                        const tc: Record<string, unknown> = {
                           id: `call_${Date.now()}_${tcIndex}`,
                           type: 'function',
                           function: { name: fc.name as string, arguments: JSON.stringify(fc.args || {}) },
-                        });
+                        };
+                        if (part.thoughtSignature) tc.thought_signature = part.thoughtSignature as string;
+                        toolCallAccumulators.set(tcIndex, tc);
                       }
                     }
                   }

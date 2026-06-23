@@ -26,7 +26,7 @@ describe('rate-signals', () => {
     const { ms, reason } = computeCooldownMs({
       preset,
       state: createCooldownState(),
-      remainingRounds: 5,
+      currentRound: 5,
       retryAfterMs,
     });
     expect(ms).toBeGreaterThanOrEqual(45_000);

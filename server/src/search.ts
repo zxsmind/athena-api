@@ -65,36 +65,66 @@ export async function fetchResults(
 
   const endpoint = serperEndpoint(type);
   const body: Record<string, unknown> = { q: query, gl: 'us', hl: 'en', num: maxSources };
+  const { signal: timeoutSignal, clean } = signalWithTimeout(signal, SEARCH_TIMEOUT_MS);
 
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'X-API-KEY': key,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-    signal,
-  });
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'X-API-KEY': key,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      signal: timeoutSignal,
+    });
 
-  if (!res.ok) {
-    throw new Error(`Serper API error (${type}): ${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      throw new Error(`Serper API error (${type}): ${res.status} ${res.statusText}`);
+    }
+
+    const data: unknown = await res.json();
+
+    const organic = extractOrganic(data);
+    const results: SearchResult[] = organic
+      .slice(0, maxSources)
+      .map((item: unknown, i: number) => { const it = item as Record<string, unknown>; return ({
+        id: (it.position as number) ?? i + 1,
+        title: String(it.title || ''),
+        url: String(it.link || it.url || ''),
+        snippet: (it.snippet || it.description || null) as string | null,
+        date: (it.date || null) as string | null,
+      }); });
+
+    const queryText = ((data as Record<string, unknown>)?.searchParameters as Record<string, unknown>)?.q as string || query;
+    return { results, queryText };
+  } catch (err: unknown) {
+    // user cancellation: propagate
+    if (signal?.aborted) throw err;
+    // timeout or other error: convert to meaningful message
+    const message = (err as Error).name === 'AbortError'
+      ? `Search timed out after ${SEARCH_TIMEOUT_MS / 1000}s`
+      : (err as Error).message || 'Search failed';
+    throw new Error(message);
+  } finally {
+    clean();
   }
+}
 
-  const data: unknown = await res.json();
+const SEARCH_TIMEOUT_MS = 30_000;
+const FETCH_TIMEOUT_MS = 30_000;
 
-  const organic = extractOrganic(data);
-  const results: SearchResult[] = organic
-    .slice(0, maxSources)
-    .map((item: unknown, i: number) => { const it = item as Record<string, unknown>; return ({
-      id: (it.position as number) ?? i + 1,
-      title: String(it.title || ''),
-      url: String(it.link || it.url || ''),
-      snippet: (it.snippet || it.description || null) as string | null,
-      date: (it.date || null) as string | null,
-    }); });
-
-  const queryText = ((data as Record<string, unknown>)?.searchParameters as Record<string, unknown>)?.q as string || query;
-  return { results, queryText };
+function signalWithTimeout(signal: AbortSignal | undefined, timeoutMs: number): { signal: AbortSignal; clean: () => void } {
+  if (signal?.aborted) return { signal, clean: () => {} };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  const clean = () => { clearTimeout(timer); };
+  if (!signal) return { signal: ctrl.signal, clean };
+  const onAbort = () => { clearTimeout(timer); ctrl.abort(); };
+  signal.addEventListener('abort', onAbort, { once: true });
+  return {
+    signal: ctrl.signal,
+    clean: () => { clearTimeout(timer); signal.removeEventListener('abort', onAbort); },
+  };
 }
 
 const BLOCKED_HOSTS = [
@@ -126,58 +156,64 @@ export async function fetchPageContent(
   }
 
   try {
-    const res = await fetch(url, {
-      signal,
-      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ATHENA/1.0)' },
-    });
+    const { signal: timeoutSignal, clean } = signalWithTimeout(signal, FETCH_TIMEOUT_MS);
 
-    if (!res.ok) {
-      return {
-        title: url,
-        content: '',
-        error: `HTTP ${res.status}: ${res.statusText}`,
-      };
-    }
+    try {
+      const res = await fetch(url, {
+        signal: timeoutSignal,
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; ATHENA/1.0)' },
+      });
 
-    const contentType = res.headers.get('content-type') || '';
-    const isPdf = contentType.includes('application/pdf') || url.toLowerCase().match(/\.pdf($|[?#])/);
-    if (isPdf) {
-      try {
-        const { PDFParse } = await import('pdf-parse');
-        const ab = await res.arrayBuffer();
-        const u8 = new Uint8Array(ab);
-        const parser = new PDFParse(u8);
-        const data = await parser.getText();
-        const text = (data?.text || '').trim();
-        return { title: url, content: text.slice(0, 8000) || '[PDF text was empty]' };
-      } catch (pdfErr: unknown) {
+      if (!res.ok) {
         return {
           title: url,
           content: '',
-          error: `PDF parse failed: ${(pdfErr as Error).message}`,
+          error: `HTTP ${res.status}: ${res.statusText}`,
         };
       }
+
+      const contentType = res.headers.get('content-type') || '';
+      const isPdf = contentType.includes('application/pdf') || url.toLowerCase().match(/\.pdf($|[?#])/);
+      if (isPdf) {
+        try {
+          const { PDFParse } = await import('pdf-parse');
+          const ab = await res.arrayBuffer();
+          const u8 = new Uint8Array(ab);
+          const parser = new PDFParse(u8);
+          const data = await parser.getText();
+          const text = (data?.text || '').trim();
+          return { title: url, content: text.slice(0, 8000) || '[PDF text was empty]' };
+        } catch (pdfErr: unknown) {
+          return {
+            title: url,
+            content: '',
+            error: `PDF parse failed: ${(pdfErr as Error).message}`,
+          };
+        }
+      }
+
+      const html = await res.text();
+      const title = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || url;
+      const text = html
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/&[a-z]+;/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 3000);
+
+      return { title, content: text };
+    } finally {
+      clean();
     }
-
-    const html = await res.text();
-    const title = html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || url;
-    const text = html
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-      .replace(/<[^>]+>/g, ' ')
-      .replace(/&[a-z]+;/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .slice(0, 3000);
-
-    return { title, content: text };
   } catch (err: unknown) {
-    // AbortError should still propagate so the agent can be cancelled cleanly
-    if ((err as Error).name === 'AbortError') throw err;
+    // AbortError from user cancellation should propagate
+    if (signal?.aborted) throw err;
     return {
       title: url,
       content: '',
-      error: (err as Error).message,
+      error: (err as Error).message || 'Fetch failed',
     };
   }
 }

@@ -60,8 +60,7 @@ export interface SettingsStore {
   providers: Record<string, ProviderState>;
   serper: { keys: string[]; url: string };
   research: {
-    maxCreditsPerQuery: number;
-    maxFollowUpQueries: number;
+    [key: string]: unknown;
   };
   researchDepths: ResearchDepthsSettings;
   modelRouting: ModelRouting;
@@ -128,10 +127,7 @@ const defaults: SettingsStore = {
     custom: { enabled: false, keys: [], models: [], url: '', name: 'custom' },
   },
   serper: { keys: [], url: 'https://google.serper.dev/search' },
-  research: {
-    maxCreditsPerQuery: 20,
-    maxFollowUpQueries: 3,
-  },
+  research: {},
   researchDepths: createDefaultResearchDepths(),
   modelRouting: createModelRouting(),
   api: { ...apiDefaults },
@@ -158,8 +154,6 @@ function normalizeDepthPresetConfig(
     minCooldownMs: clampInt(v.minCooldownMs, fallback.minCooldownMs, 0),
     maxCooldownMs: clampInt(v.maxCooldownMs, fallback.maxCooldownMs, 0),
     notebookCadenceRawBlocks: clampInt(v.notebookCadenceRawBlocks, fallback.notebookCadenceRawBlocks, 1),
-    maxSearchesPerRound: clampInt(v.maxSearchesPerRound, fallback.maxSearchesPerRound, 1),
-    maxFetchesPerRound: clampInt(v.maxFetchesPerRound, fallback.maxFetchesPerRound, 0),
     minIndependentSourcesForKeyClaims: clampInt(v.minIndependentSourcesForKeyClaims, fallback.minIndependentSourcesForKeyClaims, 1),
     contradictionPass: typeof v.contradictionPass === 'boolean' ? v.contradictionPass : fallback.contradictionPass,
     primarySourcePreference: typeof v.primarySourcePreference === 'boolean' ? v.primarySourcePreference : fallback.primarySourcePreference,
@@ -266,11 +260,7 @@ function normalizeSettings(raw: unknown): SettingsStore {
     keys: Array.isArray(serperRaw?.keys) ? (serperRaw.keys as unknown[]).filter((k: unknown) => typeof k === 'string') as string[] : [...merged.serper.keys],
     url: typeof serperRaw?.url === 'string' ? serperRaw.url as string : merged.serper.url,
   };
-  const researchRaw = (r.research && typeof r.research === 'object' ? r.research : {}) as Record<string, unknown>;
-  merged.research = {
-    maxCreditsPerQuery: typeof researchRaw?.maxCreditsPerQuery === 'number' ? researchRaw.maxCreditsPerQuery as number : merged.research.maxCreditsPerQuery,
-    maxFollowUpQueries: typeof researchRaw?.maxFollowUpQueries === 'number' ? researchRaw.maxFollowUpQueries as number : merged.research.maxFollowUpQueries,
-  };
+  merged.research = (r.research && typeof r.research === 'object' ? { ...r.research } : {});
   merged.researchDepths = normalizeResearchDepths(r?.researchDepths);
   merged.general = {
     maxSources: typeof general?.maxSources === 'number' ? general.maxSources as number : merged.general.maxSources,

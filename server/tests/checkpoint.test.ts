@@ -25,8 +25,6 @@ describe('checkpoint', () => {
       minCooldownMs: 20000,
       maxCooldownMs: 40000,
       notebookCadenceRawBlocks: 1,
-      maxSearchesPerRound: 6,
-      maxFetchesPerRound: 4,
       minIndependentSourcesForKeyClaims: 3,
       contradictionPass: true,
       primarySourcePreference: true,

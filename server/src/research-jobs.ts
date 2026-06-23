@@ -28,6 +28,7 @@ export type ResearchJobEvent =
   | { type: 'step'; data: AgentStep; timestamp: string }
   | { type: 'progress'; data: import('./engine/types.js').ResearchProgressState; timestamp: string }
   | { type: 'token'; text: string; timestamp: string }
+  | { type: 'message_segment'; timestamp: string }
   | { type: 'sources'; sources: Source[]; timestamp: string }
   | { type: 'context'; finalContext: string; timestamp: string }
   | { type: 'done'; response: SearchResponse; timestamp: string }

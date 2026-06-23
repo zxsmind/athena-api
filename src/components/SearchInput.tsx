@@ -3,6 +3,7 @@ import { Search, ArrowUp, X } from 'lucide-react';
 import ModeDropdown from './ModeDropdown';
 import type { ResearchModeValue } from './ModeDropdown';
 import type { DeepDepth, SearchMode } from '../lib/api';
+import { BASE } from '../lib/api';
 
 interface SearchInputProps {
   onSubmit: (query: string, mode?: SearchMode, depth?: DeepDepth) => void;
@@ -18,13 +19,15 @@ interface SearchInputProps {
 
 const cache = new Map<string, string[]>();
 
+const MAX_AUTOCOMPLETE_LENGTH = 120;
+
 function useAutocomplete(query: string) {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const q = query.trim();
-    if (q.length < 2) {
+    if (q.length < 2 || q.length > MAX_AUTOCOMPLETE_LENGTH) {
       setSuggestions([]);
       return;
     }
@@ -41,7 +44,7 @@ function useAutocomplete(query: string) {
       abortRef.current = controller;
 
       try {
-        const res = await fetch(`/api/autocomplete?q=${encodeURIComponent(q)}`, { signal: controller.signal });
+        const res = await fetch(`${BASE}/autocomplete?q=${encodeURIComponent(q)}`, { signal: controller.signal });
         if (!res.ok) throw new Error('fetch failed');
         const data = await res.json() as { suggestions: string[] };
         const items = data.suggestions ?? [];

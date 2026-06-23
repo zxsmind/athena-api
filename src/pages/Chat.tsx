@@ -508,6 +508,21 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
             accumulatedAnswer += text;
             scheduleFlush();
           },
+          onMessageSegment: () => {
+            if (isStale()) return;
+            clearTimeout(flushRef.current);
+            flushRef.current = undefined;
+            setMessages(prev => {
+              if (myGen !== runGenRef.current) return prev;
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last?.type !== 'assistant') return prev;
+              updated[updated.length - 1] = { ...last, content: accumulatedAnswer, streaming: false };
+              updated.push({ type: 'assistant', content: '', loading: true, streaming: true, data: last.data, searches: last.searches, activeSteps: last.activeSteps });
+              return updated;
+            });
+            accumulatedAnswer = '';
+          },
           onStep: (step) => {
             if (isStale()) return;
             setMessages(prev => {
@@ -617,8 +632,6 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
             if (isStale()) return;
             clearTimeout(flushRef.current);
             flushRef.current = undefined;
-            accumulatedAnswer = response.answer;
-            doFlush();
 
             setMessages(prev => {
               if (myGen !== runGenRef.current) return prev;
@@ -636,7 +649,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
                   }
                   return s;
                 });
-                updated[updated.length - 1] = { ...last, searches, type: 'assistant', content: response.answer, data: { ...response, finalContext: pendingFinalContext || response.finalContext }, loading: false, streaming: false, timerMs: response.elapsed_ms };
+                updated[updated.length - 1] = { ...last, searches, type: 'assistant', content: accumulatedAnswer || response.answer, data: { ...response, finalContext: pendingFinalContext || response.finalContext }, loading: false, streaming: false, timerMs: response.elapsed_ms };
               }
               return updated;
             });

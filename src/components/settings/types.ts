@@ -39,8 +39,6 @@ export interface ResearchDepthPresetConfig {
   minCooldownMs: number;
   maxCooldownMs: number;
   notebookCadenceRawBlocks: number;
-  maxSearchesPerRound: number;
-  maxFetchesPerRound: number;
   minIndependentSourcesForKeyClaims: number;
   contradictionPass: boolean;
   primarySourcePreference: boolean;
@@ -70,10 +68,7 @@ export interface SettingsData {
   providerOrder: string[];
   providers: Record<string, ProviderConfig>;
   serper: { keys: string[]; url: string };
-  research: {
-    maxCreditsPerQuery: number;
-    maxFollowUpQueries: number;
-  };
+  research: Record<string, unknown>;
   researchDepths: ResearchDepthsSettings;
   modelRouting: ModelRouting;
   api: ApiSettingsData;

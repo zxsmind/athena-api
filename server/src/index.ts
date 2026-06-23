@@ -174,9 +174,12 @@ function createSSEEndpoint<T extends { events: { type: string }[]; status: strin
     };
 
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
-    const resetIdle = () => {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => { try { res.end(); } catch { /* client may have disconnected */ } }, 30000);
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+
+    const close = () => {
+      if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+      try { res.end(); } catch { /* client may have disconnected */ }
     };
 
     const flush = (current: T) => {
@@ -186,22 +189,21 @@ function createSSEEndpoint<T extends { events: { type: string }[]; status: strin
           sentEvents.add(ev);
         }
       }
-      if (current.status !== 'running') resetIdle();
+      if (current.status !== 'running') close();
     };
 
     flush(record);
-    let heartbeat: ReturnType<typeof setInterval> | null = null;
     if (record.status === 'running' || record.status === 'planning' || record.status === 'searching' || record.status === 'reviewing' || record.status === 'synthesizing') {
       heartbeat = setInterval(() => {
-        try { res.write(': heartbeat\n\n'); } catch { if (heartbeat) clearInterval(heartbeat); }
-      }, 20000);
+        try { res.write(': heartbeat\n\n'); } catch { close(); }
+      }, 10000);
       const unsubscribe = subscribe(id, flush);
       req.on('close', () => {
-        if (heartbeat) clearInterval(heartbeat);
+        close();
         unsubscribe();
       });
     } else {
-      resetIdle();
+      close();
     }
   };
 }
@@ -439,6 +441,9 @@ async function runResearchJob(jobId: string) {
           }
           case 'token':
             appendResearchJobEvent(jobId, { type: 'token', text: event.text, timestamp: new Date().toISOString() });
+            break;
+          case 'message_segment':
+            appendResearchJobEvent(jobId, { type: 'message_segment', timestamp: new Date().toISOString() });
             break;
           case 'sources':
             appendResearchJobEvent(jobId, { type: 'sources', sources: event.sources, timestamp: new Date().toISOString() });
@@ -694,7 +699,7 @@ app.post('/search', async (req, res) => {
 
 app.get('/autocomplete', async (req, res) => {
   const q = (req.query.q as string || '').trim();
-  if (q.length < 2) {
+  if (q.length < 2 || q.length > 200) {
     res.json({ suggestions: [] });
     return;
   }
