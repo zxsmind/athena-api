@@ -649,7 +649,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
                   }
                   return s;
                 });
-                updated[updated.length - 1] = { ...last, searches, type: 'assistant', content: accumulatedAnswer || response.answer, data: { ...response, finalContext: pendingFinalContext || response.finalContext }, loading: false, streaming: false, timerMs: response.elapsed_ms };
+                updated[updated.length - 1] = { ...last, searches, type: 'assistant', content: accumulatedAnswer || response.answer, data: { ...response, finalContext: pendingFinalContext || response.finalContext }, loading: false, streaming: false, timerMs: response.elapsed_ms, error: undefined };
               }
               return updated;
             });
