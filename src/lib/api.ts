@@ -236,7 +236,8 @@ export function subscribeToJobEvents(
   }
 
   source.onerror = () => {
-    // EventSource auto-reconnects; no need to surface transient drops.
+    if (done) return;
+    callbacks.onError?.('Connection lost. Reconnecting...');
   };
 
   if (signal) {

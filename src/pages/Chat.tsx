@@ -473,7 +473,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
         const updated = [...prev];
         const last = updated[updated.length - 1];
         if (last?.type === 'assistant') {
-          updated[updated.length - 1] = { ...last, content: accumulatedAnswer, streaming: true };
+          updated[updated.length - 1] = { ...last, content: accumulatedAnswer, streaming: true, error: undefined };
         }
         return updated;
       });
@@ -517,7 +517,7 @@ export default function Chat({ chatMessages, onUpdateMessages, conversations, on
               const updated = [...prev];
               const last = updated[updated.length - 1];
               if (last?.type !== 'assistant') return prev;
-              updated[updated.length - 1] = { ...last, content: accumulatedAnswer, streaming: false };
+              updated[updated.length - 1] = { ...last, content: accumulatedAnswer, streaming: false, error: undefined };
               updated.push({ type: 'assistant', content: '', loading: true, streaming: true, data: last.data, searches: last.searches, activeSteps: last.activeSteps });
               return updated;
             });
