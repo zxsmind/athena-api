@@ -1,8 +1,43 @@
-import { MoreHorizontal, Loader2, RefreshCw, Pencil, Check, Copy } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { MoreHorizontal, Loader2, RefreshCw, Pencil, Check, Copy, ChevronDown } from 'lucide-react';
 import { STEP_LABELS, formatTime, getSourcesForMessage, FALLBACK_FAVICON } from '../../lib/chat-utils';
 import { renderMarkdown } from '../markdown';
 import SearchItem from '../SearchItem';
 import type { Source, Message } from '../../lib/api';
+
+const COLLAPSE_THRESHOLD = 5120;
+
+function CollapsibleText({ text, render }: { text: string; render: (t: string) => React.ReactNode }) {
+  const byteLen = useMemo(() => new TextEncoder().encode(text).length, [text]);
+  const [expanded, setExpanded] = useState(byteLen <= COLLAPSE_THRESHOLD);
+
+  if (byteLen <= COLLAPSE_THRESHOLD) return <>{render(text)}</>;
+
+  const truncated = byteLen > COLLAPSE_THRESHOLD ? text.slice(0, COLLAPSE_THRESHOLD / 2) : text;
+
+  return (
+    <>
+      {render(expanded ? text : truncated)}
+      {!expanded && (
+        <div style={{ position: 'relative', marginTop: -40, height: 40, pointerEvents: 'none',
+          background: 'linear-gradient(to bottom, transparent, var(--athena-bg))',
+        }} />
+      )}
+      <button onClick={() => setExpanded(!expanded)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--athena-text-3)',
+          background: 'none', border: '0.5px solid var(--athena-border)', borderRadius: 6,
+          padding: '3px 8px', cursor: 'pointer', fontFamily: 'inherit', marginTop: expanded ? 8 : 0,
+        }}
+        onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text-2)'}
+        onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text-3)'}
+      >
+        <ChevronDown size={12} style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+        {expanded ? 'Show less' : `Show more (${(byteLen / 1024).toFixed(1)}KB)`}
+      </button>
+    </>
+  );
+}
 
 function SourcesBadge({ sources }: { sources: Source[] }) {
   return (
@@ -87,21 +122,32 @@ export function MessageUser({
         padding: '10px 16px', borderRadius: 18, maxWidth: '70%',
         background: 'rgba(var(--athena-accent-rgb), 0.08)',
       }}>
-        <p data-msg-content="true" ref={editIndex === i ? editRef : undefined}
-          contentEditable={editIndex === i}
-          suppressContentEditableWarning
-          onInput={e => onEditInput((e.target as HTMLElement).innerText)}
-          onKeyDown={e => onEditKeyDown(e)}
-          style={{
-            margin: editIndex === i ? -2 : 0, fontSize: 14, color: 'var(--athena-text)', lineHeight: 1.4,
-            outline: editIndex === i ? '0.5px solid rgba(var(--athena-accent-rgb), 0.3)' : 'none',
-            borderRadius: 4,
-            padding: editIndex === i ? '2px 4px' : 0,
-            caretColor: 'var(--athena-accent)',
-          }}
-        >
-          {msg.content}
-        </p>
+        {editIndex === i ? (
+          <p data-msg-content="true" ref={editRef}
+            contentEditable
+            suppressContentEditableWarning
+            onInput={e => onEditInput((e.target as HTMLElement).innerText)}
+            onKeyDown={e => onEditKeyDown(e)}
+            style={{
+              margin: -2, fontSize: 14, color: 'var(--athena-text)', lineHeight: 1.4,
+              outline: '0.5px solid rgba(var(--athena-accent-rgb), 0.3)',
+              borderRadius: 4, padding: '2px 4px',
+              caretColor: 'var(--athena-accent)',
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}
+          >
+            {msg.content}
+          </p>
+        ) : (
+          <CollapsibleText text={msg.content} render={t => (
+            <p data-msg-content="true" style={{
+              margin: 0, fontSize: 14, color: 'var(--athena-text)', lineHeight: 1.4,
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              {t}
+            </p>
+          )} />
+        )}
       </div>
       <div style={{
         display: 'flex', alignItems: 'center', gap: 6, marginTop: 4,
@@ -205,9 +251,11 @@ export function MessageComplete({
 }) {
   return (
     <>
-      <div className="athena-prose" data-msg-content="true">
-        {renderMarkdown(msg.content, getSourcesForMessage(msg, i, messages), onDiagramClick)}
-      </div>
+      <CollapsibleText text={msg.content} render={t => (
+        <div className="athena-prose" data-msg-content="true">
+          {renderMarkdown(t, getSourcesForMessage(msg, i, messages), onDiagramClick)}
+        </div>
+      )} />
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, opacity: 0, transition: 'opacity 0.15s' }}
         className="footer-actions">
         {msg.data && msg.data.sources.length > 0 && (

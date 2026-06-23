@@ -121,9 +121,10 @@ export default function SearchInput({
   const [focused, setFocused] = useState(false);
   const [activeIdx, setActiveIdx] = useState(-1);
   const [modeValue, setModeValue] = useState<ResearchModeValue>(initialMode === 'deep' ? `deep-${initialDepth}` : 'instant');
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const inputWrapRef = useRef<HTMLDivElement>(null);
   const suggestions = useAutocomplete(value);
+  const LINE_HEIGHT = 22;
 
   useEffect(() => {
     if (autoFocus && inputRef.current) {
@@ -132,32 +133,25 @@ export default function SearchInput({
     }
   }, [autoFocus]);
 
+  const autoResize = useCallback(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = '0px';
+    el.style.height = Math.min(el.scrollHeight, LINE_HEIGHT * 5) + 'px';
+  }, []);
+
+  useEffect(() => { autoResize(); }, [value, autoResize]);
+
   const safeIdx = (() => {
     if (suggestions.length === 0) return -1;
     if (activeIdx === -1 || activeIdx >= suggestions.length) return 0;
     return activeIdx;
   })();
 
-  const ghostText = safeIdx >= 0 ? suggestions[safeIdx] : null;
-
-  const ghostSuffix = (() => {
-    if (!ghostText || !value) return null;
-    const v = value.toLowerCase();
-    if (!ghostText.toLowerCase().startsWith(v)) return null;
-    return ghostText.slice(value.length);
-  })();
-
-  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setValue(e.target.value);
     setActiveIdx(-1);
   }, []);
-
-  const fillGhost = useCallback(() => {
-    if (ghostText) {
-      setValue(ghostText);
-      setActiveIdx(-1);
-    }
-  }, [ghostText]);
 
   const handleSubmit = useCallback(
     (q?: string) => {
@@ -175,29 +169,26 @@ export default function SearchInput({
   );
 
   const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setActiveIdx((i) => Math.min(i + 1, suggestions.length - 1));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         setActiveIdx((i) => Math.max(i - 1, -1));
-      } else if (e.key === 'Enter') {
+      } else if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         if (activeIdx >= 0 && suggestions[activeIdx]) {
           handleSubmit(suggestions[activeIdx]);
         } else {
           handleSubmit();
         }
-      } else if (e.key === 'Tab' && ghostSuffix) {
-        e.preventDefault();
-        fillGhost();
       } else if (e.key === 'Escape') {
         setActiveIdx(-1);
         inputRef.current?.blur();
       }
     },
-    [suggestions, activeIdx, ghostSuffix, fillGhost, handleSubmit]
+    [suggestions, activeIdx, handleSubmit]
   );
 
   const showSuggestions = focused && value.trim().length >= 2 && suggestions.length > 0;
@@ -234,30 +225,21 @@ export default function SearchInput({
       }}>
         <Search size={compact ? 15 : 17} style={{ color: 'var(--athena-text-3)', flexShrink: 0 }} strokeWidth={2} />
 
-        <div ref={inputWrapRef} style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
-          {value && ghostSuffix && (
-            <span aria-hidden style={{
-              position: 'absolute', left: 0, top: 0, right: 0, bottom: 0,
-              pointerEvents: 'none', display: 'flex', alignItems: 'center',
-              fontSize: compact ? 14 : 15.5, fontFamily: 'inherit',
-              color: 'var(--athena-text)', whiteSpace: 'pre', overflow: 'hidden', zIndex: 1,
-            }}>
-              {value}
-              <span style={{ color: 'var(--athena-text-3)', opacity: 0.45 }}>{ghostSuffix}</span>
-            </span>
-          )}
-          <input ref={inputRef} type="text" value={value} onChange={handleChange}
+        <div ref={inputWrapRef} style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'flex-end' }}>
+          <textarea ref={inputRef} value={value} onChange={handleChange}
             onFocus={() => setFocused(true)}
             onBlur={() => setTimeout(() => { setFocused(false); setActiveIdx(-1); }, 150)}
             onKeyDown={handleKeyDown}
             placeholder={inputPlaceholder || "Ask anything..."}
+            rows={1}
             autoComplete="off" spellCheck={false}
             style={{
-              flex: 1, background: 'transparent', border: 'none', outline: 'none',
+              flex: 1, background: 'transparent', border: 'none', outline: 'none', resize: 'none',
               fontSize: compact ? 14 : 15.5,
-              color: ghostSuffix ? 'transparent' : 'var(--athena-text)',
+              color: 'var(--athena-text)',
               caretColor: 'var(--athena-text-2)', fontFamily: 'inherit',
-              position: 'relative', zIndex: 2,
+              position: 'relative', zIndex: 2, lineHeight: `${LINE_HEIGHT}px`,
+              overflow: 'hidden',
             }} />
         </div>
 
