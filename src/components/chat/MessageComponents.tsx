@@ -1,11 +1,11 @@
 import { useState, useMemo } from 'react';
-import { MoreHorizontal, Loader2, RefreshCw, Pencil, Check, Copy, ChevronDown } from 'lucide-react';
+import { MoreHorizontal, Loader2, RefreshCw, Pencil, Check, Copy } from 'lucide-react';
 import { STEP_LABELS, formatTime, getSourcesForMessage, FALLBACK_FAVICON } from '../../lib/chat-utils';
 import { renderMarkdown } from '../markdown';
 import SearchItem from '../SearchItem';
 import type { Source, Message } from '../../lib/api';
 
-const COLLAPSE_THRESHOLD = 5120;
+const COLLAPSE_THRESHOLD = 2048;
 
 function CollapsibleText({ text, render }: { text: string; render: (t: string) => React.ReactNode }) {
   const byteLen = useMemo(() => new TextEncoder().encode(text).length, [text]);
@@ -13,29 +13,46 @@ function CollapsibleText({ text, render }: { text: string; render: (t: string) =
 
   if (byteLen <= COLLAPSE_THRESHOLD) return <>{render(text)}</>;
 
-  const truncated = byteLen > COLLAPSE_THRESHOLD ? text.slice(0, COLLAPSE_THRESHOLD / 2) : text;
+  const truncated = text.slice(0, Math.floor(COLLAPSE_THRESHOLD * 0.4));
 
   return (
-    <>
+    <div style={{ position: 'relative' }}>
       {render(expanded ? text : truncated)}
       {!expanded && (
-        <div style={{ position: 'relative', marginTop: -40, height: 40, pointerEvents: 'none',
-          background: 'linear-gradient(to bottom, transparent, var(--athena-bg))',
-        }} />
+        <div onClick={() => setExpanded(true)}
+          style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0, cursor: 'pointer',
+            background: 'linear-gradient(to bottom, transparent 0%, var(--athena-bg) 70%)',
+            paddingTop: 64, paddingBottom: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+          }}
+        >
+          <span style={{
+            fontSize: 12, color: 'var(--athena-text-3)', fontWeight: 500,
+            padding: '4px 12px', borderRadius: 6,
+            transition: 'color 0.15s', marginBottom: 2,
+            background: 'var(--athena-bg)',
+            boxShadow: '0 0 0 0.5px var(--athena-border)',
+          }}
+            onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text)'}
+            onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text-3)'}
+          >
+            Show more — {(byteLen / 1024).toFixed(1)}KB
+          </span>
+        </div>
       )}
-      <button onClick={() => setExpanded(!expanded)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: 'var(--athena-text-3)',
-          background: 'none', border: '0.5px solid var(--athena-border)', borderRadius: 6,
-          padding: '3px 8px', cursor: 'pointer', fontFamily: 'inherit', marginTop: expanded ? 8 : 0,
-        }}
-        onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text-2)'}
-        onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text-3)'}
-      >
-        <ChevronDown size={12} style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
-        {expanded ? 'Show less' : `Show more (${(byteLen / 1024).toFixed(1)}KB)`}
-      </button>
-    </>
+      {expanded && (
+        <span onClick={() => setExpanded(false)}
+          style={{
+            display: 'inline-block', fontSize: 12, color: 'var(--athena-text-3)', fontWeight: 500,
+            cursor: 'pointer', marginTop: 4, transition: 'color 0.15s',
+          }}
+          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text)'}
+          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'var(--athena-text-3)'}
+        >
+          Show less
+        </span>
+      )}
+    </div>
   );
 }
 
