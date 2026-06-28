@@ -185,7 +185,7 @@ function normalizeProviderState(id: string, value: Partial<ProviderState> | unde
     enabled: value?.enabled ?? def.enabled,
     keys: Array.isArray(value?.keys) ? value!.keys.filter((k): k is string => typeof k === 'string') : [...def.keys],
     models: Array.isArray(value?.models) ? value!.models.filter((m): m is string => typeof m === 'string') : [...def.models],
-    url: typeof value?.url === 'string' ? value.url : def.url,
+    url: typeof value?.url === 'string' && value.url.length > 0 ? value.url : def.url,
     name: typeof value?.name === 'string' ? value.name : def.name,
     reasoningEffort: typeof rawEffort === 'string' && (validEfforts as readonly string[]).includes(rawEffort) ? rawEffort as ProviderState['reasoningEffort'] : def.reasoningEffort,
     includeThoughts: typeof value?.includeThoughts === 'boolean' ? value.includeThoughts : def.includeThoughts,
