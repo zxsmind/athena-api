@@ -703,7 +703,7 @@ async function tryProviderStream(
                   const cleaned = stripThinkingTags(delta.content);
                   if (cleaned) { stripper.process(cleaned); fullContent += cleaned; }
                 }
-                const rc = delta?.reasoning_content;
+                const rc = delta?.reasoning_content ?? delta?.reasoning;
                 if (rc && typeof rc === 'string') {
                   reasoningContent += rc;
                 }
