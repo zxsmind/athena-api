@@ -205,6 +205,10 @@ function parseNonSseOpenAiResponse(
       onToken?.(text);
     }
   }
+  const rct = msg.reasoning_content || msg.reasoning;
+  if (rct && typeof rct === 'string') {
+    (msg as Record<string, unknown>).reasoning = rct;
+  }
   const toolCalls = msg.tool_calls as Record<string, unknown>[] | undefined;
   if (toolCalls) {
     for (const tc of toolCalls) {
@@ -622,8 +626,9 @@ async function tryProviderStream(
           continue;
         }
 
-        // Accumulators for tool calls and finish reason
+        // Accumulators for tool calls, finish reason, and reasoning content
         const toolCallAccumulators = new Map<number, Record<string, unknown>>();
+        let reasoningContent = '';
         let lastFinishReason: string | null = null;
         let sseLinesSeen = 0;
         let jsonLinesParsed = 0;
@@ -698,6 +703,10 @@ async function tryProviderStream(
                   const cleaned = stripThinkingTags(delta.content);
                   if (cleaned) { stripper.process(cleaned); fullContent += cleaned; }
                 }
+                const rc = delta?.reasoning_content;
+                if (rc && typeof rc === 'string') {
+                  reasoningContent += rc;
+                }
                 if (delta?.tool_calls) {
                   toolCallChunksSeen++;
                   for (const tc of (delta.tool_calls as Record<string, unknown>[])) {
@@ -754,6 +763,7 @@ async function tryProviderStream(
         const finishReason = lastFinishReason || 'stop';
         const normalizedFinishReason = finishReason === 'STOP' ? 'stop' : (finishReason === 'TOOL_CALLS' ? 'tool_calls' : finishReason.toLowerCase());
         const message: Record<string, unknown> = { role: 'assistant', content: fullContent || null };
+        if (reasoningContent) message.reasoning = reasoningContent;
         if (accumulatedTools.length > 0) message.tool_calls = accumulatedTools;
 
         const data = {
