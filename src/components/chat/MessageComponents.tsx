@@ -91,19 +91,26 @@ function SourcesBadge({ sources }: { sources: Source[] }) {
 function StepIndicator({ step }: { step: NonNullable<Message['activeSteps']>[number] }) {
   const label = step.type === 'synthesize' ? 'Synthesizing' : (STEP_LABELS[step.type] || 'Thinking');
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, color: 'var(--athena-text-3)', marginBottom: 6, padding: '0 4px' }}>
-      <Loader2 size={10} style={{ flexShrink: 0, animation: 'spin 1s linear infinite' }} />
-      <span style={{ opacity: 0.8, textTransform: 'uppercase', fontSize: 9, fontWeight: 600, letterSpacing: '0.05em' }}>
-        {label}
-      </span>
-      {step.model && (
-        <span style={{
-          fontSize: 8.5, color: 'var(--athena-accent)',
-          background: 'rgba(var(--athena-accent-rgb), 0.06)',
-          padding: '1px 5px', borderRadius: 3, fontWeight: 500,
-        }}>
-          {step.model}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 10.5, color: 'var(--athena-text-3)', marginBottom: 6, padding: '0 4px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Loader2 size={10} style={{ flexShrink: 0, animation: 'spin 1s linear infinite' }} />
+        <span style={{ opacity: 0.8, textTransform: 'uppercase', fontSize: 9, fontWeight: 600, letterSpacing: '0.05em' }}>
+          {label}
         </span>
+        {step.model && (
+          <span style={{
+            fontSize: 8.5, color: 'var(--athena-accent)',
+            background: 'rgba(var(--athena-accent-rgb), 0.06)',
+            padding: '1px 5px', borderRadius: 3, fontWeight: 500,
+          }}>
+            {step.model}
+          </span>
+        )}
+      </div>
+      {step.note && (
+        <div style={{ fontSize: 10, color: 'var(--athena-text-3)', opacity: 0.7, paddingLeft: 16 }}>
+          {step.note}
+        </div>
       )}
     </div>
   );

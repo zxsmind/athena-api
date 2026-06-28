@@ -72,6 +72,7 @@ export interface SettingsStore {
     titleModel: string;
     showDebugContext: boolean;
     autocompleteCount: number;
+    notebookEnabled: boolean;
   };
 }
 
@@ -122,7 +123,7 @@ const defaults: SettingsStore = {
   providers: {
     groq: { enabled: false, keys: [], models: [], url: 'https://api.groq.com/openai/v1/chat/completions' },
     gemini: { enabled: false, keys: [], models: [], url: 'https://generativelanguage.googleapis.com/v1beta' },
-    vercel: { enabled: false, keys: [], models: [], url: '' },
+    vercel: { enabled: false, keys: [], models: [], url: 'https://ai-gateway.vercel.sh/v1/chat/completions' },
     openrouter: { enabled: false, keys: [], models: [], url: 'https://openrouter.ai/api/v1/chat/completions' },
     custom: { enabled: false, keys: [], models: [], url: '', name: 'custom' },
   },
@@ -131,7 +132,7 @@ const defaults: SettingsStore = {
   researchDepths: createDefaultResearchDepths(),
   modelRouting: createModelRouting(),
   api: { ...apiDefaults },
-  general: { maxSources: 8, deepIterations: 3, thinkingStripPatterns: '', titleModel: '', showDebugContext: false, autocompleteCount: 5 },
+  general: { maxSources: 8, deepIterations: 3, thinkingStripPatterns: '', titleModel: '', showDebugContext: false, autocompleteCount: 5, notebookEnabled: true },
 };
 
 function cloneDefaults(): SettingsStore {
@@ -269,6 +270,7 @@ function normalizeSettings(raw: unknown): SettingsStore {
     titleModel: titleFallback,
     showDebugContext: typeof general?.showDebugContext === 'boolean' ? general.showDebugContext as boolean : merged.general.showDebugContext,
     autocompleteCount: typeof general?.autocompleteCount === 'number' ? general.autocompleteCount as number : merged.general.autocompleteCount,
+    notebookEnabled: typeof general?.notebookEnabled === 'boolean' ? general.notebookEnabled as boolean : merged.general.notebookEnabled,
   };
   merged.modelRouting = normalizeModelRouting(r?.modelRouting, merged.providerOrder[0] || 'groq', titleFallback);
   const apiRaw = r.api && typeof r.api === 'object' ? r.api as Record<string, unknown> : null;

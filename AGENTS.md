@@ -139,6 +139,7 @@ ATHENA-001/
 │   │   ├── engine/cooldown.ts    # Deep mod dynamic cooldown (depth preset pacing)
 │   │   ├── engine/rate-signals.ts # LLM 429 / Retry-After sinyalleri (smart-routing yerine hafif cooldown beslemesi)
 │   │   ├── engine/checkpoint.ts  # High/Ultra job checkpoint save/load (disk)
+│   │   ├── engine/plan-tools.ts  # create_plan / edit_plan tools + types + context block
 │   │   ├── engine/notebook.ts    # Deep research Markdown notebook (append/read tools, 10KB context cap, legacy JSON migrate)
 │   │   ├── engine/research-ledger.ts # Deep mod query/fetch dedup, ledger context block, compaction notları
 │   │   ├── research-jobs.ts      # Uzun süren işlerin in-memory yönetimi
@@ -272,6 +273,8 @@ Modlar:
 
 > **Dikkat:** Ayarlarda bulunan `general.deepIterations` ve `research.maxFollowUpQueries` alanları şu anda `engine.ts` içinde aktif olarak kullanılmıyor. Follow-up limiti tool-call counter (≥20 wrap-up, ≥30 forceAnswer) ve internal budget tarafından dolaylı olarak sınırlanır. Bu ayarları devreye sokacak bir değişiklik yapmadan önce bu dokümanı ve ilgili kodu güncelleyin.
 
+> **Not:** Deep modda `create_plan` / `edit_plan` tool'ları her zaman aktiftir. Model ilk turda research plan oluşturur (goal + checklist items). Her round'da plan context'e enjekte edilir; model `edit_plan` ile item'ları `done`/`failed` olarak işaretler veya yeni item ekler. Plan, notebook'tan bağımsız çalışır — notebook kapalıyken gap tracking görevini üstlenir. Tanım: `server/src/engine/plan-tools.ts`.
+
 > **Not:** Deep modda `write_notebook` (Markdown append) ve `read_notebook` tool'ları aktiftir. Notebook `server/data/notebooks/{id}.md` dosyasına yazılır; context'e truncate edilmiş working view enjekte edilir. Raw search/fetch payload'ları notebook yazımından sonra kompaktlanır. Notebook cadence eşiği depth presetine göre belirlenir.
 
 > **Not:** Deep modda `engine/research-ledger.ts` bellek içi bir ledger tutar (checkpoint resume'da sıfırlanır). Tamamlanan arama/fetch kayıtları normalize query/URL ile dedup edilir; duplicate tool call'lar kredi harcamadan reddedilir. Her LLM turunda ledger + notebook + o ana kadar keşfedilen tüm kaynakların başlık/URL ve index eşleşmelerini tutan "Source Index Mapping" listesi system context'e eklenir. Böylece ham araç çıktıları sıkıştırılsa (compaction) dahi model her kaynağı her zaman doğru atıf numarasıyla (`[N]`) eşleştirebilir. Token birikmesini ve çelişkili talimatları önlemek amacıyla, `toolCallingRound` başında önceki turlardan kalan dinamik system mesajları temizlenir; sadece ilk base system prompt (messages[0]) ve o anki turun en güncel ledger/budget system mesajı bağlamda tutulur. Bütçe tükendiğinde model'e yapılandırılmış "cevap yaz" rehberi gönderilir (boşluk doldurma teşviki yok).
@@ -360,7 +363,7 @@ Ayar şeması v2 ana bölümleri:
 - `research`: `maxCreditsPerQuery`, `maxFollowUpQueries`.
 - `researchDepths`: `defaultDepth` + per-depth preset overrides (`low`, `med`, `high`, `ultra`) — budget, rounds, cooldown, notebook cadence, per-round limits, checkpoint interval.
 - `api`: `defaultMode`, `defaultMaxConcurrent`, `maxActiveJobs`, `maxActiveBatches`, `maxEventsPerJob`, `maxEventsPerBatch`, `maxRetentionMinutes`.
-- `general`: `maxSources`, `deepIterations`, `thinkingStripPatterns`, `titleModel`.
+- `general`: `maxSources`, `deepIterations`, `thinkingStripPatterns`, `titleModel`, `showDebugContext`, `autocompleteCount`, `notebookEnabled`.
 
 ### 5.5. API Endpoint'leri (Özet)
 
@@ -524,9 +527,16 @@ Script otomatik olarak:
 - Tüm sistem promptları `server/src/agent/prompts.ts` içindedir.
 - `SYSTEM_PROMPT`, `DEEP_SYSTEM_PROMPT` (eski `SYNTHESIS_PROMPT` kaldırıldı).
 - Prompt değişikliği yapıldığında hem quick hem deep modda test edilmelidir; citation formatı bozulmamalıdır.
-- **Anti-pes-etme kuralı (DEEP_SYSTEM_PROMPT point 8 + Final answer readiness + Notebook discipline):** Model, bir kaynağın erişilemez olması (PDF, paywall, login wall, JS-rendered, kullanılamaz içerik) durumunda gap'i "unresolvable" ilan edemez. En az bir alternatif kaynak kategorisi (secondary reporting, mirror, aggregator, arşiv, forum) denenmeden gap kapatılamaz. "Final answer readiness" şartlarında "unresolvable" ancak en az iki farklı kaynak stratejisi denendikten sonra geçerlidir; hangi stratejilerin denendiği notebook'a kaydedilir. Bu kural konudan bağımsızdır; herhangi bir query için geçerlidir. Wordlist/spesifik kaynak önerme yoktur.
+- **Anti-pes-etme kuralı (DEEP_SYSTEM_PROMPT point 7 + Final answer readiness + Notebook discipline):** Model, bir kaynağın erişilemez olması (PDF, paywall, login wall, JS-rendered, kullanılamaz içerik) durumunda gap'i "unresolvable" ilan edemez. En az bir alternatif kaynak kategorisi (secondary reporting, mirror, aggregator, arşiv, forum) denenmeden gap kapatılamaz. "Final answer readiness" şartlarında "unresolvable" ancak en az iki farklı kaynak stratejisi denendikten sonra geçerlidir; hangi stratejilerin denendiği notebook'a kaydedilir. Bu kural konudan bağımsızdır; herhangi bir query için geçerlidir. Wordlist/spesifik kaynak önerme yoktur.
 - **Notebook'ta pes-etme kararı yazma yasağı (Notebook discipline):** Model notebook'a "further research won't help", "mevcut araçlarla sonuç vermeyecektir", "this information is not accessible" gibi pes-etme kararları yazamaz. Notebook sadece bulunanı, bulunamayanı ve sonraki denenecek stratejiyi kaydeder — asla "vazgeç" kararını. Bu, notebook'un self-fulfilling prophecy olmasını engeller.
-- **Meta-info tuzağı kuralı (Research behavior point 2 + Final answer readiness):** Model, kullanıcıdan istenen spesifik içeriği (sorular, cevaplar, fiyatlar, spesifikasyonlar, alıntılar) doğrudan aramalıdır; meta-info (dağılım, konular, takvim, ne zaman açıklanır) bunun ikamesi değildir. Final answer readiness denetiminde model, "asıl istenen içeriği aradım mı, yoksa etrafından doladım mı?" diye sormak zorundadır; meta-info var ama asıl içerik yoksa brief cevaplanmamış sayılır, araştırmaya devam.
+- ~~**Meta-info tuzağı kuralı (Research behavior point 2 + Final answer readiness):** KALDIRILDI (2026-06-23).~~ `server/src/agent/prompts.ts`'deki `SYSTEM_PROMPT`, `DEEP_SYSTEM_PROMPT` ve `getDeepSystemPrompt` fallback'inden çıkarıldı. Gerekçe: kural iyi niyetliydi ancak modelin direkt liste/cevap yerine meta-bilgi vermesine neden oluyordu — özellikle "kullanıcıya öğretme" eğilimini tetikliyordu. Yerine modelin doğrudan araç kullanma (web_search/fetch_url) alışkanlığı prompt'un diğer bölümlerince zaten teşvik ediliyor.
+- **Expand talimatı revize edildi (2026-06-23):** `DEEP_SYSTEM_PROMPT` ve `getDeepSystemPrompt` fallback'indeki "Proactively expand brief or simple queries" talimatı kaldırıldı, yerine **"Step 0 — Evidence-need assessment"** eklendi. Yeni yaklaşım: model soruyu yüzey formuna (liste/lookup/yes-no) göre değil, **eksiksiz cevap için kaç bağımsız kanıt ihtiyacı var** sorusuna göre sınıflandırır. 1 need → tek plan item + hedefe odaklı arama; çoklu need → her need için ayrı plan item + derinlemesine araştırma. "Covering all dimensions" ve "Do not stop at a single fact" gibi şartsız genişletme talimatları artık Step 0 sınıflandırmasına bağlı.
+- **Deep research sığ davranış düzeltmesi (2026-06-25):** Tüm depth'lerde modelin 2-3 aramada durduğu tespit edildi. Kök sebepler ve uygulanan düzeltmeler:
+  1. **`DEEP_SYSTEM_PROMPT` + `getDeepSystemPrompt` Step 0 (satır 24/83):** `"stop as soon as it is confirmed"` ve `"do not manufacture additional angles"` cümleleri kaldırıldı. Yerine: `"How thoroughly you verify depends on your depth profile — see the depth instructions appended to this prompt."` Durdurma kararı artık `depthBehaviorBlock`'a devredildi.
+  2. **`DEEP_SYSTEM_PROMPT` + `getDeepSystemPrompt` Research Behavior Rule 5 (satır 60/108):** `"stop — do not continue searching merely to 'be thorough' beyond what the identified needs require"` cümlesi kaldırıldı. Yerine depth profile'a atıf yapan versiyon geldi: `"The threshold for 'sufficiently resolved' is defined by your depth profile."` Tüm depth'lere tek eşik uygulanması kaldırıldı.
+  3. **`depth-presets.ts` `depthBehaviorBlock` (satır 121–164) komple yeniden yazıldı.** Her depth için: amacı, kaynak kategori çeşitliliği zorunluluğunu, `fetch_url` zorunluluğunu (resmi/sabit rakamlar için snippet yeterli değil), ve durdurma koşulunu net tanımlayan talimatlar eklendi. Sayısal arama adedi yok — bütçe engine'den geliyor, karar kalite standardından.
+  4. **`plan-tools.ts` `create_plan` şeması `minItems: 3` → `minItems: 1`:** Şema ile prompt arasındaki çelişki giderildi. Bazı modeller bu uyumsuzluk nedeniyle `create_plan`'ı atlıyordu.
+  - **Değişmeyen:** `engine.ts`'e hiç dokunulmadı. Guard, minimum enforcer veya geri itme mekanizması eklenmedi. Davranış tamamen prompt + preset katmanında şekilleniyor.
 
 ### 8.5. Frontend CSS / Tema Değişikliği
 

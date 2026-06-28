@@ -416,6 +416,27 @@ export default function SettingsModal({ open, onClose }: SettingsModalProps) {
               <InputRow icon={<span>#</span>} label="Max Sources" value={String(data.maxSources)} onChange={v => patchData({ maxSources: parseInt(v, 10) || 8 })} placeholder="8" />
               <InputRow label="Deep Iterations" value={String(data.deepIterations)} onChange={v => patchData({ deepIterations: parseInt(v, 10) || 3 })} placeholder="3" />
               <InputRow label="Thinking Strip" value={data.thinkingStripPatterns} onChange={v => patchData({ thinkingStripPatterns: v })} placeholder="<think>.*?</think>" />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
+                <button
+                  onClick={() => patchData({ notebookEnabled: !data.notebookEnabled })}
+                  style={{
+                    width: 32, height: 18, borderRadius: 10, border: 'none', cursor: 'pointer', position: 'relative',
+                    background: data.notebookEnabled ? 'var(--athena-accent)' : 'rgba(var(--athena-accent-rgb), 0.12)',
+                    transition: 'background 180ms var(--ease-out)',
+                    flexShrink: 0,
+                  }}
+                >
+                  <span style={{
+                    position: 'absolute', top: 2, width: 14, height: 14, borderRadius: '50%',
+                    background: '#fff', transition: 'left 180ms var(--ease-out)',
+                    left: data.notebookEnabled ? 16 : 2,
+                  }} />
+                </button>
+                <span style={{ fontSize: 10.5, color: 'var(--athena-text-2)' }}>Deep Research Notebook</span>
+              </div>
+              <div style={{ fontSize: 9.5, color: 'var(--athena-text-3)', lineHeight: 1.5, marginTop: -4 }}>
+                When enabled, the model uses a research notebook to persist findings across rounds. Disable if notebook overhead slows your preferred model.
+              </div>
             </div>
           </Section>
           <Section title="Deep Depth Presets">

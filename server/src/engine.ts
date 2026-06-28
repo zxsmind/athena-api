@@ -3,9 +3,10 @@ import type { LLMResult } from './llm.js';
 import { fetchResults, fetchPageContent } from './search.js';
 import type { SearchResponse, Source, AgentStep } from './schemas.js';
 import type { SearchResult } from './schemas.js';
-import { SYSTEM_PROMPT, DEEP_SYSTEM_PROMPT } from './agent/prompts.js';
+import { SYSTEM_PROMPT, getDeepSystemPrompt } from './agent/prompts.js';
 import { loadSettings } from './settings-store.js';
 import { createSearchTool, FETCH_URL_TOOL, type EngineEvent, type ResearchBudgetState, type ResearchRunOptions, type SourceWithIndex } from './engine/types.js';
+import { CREATE_PLAN_TOOL, EDIT_PLAN_TOOL, planContextBlock, type ResearchPlan } from './engine/plan-tools.js';
 import { temperatureForRound, sanitizeHistory, domain } from './engine/history.js';
 import { parseInlineToolCall } from './engine/tool-parser.js';
 import {
@@ -78,17 +79,23 @@ function deepResearchContextBlock(
   cadenceInstruction: string,
   allSources: Map<string, SourceWithIndex>,
   mayFinalize: boolean,
+  notebookEnabled = true,
 ): string {
-  return [
+  const parts: string[] = [
     `Research ledger (completed searches/fetches — do not repeat these queries):\n${ledgerContextBlock(deepState.ledger)}`,
-    `Deep research notebook (Markdown):\n${notebookContext(deepState.notebook)}`,
-    `Source index mapping (use these [Source #N] numbers for inline citations [N]):\n${sourceListBlock(allSources)}`,
-    'Use write_notebook to append Markdown notes after digesting raw results. Use read_notebook if the notebook is truncated and you need earlier sections. Do not repeat ledger queries.',
-    mayFinalize
-      ? 'Write the final answer from the notebook, ledger, and source list. State what is verified, what is uncertain, and what could not be confirmed. Do not invent facts.'
-      : 'Do NOT write the final answer yet — continue researching. The notebook does not yet show that the user\'s material requirements are resolved. Call web_search, fetch_url, or write_notebook to advance.',
-    cadenceInstruction,
-  ].filter(Boolean).join('\n\n');
+  ];
+  if (notebookEnabled) {
+    parts.push(`Deep research notebook (Markdown):\n${notebookContext(deepState.notebook)}`);
+  }
+  parts.push(`Source index mapping (use these [Source #N] numbers for inline citations [N]):\n${sourceListBlock(allSources)}`);
+  if (notebookEnabled) {
+    parts.push('Use write_notebook to append Markdown notes after digesting raw results. Use read_notebook if the notebook is truncated and you need earlier sections. Do not repeat ledger queries.');
+  }
+  parts.push(mayFinalize
+    ? 'Write the final answer from the notebook, ledger, and source list. State what is verified, what is uncertain, and what could not be confirmed. Do not invent facts.'
+    : `Do NOT write the final answer yet — continue researching. The notebook does not yet show that the user's material requirements are resolved. Call web_search${notebookEnabled ? ', fetch_url, or write_notebook' : ' or fetch_url'} to advance.`);
+  if (cadenceInstruction) parts.push(cadenceInstruction);
+  return parts.join('\n\n');
 }
 
 type RoundResult =
@@ -112,6 +119,8 @@ async function toolCallingRound(
   budget: ResearchBudgetState, onRoundProgress?: () => void,
   signal?: AbortSignal, role?: LLMRole, deepState?: DeepResearchState, preset?: ResolvedResearchPreset,
   cooldownState?: ResearchCooldownState, forceAnswer?: boolean,
+  notebookEnabled = true,
+  researchPlanRef?: { current: ResearchPlan | null },
 ): Promise<RoundResult> {
   if (signal?.aborted) return { kind: 'error' };
 
@@ -131,7 +140,9 @@ async function toolCallingRound(
 
   if (forceAnswer) {
     const warning = deepState
-      ? `You have done extensive research. Write the final answer now using the notebook and cited sources. Cite with [N].`
+      ? (notebookEnabled
+        ? `You have done extensive research. Write the final answer now using the notebook and cited sources. Cite with [N].`
+        : `You have done extensive research. Write the final answer now using the cited sources. Cite with [N].`)
       : `You have done extensive research. Write your final answer now based on the information you already have. If you lack sufficient data, state what you know and what is missing.`;
     messages.push({ role: 'system', content: warning });
     onRoundProgress?.();
@@ -140,14 +151,18 @@ async function toolCallingRound(
   if (deepState) {
     const uncompactedRawBlocks = countUncompactedRawResearchMessages(messages, deepState);
     const cadenceThreshold = Math.max(1, deepState.preset.notebookCadenceRawBlocks);
-    const cadenceInstruction = uncompactedRawBlocks >= cadenceThreshold
+    const cadenceInstruction = notebookEnabled && uncompactedRawBlocks >= cadenceThreshold
       ? `\n\nBefore further search or fetch calls, call write_notebook to preserve the ${uncompactedRawBlocks} raw evidence block(s) currently still in context. This prevents context bloat and keeps the research state durable.`
       : '';
     const mayFinalize = !!forceAnswer || budget.exhausted;
     messages.push({
       role: 'system',
-      content: deepResearchContextBlock(deepState, cadenceInstruction, allSources, mayFinalize),
+      content: deepResearchContextBlock(deepState, cadenceInstruction, allSources, mayFinalize, notebookEnabled),
     });
+    const planContent = planContextBlock(researchPlanRef?.current ?? null);
+    if (planContent) {
+      messages.push({ role: 'system', content: planContent });
+    }
   }
 
   const temp = temperatureForRound(round);
@@ -156,9 +171,10 @@ async function toolCallingRound(
     ? undefined
     : (() => {
         const searchTool = createSearchTool(12);
-        return deepState
-          ? [searchTool, FETCH_URL_TOOL, WRITE_NOTEBOOK_TOOL, READ_NOTEBOOK_TOOL]
-          : [searchTool, FETCH_URL_TOOL];
+        const baseTools = [searchTool, FETCH_URL_TOOL];
+        const planTools = deepState ? [CREATE_PLAN_TOOL, EDIT_PLAN_TOOL] : [];
+        const notebookTools = deepState && notebookEnabled ? [WRITE_NOTEBOOK_TOOL, READ_NOTEBOOK_TOOL] : [];
+        return [...planTools, ...baseTools, ...notebookTools];
       })();
   try {
     llmResult = await callLLMStream({
@@ -208,10 +224,22 @@ async function toolCallingRound(
     const fetchTasks: { tcId: string; url: string; stepIndex: number }[] = [];
     const notebookWriteTasks: { tcId: string; args: NotebookWriteArgs }[] = [];
     const notebookReadTasks: { tcId: string; args: NotebookReadArgs }[] = [];
+    const planCreateTasks: { tcId: string; args: { goal: string; items: { text: string }[] } }[] = [];
+    const planEditTasks: { tcId: string; args: { goal?: string; items: { text: string; status: string }[] } }[] = [];
     for (const tc of msg.tool_calls) {
       let args: Record<string, unknown>;
       try { args = JSON.parse(tc.function.arguments); } catch { continue; }
       const tcId = tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+      if (tc.function.name === 'create_plan') {
+        planCreateTasks.push({ tcId, args: args as unknown as { goal: string; items: { text: string }[] } });
+        continue;
+      }
+
+      if (tc.function.name === 'edit_plan') {
+        planEditTasks.push({ tcId, args: args as unknown as { goal?: string; items: { text: string; status: string }[] } });
+        continue;
+      }
 
       if (tc.function.name === 'write_notebook') {
         notebookWriteTasks.push({ tcId, args: args as unknown as NotebookWriteArgs });
@@ -254,7 +282,7 @@ async function toolCallingRound(
     }
 
     const totalTasks = searchTasks.length + fetchTasks.length;
-    if (totalTasks === 0 && notebookWriteTasks.length === 0 && notebookReadTasks.length === 0) {
+    if (totalTasks === 0 && notebookWriteTasks.length === 0 && notebookReadTasks.length === 0 && planCreateTasks.length === 0 && planEditTasks.length === 0) {
       console.log('[tool_calls] no valid tasks found');
       for (const tc of msg.tool_calls) {
         const tcId = tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -317,12 +345,47 @@ async function toolCallingRound(
       }
     }
 
-    if (totalTasks === 0) {
+    /* Plan tasks */
+    if (planCreateTasks.length > 0 && researchPlanRef) {
+      for (const task of planCreateTasks) {
+        const items = (task.args.items ?? []).map(i => ({ text: i.text, status: 'pending' as const }));
+        researchPlanRef.current = { goal: task.args.goal || '', items };
+        const s: AgentStep = { type: 'plan', note: `**${task.args.goal}**\n\n${items.map(i => `- [ ] ${i.text}`).join('\n')}` };
+        steps.push(s); onEvent({ type: 'step', data: s });
+        messages.push({
+          role: 'tool',
+          tool_call_id: task.tcId,
+          content: JSON.stringify({ ok: true, plan: researchPlanRef.current }),
+        });
+      }
+    }
+    if (planEditTasks.length > 0 && researchPlanRef?.current) {
+      for (const task of planEditTasks) {
+        const plan = researchPlanRef.current;
+        if (task.args.goal) plan.goal = task.args.goal;
+        plan.items = (task.args.items ?? []).map(i => ({
+          text: i.text,
+          status: (['pending', 'done', 'failed'].includes(i.status) ? i.status : 'pending') as 'pending' | 'done' | 'failed',
+        }));
+        const s: AgentStep = { type: 'plan', note: `${plan.goal}\n\n${plan.items.map(i => {
+          const icon = i.status === 'done' ? '[x]' : i.status === 'failed' ? '[-]' : '[ ]';
+          return `- ${icon} ${i.text}`;
+        }).join('\n')}` };
+        steps.push(s); onEvent({ type: 'step', data: s });
+        messages.push({
+          role: 'tool',
+          tool_call_id: task.tcId,
+          content: JSON.stringify({ ok: true, plan }),
+        });
+      }
+    }
+
+    if (totalTasks === 0 && notebookWriteTasks.length === 0 && notebookReadTasks.length === 0 && planCreateTasks.length === 0 && planEditTasks.length === 0) {
       return { kind: 'tools', researchPerformed: false };
     }
     if (budget.remainingCredits <= 0) {
       budget.exhausted = true; onRoundProgress?.();
-      for (const tc of msg.tool_calls.filter(tc => tc.function.name !== 'write_notebook' && tc.function.name !== 'read_notebook')) {
+      for (const tc of msg.tool_calls.filter(tc => tc.function.name !== 'write_notebook' && tc.function.name !== 'read_notebook' && tc.function.name !== 'create_plan' && tc.function.name !== 'edit_plan')) {
         const tcId = tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
         messages.push({ role: 'tool', tool_call_id: tcId, content: 'No results available.' });
       }
@@ -747,10 +810,14 @@ export async function agenticResearchStream(
   }
   const now = new Date();
   const today = `${now.toLocaleDateString('en-US', { month: 'long' })} ${now.getDate()}, ${now.getFullYear()}`;
+  const notebookEnabled = settings.general.notebookEnabled !== false;
+  const researchPlanRef: { current: ResearchPlan | null } = { current: null };
   const constraintsBlock = mode === 'deep'
-    ? `\n\n**Research notebook:** Use the deep research notebook as your working memory: write durable notes after each evidence batch, track unresolved gaps, and continue with targeted searches.${startRound > 0 ? `\n\n**Resume:** This job resumed from round ${startRound}. Use the notebook state and cited sources; do not repeat completed research unless a gap reopened.` : ''}`
+    ? (notebookEnabled
+      ? `\n\n**Research notebook:** Use the deep research notebook as your working memory: write durable notes after each evidence batch, track unresolved gaps, and continue with targeted searches.${startRound > 0 ? `\n\n**Resume:** This job resumed from round ${startRound}. Use the notebook state and cited sources; do not repeat completed research unless a gap reopened.` : ''}`
+      : '')
     : '';
-  const systemPrompt = (mode === 'deep' ? DEEP_SYSTEM_PROMPT : SYSTEM_PROMPT) + `\n\n**Today's date:** ${today}.` + constraintsBlock + depthBehaviorBlock(preset);
+  const systemPrompt = (mode === 'deep' ? getDeepSystemPrompt(notebookEnabled) : SYSTEM_PROMPT) + `\n\n**Today's date:** ${today}.` + constraintsBlock + depthBehaviorBlock(preset);
   const messages: LLMMessage[] = [{ role: 'system', content: systemPrompt }];
   const sanitizedHistory = sanitizeHistory(history, query, mode);
   if (sanitizedHistory.length > 0) messages.push(...sanitizedHistory.map(h => ({ role: h.role, content: h.content })));
@@ -791,7 +858,7 @@ export async function agenticResearchStream(
       wrapUpWarned = true;
     }
 
-    const result = await toolCallingRound(messages, allSources, steps, round, onEvent, budget, () => publishProgress(round), options.signal, activeRole, deepState, preset, cooldownState, forceAnswer);
+    const result = await toolCallingRound(messages, allSources, steps, round, onEvent, budget, () => publishProgress(round), options.signal, activeRole, deepState, preset, cooldownState, forceAnswer, notebookEnabled, researchPlanRef);
     if (result.kind === 'error') { hadError = true; break; }
     if (result.kind === 'answer') break;
     if (

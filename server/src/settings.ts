@@ -56,6 +56,7 @@ export interface SettingsData {
   deepIterations: number;
   showDebugContext?: boolean;
   autocompleteCount: number;
+  notebookEnabled: boolean;
 }
 
 const providerLabels: Record<string, string> = {
@@ -99,6 +100,7 @@ export function getSettings(): SettingsData {
     deepIterations: store.general.deepIterations,
     showDebugContext: store.general.showDebugContext,
     autocompleteCount: store.general.autocompleteCount,
+    notebookEnabled: store.general.notebookEnabled,
   };
 }
 
@@ -121,6 +123,7 @@ export function saveSettings(data: SettingsData): void {
       titleModel: data.modelRouting?.title?.primary?.model || '',
       showDebugContext: data.showDebugContext ?? false,
       autocompleteCount: data.autocompleteCount,
+      notebookEnabled: data.notebookEnabled ?? true,
     },
   };
 

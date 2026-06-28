@@ -77,6 +77,7 @@ export interface SettingsData {
   deepIterations: number;
   showDebugContext?: boolean;
   autocompleteCount: number;
+  notebookEnabled: boolean;
 }
 
 export const DEPTH_LABELS: Record<DeepDepth, string> = {

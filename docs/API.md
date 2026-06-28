@@ -534,7 +534,7 @@ Update settings. Pass the full settings object (GET first, modify, PUT back).
 | `research` | Budget: `maxCreditsPerQuery`, `maxFollowUpQueries` |
 | `api` | API behavior: concurrency, retention, limits |
 | `serper` | Search API credentials |
-| `general` | `maxSources`, `deepIterations`, `thinkingStripPatterns` |
+| `general` | `maxSources`, `deepIterations`, `thinkingStripPatterns`, `notebookEnabled` |
 
 ---
 
