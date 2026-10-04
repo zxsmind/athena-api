@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { isLocalManagementRequest, isLoopbackRequest } from './access.js';
+import { isAdminKey } from './admin-auth.js';
 import { ApiPlatformStore, publicApiKey, type KeyPlan } from './api-platform-store.js';
 import { Meter } from './application/meter.js';
 import {
@@ -213,13 +214,18 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
     const localManagement = isLocalManagementRequest(req);
     const keyManagement = req.path === '/keys' || req.path.startsWith('/keys/');
     const analyticsManagement = req.path === '/analytics';
-    if (keyManagement && !localManagement) {
-      sendError(res, 403, 'LOCAL_MANAGEMENT_ONLY', 'API key management is available from the local dashboard only.');
+    if ((keyManagement || analyticsManagement) && !localManagement) {
+      sendError(res, 403, 'LOCAL_MANAGEMENT_ONLY', 'Key management and usage analytics are available from the local network only.');
       return;
     }
-    if (analyticsManagement && !localManagement) {
-      sendError(res, 403, 'LOCAL_MANAGEMENT_ONLY', 'Usage analytics are available from the local dashboard only.');
-      return;
+    /* Local alone is not enough: anyone on the same private network could
+       otherwise mint API keys. Management routes need the admin secret too. */
+    if (keyManagement || analyticsManagement) {
+      const presented = req.header('x-admin-key');
+      if (!isAdminKey(presented)) {
+        sendError(res, 401, 'UNAUTHORIZED', 'This route needs the admin key in the X-Admin-Key header.');
+        return;
+      }
     }
 
     /* A presented key is always metered, whatever the source address. Presenting

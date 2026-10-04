@@ -4,7 +4,7 @@
  * kit, so piped output stays readable and interactive output stays animated.
  */
 import { input, select } from '@inquirer/prompts';
-import { runAbout, runKeys, runLogs, runRepair, runStats, runStatus, checkKeyName, KEY_NAME_RULE, type KeysCommand, type LogsOptions, type StatsOptions } from './cli/admin.js';
+import { runAbout, runAdminKey, runKeys, runLogs, runRepair, runStats, runStatus, checkKeyName, KEY_NAME_RULE, type KeysCommand, type LogsOptions, type StatsOptions } from './cli/admin.js';
 import { runConfig } from './cli/config.js';
 import { runSetup } from './cli/setup.js';
 import {
@@ -76,6 +76,8 @@ function usage(): void {
     ['keys rename --id <id> --name <n>', 'Change what a key is called.'],
     ['keys revoke --id <id>', 'Revoke a key immediately.'],
     ['keys plan --id <id> --plan <p>', 'Move a key to another plan.'],
+    ['admin-key show', 'Show the admin key for /v1/keys and /v1/analytics.'],
+    ['admin-key rotate', 'Replace the admin key. The old one stops working immediately.'],
     ['stats', 'Tokens, tool calls, traffic, database, CPU and memory.'],
     ['logs', 'Tail the log file. --lines <n> --level <lvl>'],
     ['trace <jobId>', 'Show a job execution trace. --kind <k> --full --chars <n>'],
@@ -186,6 +188,15 @@ async function main(): Promise<void> {
       if (!process.stdin.isTTY) throw new Error('config needs an interactive terminal');
       ui.banner('configuration');
       await runConfig();
+      return;
+    }
+    case 'admin-key': {
+      const action = parsed.words[0] ?? 'show';
+      if (action !== 'show' && action !== 'rotate') {
+        throw new Error(`Unknown admin-key action "${action}". Use: show, rotate.`);
+      }
+      ui.banner(`admin-key — ${action}`);
+      runAdminKey(action);
       return;
     }
     case 'stats': {

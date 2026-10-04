@@ -18,6 +18,7 @@ an agentic loop that calls the same tools, keeps notes, and answers with inline
 ## Contents
 
 - [Authentication](#authentication)
+- [Public deployments](#public-deployments)
 - [Errors](#errors)
 - [Endpoints](#endpoints)
 - [`GET /health`](#get-health)
@@ -56,7 +57,23 @@ An unknown or revoked key returns `401 UNAUTHORIZED`. A valid key on a plan that
 does not allow the call returns `403` with a code naming the limit.
 
 `GET /health` is the only unauthenticated endpoint, so an uptime check needs no
-credential.
+credential. Requests from the machine itself (loopback) also skip key auth;
+everything else needs a key.
+
+## Public deployments
+
+Binding `0.0.0.0` and publishing the port is enough to serve the internet, but
+two settings decide whether that is safe:
+
+- **Reverse proxy**: address checks use the socket peer. A same-host proxy
+  (nginx, Caddy) makes every request look like loopback, which skips key auth.
+  List the proxy in `server.trustedProxies` (`ATHENA_TRUSTED_PROXIES`,
+  IPs or CIDR) so `X-Forwarded-For` is believed only through it. With nothing
+  listed, a forwarded header from a direct connection is ignored.
+- **Page fetching**: `extract` refuses loopback, private, and cloud-metadata
+  addresses in any IP notation, re-validates every redirect hop, and rejects
+  names that resolve to internal addresses — so a stranger with an API key
+  cannot turn the server into a probe of your network.
 
 ## Errors
 
@@ -333,13 +350,18 @@ known not to support reasoning or tool calls is excluded from research routing.
 
 Aggregate spend and usage. `?days=` accepts 1 to 90 and defaults to 7; the
 response echoes it as `window_days` alongside `generated_at` and the totals.
+Needs the admin key (below).
 
 ---
 
 ## Key management
 
-Available only when the server is bound to localhost, which is the default.
-Remote deployments return `403 LOCAL_MANAGEMENT_ONLY`.
+Available only from the local network — remote deployments return
+`403 LOCAL_MANAGEMENT_ONLY`. Local alone is not enough: every request also
+needs the admin key in the `X-Admin-Key` header, otherwise `401 UNAUTHORIZED`.
+The key is generated on first boot and printed once to the server log;
+override it with `ATHENA_ADMIN_KEY`, show it with `athena admin-key show`,
+replace it with `athena admin-key rotate`.
 
 | Method | Path | Purpose |
 |---|---|---|

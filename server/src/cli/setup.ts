@@ -2,6 +2,7 @@ import { checkbox, confirm, input, password, search, select } from '@inquirer/pr
 import { getModelsDevSnapshot } from '../models-dev.js';
 import { listSupportedPackages } from '../provider-registry.js';
 import { BACK_CHOICE, BACK_LABEL, createStepMachine } from './steps.js';
+import { getAdminKey } from '../admin-auth.js';
 import { readiness } from './config-edit.js';
 import { checkKeyName } from './admin.js';
 import { ApiPlatformStore } from '../api-platform-store.js';
@@ -427,6 +428,10 @@ export async function runSetup(): Promise<void> {
   /* The server refuses to start unconfigured, but even configured it needs a
      client key to call the API, so one is created here. */
   await offerClientKey();
+  ui.section('Admin key');
+  ui.kv('Key', ui.color.bold(getAdminKey()));
+  ui.line();
+  ui.warn('/v1/keys and /v1/analytics need it as X-Admin-Key. Rotate any time with: athena admin-key rotate');
   ui.info('Start the server with: npm run dev   (inside server/)');
 }
 

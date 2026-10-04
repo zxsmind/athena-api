@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { ApiPlatformStore } from '../src/api-platform-store.js';
 import { Meter } from '../src/application/meter.js';
 import { createApiV1Router } from '../src/api-v1.js';
+import { getAdminKey, resetAdminKeyCache } from '../src/admin-auth.js';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 
@@ -157,6 +158,62 @@ describe('v1 authentication and metering wiring', () => {
       expect(res.status).toBe(429);
       const body = await res.json() as { error: { code: string } };
       expect(body.error.code).toBe('BUDGET_EXHAUSTED');
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+describe('management route admin key', () => {
+  const ADMIN = 'wiring-admin-key-0123456789abcdef';
+  const adminHeader = (key: string) => ({ 'X-Admin-Key': key });
+
+  beforeEach(() => {
+    resetAdminKeyCache();
+    process.env.ATHENA_ADMIN_KEY = ADMIN;
+  });
+
+  afterEach(() => {
+    resetAdminKeyCache();
+    delete process.env.ATHENA_ADMIN_KEY;
+  });
+
+  it('refuses /keys from loopback without the admin key', async () => {
+    const h = await startHarness('free');
+    try {
+      expect((await fetch(`${h.url}/keys`)).status).toBe(401);
+      expect((await fetch(`${h.url}/analytics`)).status).toBe(401);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('refuses a wrong admin key', async () => {
+    const h = await startHarness('free');
+    try {
+      const res = await fetch(`${h.url}/keys`, { headers: adminHeader('wrong-key-value-1234') });
+      expect(res.status).toBe(401);
+      const body = await res.json() as { error: { code: string } };
+      expect(body.error.code).toBe('UNAUTHORIZED');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('serves key management with the admin key', async () => {
+    const h = await startHarness('free');
+    try {
+      expect(getAdminKey()).toBe(ADMIN);
+      const list = await fetch(`${h.url}/keys`, { headers: adminHeader(ADMIN) });
+      expect(list.status).toBe(200);
+      const created = await fetch(`${h.url}/keys`, {
+        method: 'POST',
+        headers: { ...adminHeader(ADMIN), 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'managed', plan: 'free' }),
+      });
+      expect(created.status).toBe(201);
+      const analytics = await fetch(`${h.url}/analytics`, { headers: adminHeader(ADMIN) });
+      expect(analytics.status).toBe(200);
     } finally {
       await h.close();
     }

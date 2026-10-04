@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { getAdminKey, rotateAdminKey } from '../admin-auth.js';
 import { ApiPlatformStore, KEY_NAME_PATTERN, normalizeKeyName, type KeyPlan } from '../api-platform-store.js';
 import { getConfig } from '../config/load.js';
 import { getLogFilePath, getLogLimits } from '../logger.js';
@@ -96,6 +97,19 @@ export interface KeysCommand {
   name?: string;
   plan?: KeyPlan;
   id?: string;
+}
+
+/** Admin secret for /v1/keys and /v1/analytics. Shown, never listed. */
+export function runAdminKey(action: 'show' | 'rotate'): void {
+  if (action === 'rotate') {
+    rotateAdminKey();
+    warn('The previous admin key stops working immediately. Update dashboards and scripts.');
+    return;
+  }
+  section('Admin key');
+  kv('Key', getAdminKey());
+  line();
+  warn('Send it as X-Admin-Key. Anyone on the local network with this key can manage API keys.');
 }
 
 /** Key administration. Mutations go through the store, not the HTTP layer. */
