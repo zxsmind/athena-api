@@ -7,7 +7,7 @@ import { getConfig, initConfig, resetConfigForTests, resolveConfig } from '../sr
 import { validateConfig } from '../src/config/defaults.js';
 
 const ENV_KEYS = [
-  'PORT', 'HOST', 'ATHENA_JSON_BODY_LIMIT', 'ATHENA_SSE_HEARTBEAT_MS', 'ATHENA_TRUST_PRIVATE_NETWORK',
+  'PORT', 'HOST', 'ATHENA_JSON_BODY_LIMIT', 'ATHENA_SSE_HEARTBEAT_MS', 'ATHENA_TRUSTED_PROXIES',
   'ATHENA_MAX_ACTIVE_JOBS', 'ATHENA_MAX_ACTIVE_BATCHES', 'ATHENA_MAX_EVENTS_PER_JOB', 'ATHENA_MAX_EVENTS_PER_BATCH',
   'ATHENA_RETENTION_MINUTES', 'ATHENA_SQLITE_BUSY_TIMEOUT_MS', 'ATHENA_SEARCH_URL', 'ATHENA_SEARCH_TIMEOUT_MS',
   'ATHENA_SEARCH_RESULT_COUNT', 'ATHENA_SEARCH_COUNTRY', 'ATHENA_SEARCH_LANGUAGE',
@@ -88,11 +88,10 @@ describe('environment overrides', () => {
     expect(resolveConfig(path).server.port).toBe(6000);
   });
 
-  it('parses booleans', () => {
-    process.env.ATHENA_TRUST_PRIVATE_NETWORK = 'false';
-    expect(resolveConfig(configPath()).server.trustedPrivateNetwork).toBe(false);
-    process.env.ATHENA_TRUST_PRIVATE_NETWORK = 'true';
-    expect(resolveConfig(configPath()).server.trustedPrivateNetwork).toBe(true);
+  it('parses a proxy list', () => {
+    expect(resolveConfig(configPath()).server.trustedProxies).toEqual([]);
+    process.env.ATHENA_TRUSTED_PROXIES = '127.0.0.1, 10.0.0.0/8';
+    expect(resolveConfig(configPath()).server.trustedProxies).toEqual(['127.0.0.1', '10.0.0.0/8']);
   });
 
   it('ignores empty values so an unset variable keeps the default', () => {

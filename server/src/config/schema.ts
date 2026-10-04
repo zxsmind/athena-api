@@ -104,8 +104,15 @@ export const serverConfigSchema = z.object({
   jsonBodyLimit: z.string().min(2),
   /** SSE keep-alive cadence. */
   sseHeartbeatMs: positiveInt,
-  /** Keys stay loopback-only; this widens the trusted set to private ranges. */
-  trustedPrivateNetwork: z.boolean(),
+  /**
+   * Reverse proxies whose X-Forwarded-For the server believes, as IPs or
+   * CIDR ranges (`127.0.0.1`, `10.0.0.0/8`). Empty (the default) means the
+   * socket peer is always the client: a same-host proxy then looks like
+   * loopback and its traffic skips key auth, so only list a proxy here when
+   * one actually fronts the server. Anything else must come from its own
+   * address, which a spoofed header cannot fake.
+   */
+  trustedProxies: z.array(z.string().min(1)).default([]),
 });
 
 export const storageConfigSchema = z.object({

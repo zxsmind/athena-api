@@ -5,17 +5,19 @@ import { readStructuredFile } from '../config-file.js';
 
 type PartialDeep<T> = { [K in keyof T]?: T[K] extends object ? PartialDeep<T[K]> : T[K] };
 
+type EnvKind = 'string' | 'number' | 'boolean' | 'nullableNumber' | 'stringList';
+
 export type { PartialDeep };
 
 let active: AppConfig = defaultConfig;
 
 /** Scalar environment overrides, grouped by their path in the config. */
-const ENV_MAP: Array<{ path: string; key: string; kind: 'string' | 'number' | 'boolean' | 'nullableNumber' }> = [
+const ENV_MAP: Array<{ path: string; key: string; kind: EnvKind }> = [
   { path: 'server.host', key: 'HOST', kind: 'string' },
   { path: 'server.port', key: 'PORT', kind: 'number' },
   { path: 'server.jsonBodyLimit', key: 'ATHENA_JSON_BODY_LIMIT', kind: 'string' },
   { path: 'server.sseHeartbeatMs', key: 'ATHENA_SSE_HEARTBEAT_MS', kind: 'number' },
-  { path: 'server.trustedPrivateNetwork', key: 'ATHENA_TRUST_PRIVATE_NETWORK', kind: 'boolean' },
+  { path: 'server.trustedProxies', key: 'ATHENA_TRUSTED_PROXIES', kind: 'stringList' },
   { path: 'storage.maxActiveJobs', key: 'ATHENA_MAX_ACTIVE_JOBS', kind: 'number' },
   { path: 'storage.maxActiveBatches', key: 'ATHENA_MAX_ACTIVE_BATCHES', kind: 'number' },
   { path: 'storage.maxEventsPerJob', key: 'ATHENA_MAX_EVENTS_PER_JOB', kind: 'number' },
@@ -89,10 +91,12 @@ function setPath(target: Record<string, unknown>, path: string, value: unknown):
   node[last] = value;
 }
 
-function parseEnvValue(raw: string, kind: 'string' | 'number' | 'boolean' | 'nullableNumber'): unknown {
+function parseEnvValue(raw: string, kind: EnvKind): unknown {
   if (kind === 'number') return Number(raw);
   if (kind === 'nullableNumber') return parseNullableNumber(raw);
   if (kind === 'boolean') return raw === 'true' || raw === '1';
+  /* Comma/space separated list; empties dropped so an empty var keeps the default. */
+  if (kind === 'stringList') return raw.split(/[\s,;]+/).map((part) => part.trim()).filter((part) => part.length > 0);
   return raw;
 }
 

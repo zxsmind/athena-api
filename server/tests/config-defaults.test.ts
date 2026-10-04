@@ -27,6 +27,10 @@ describe('server defaults', () => {
     expect(defaultConfig.server.host).toBe('0.0.0.0');
     expect(defaultConfig.server.port).toBe(39921);
   });
+
+  it('trusts no proxy headers by default', () => {
+    expect(defaultConfig.server.trustedProxies).toEqual([]);
+  });
 });
 
 describe('plan defaults', () => {

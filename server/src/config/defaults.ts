@@ -10,7 +10,7 @@ export const defaultConfig: AppConfig = {
     port: 39921,
     jsonBodyLimit: '1mb',
     sseHeartbeatMs: 15_000,
-    trustedPrivateNetwork: true,
+    trustedProxies: [],
   },
   storage: {
     maxActiveJobs: 50,
