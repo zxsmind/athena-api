@@ -385,6 +385,21 @@ function createTimeoutSignal(parent: AbortSignal | undefined, timeoutMs: number)
  *  often than this in a healthy stream; an hour-long silence is not patience. */
 export const LLM_STREAM_IDLE_TIMEOUT_MS = 60_000;
 
+/** Ceiling for turning a finished stream into text. The stream timers are
+ *  disposed once consumption ends, so an SDK promise that never settles
+ *  after a broken stream would otherwise hang the attempt forever. */
+export const LLM_MATERIALIZE_TIMEOUT_MS = 60_000;
+
+export function materializeWithTimeout<T>(promise: Promise<T>, ms: number = LLM_MATERIALIZE_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`LLM response materialization timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 /** Output-side budgets for the forced final answer, by requested length. The
  *  input-scaled total covers prefill; these cover generating the report,
  *  which is the largest output of the whole run. */
@@ -681,10 +696,11 @@ async function callSelectedTarget(
         let streamError: unknown;
         try {
           for await (const chunk of result.fullStream) {
-            /* Every text chunk restarts the idle timer: a flowing stream is
-               never cut for being long, only a stalled one is. */
+            /* Any chunk proves the stream alive — reasoning deltas included.
+               Only text was armed before, so a reasoning-only stall ran past
+               the idle deadline on a technicality. */
+            if (chunk.type !== 'error') streamingTimeout?.chunk();
             if (chunk.type === 'text-delta') {
-              streamingTimeout?.chunk();
               options.onToken?.(chunk.text);
             }
             if (chunk.type === 'error') streamError = chunk.error;
@@ -693,13 +709,13 @@ async function callSelectedTarget(
           streamingTimeout?.dispose();
         }
         if (streamError) throw streamError;
-        const [text, content, finishReason, usage, reasoningText] = await Promise.all([
+        const [text, content, finishReason, usage, reasoningText] = await materializeWithTimeout(Promise.all([
           result.text,
           result.content,
           result.finishReason,
           result.totalUsage,
           result.reasoningText,
-        ]);
+        ]));
         const toolCalls = toolCallsFrom(content);
         return {
           ok: true,

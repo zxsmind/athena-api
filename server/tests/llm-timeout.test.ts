@@ -3,6 +3,7 @@ import {
   createStreamingTimeout,
   FINAL_ANSWER_TIMEOUT_MS,
   llmTotalTimeoutMs,
+  materializeWithTimeout,
   retryDelaysForFinalAnswer,
 } from '../src/llm.js';
 
@@ -75,5 +76,15 @@ describe('llm timeouts', () => {
     t.dispose();
     vi.advanceTimersByTime(10_000);
     expect(aborted).toBe(false);
+  });
+
+  it('passes through a settled materialization', async () => {
+    await expect(materializeWithTimeout(Promise.resolve('ok'), 50)).resolves.toBe('ok');
+  });
+
+  it('rejects a materialization that never settles', async () => {
+    await expect(materializeWithTimeout(new Promise<never>(() => {}), 50)).rejects.toThrow(
+      /materialization timed out/,
+    );
   });
 });

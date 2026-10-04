@@ -54,6 +54,13 @@ export const researchLimitsSchema = z.object({
   historyMessageLimit: positiveInt,
   /** Snippet preview length inside the ledger. */
   snippetPreviewChars: positiveInt,
+  /**
+   * Silence after which a running job is declared stalled and failed. Must
+   * clear the longest legitimate quiet spell: a single model call can take
+   * up to fifteen minutes (exhaustive final answer), so anything below that
+   * would kill healthy runs.
+   */
+  stallTimeoutMs: positiveInt,
 });
 
   /**

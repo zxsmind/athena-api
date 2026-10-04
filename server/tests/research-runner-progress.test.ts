@@ -1,13 +1,30 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import type { EngineEvent } from '../src/engine.js';
 import { createResearchJob, getResearchJob } from '../src/research-jobs.js';
 import { runResearchJob } from '../src/application/research-runner.js';
+import { defaultConfig } from '../src/config/defaults.js';
+import { resetConfigForTests, setConfig } from '../src/config/load.js';
 
 vi.mock('../src/engine.js', () => ({
   agenticResearchStream: vi.fn(),
 }));
 
+vi.mock('../src/llm.js', () => ({
+  callLLM: vi.fn(),
+}));
+
 import { agenticResearchStream } from '../src/engine.js';
+import { callLLM } from '../src/llm.js';
+
+const mockedCallLLM = vi.mocked(callLLM);
+
+function shortStall(ms = 300): void {
+  setConfig({ ...defaultConfig, research: { ...defaultConfig.research, stallTimeoutMs: ms } });
+}
+
+afterEach(() => {
+  resetConfigForTests();
+});
 
 const mockedStream = vi.mocked(agenticResearchStream);
 
@@ -89,4 +106,52 @@ describe('research runner progress wiring', () => {
     expect(runtime).toBeDefined();
     expect(events.some((event) => event.type === 'progress_note')).toBe(false);
   });
+});
+
+describe('stall watchdog', () => {
+  it('fails a run that goes silent instead of hanging forever', async () => {
+    shortStall();
+    /* Engine that never emits and never settles: abort alone cannot release
+       an await on a promise like this, so the race must. */
+    mockedStream.mockImplementation(() => new Promise<never>(() => {}));
+    const job = createResearchJob({ query: 'q', mode: 'instant', researchApi: true });
+
+    await runResearchJob(job.id);
+
+    const finished = getResearchJob(job.id);
+    expect(finished?.status).toBe('failed');
+    expect(finished?.error).toMatch(/stalled/i);
+  }, 10_000);
+
+  it('salvages a partial answer from gathered evidence on stall', async () => {
+    shortStall();
+    mockedStream.mockImplementation(async (_query, _history, _onEvent, _mode, options) => {
+      options?.onProgress?.({
+        budget: {} as never,
+        budgetState: {} as never,
+        round: 5,
+        mode: 'deep',
+        sourceMap: [
+          { source_index: 1, title: 'T', url: 'https://example.com', domain: 'example.com', snippet: 'key fact' },
+        ],
+      });
+      return new Promise<never>(() => {});
+    });
+    mockedCallLLM.mockResolvedValue({
+      model: 'm',
+      provider: 'p',
+      usage: { inputTokens: 0, outputTokens: 0 },
+      fullContent: 'Salvaged from evidence.',
+    } as never);
+    const job = createResearchJob({ query: 'q', mode: 'deep', researchApi: true });
+
+    await runResearchJob(job.id);
+
+    const finished = getResearchJob(job.id);
+    expect(finished?.status).toBe('completed');
+    expect(mockedCallLLM).toHaveBeenCalledOnce();
+    const result = finished?.result as { answer: string } | undefined;
+    expect(result?.answer).toContain('Salvaged from evidence.');
+    expect(result?.answer).toContain('Partial answer');
+  }, 10_000);
 });

@@ -20,6 +20,7 @@ import {
   type ResearchJobStatus,
 } from '../research-jobs.js';
 import { getConfig } from '../config/load.js';
+import { callLLM } from '../llm.js';
 
 /** Engine step kinds that map onto a finer-grained job status. */
 const STEP_TO_STATUS: Record<string, ResearchJobStatus> = {
@@ -32,6 +33,64 @@ const STEP_TO_STATUS: Record<string, ResearchJobStatus> = {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+/** Evidence chars a salvage answer may read. Enough for dozens of snippets. */
+const SALVAGE_EVIDENCE_CHARS = 30_000;
+/** One bounded call: salvage must not become a second run. */
+const SALVAGE_TIMEOUT_MS = 300_000;
+
+/**
+ * Best-effort answer from gathered evidence after a stall killed the run.
+ * Returns false when there is nothing to write from or the call itself
+ * fails — then the stall error stands and nothing is hidden.
+ */
+async function salvageStalledJob(jobId: string): Promise<boolean> {
+  const job = getResearchJob(jobId);
+  const sources = job?.runtime?.sourceMap ?? [];
+  if (!job || job.status === 'cancelled' || sources.length === 0) return false;
+  const lines: string[] = [];
+  let chars = 0;
+  for (const source of sources) {
+    const block = `[${source.source_index}] ${source.title ?? source.url}\n${source.url}\n${(source.snippet ?? '').slice(0, 1200)}`;
+    if (chars + block.length > SALVAGE_EVIDENCE_CHARS) break;
+    lines.push(block);
+    chars += block.length;
+  }
+  if (lines.length === 0) return false;
+  try {
+    const answer = await callLLM({
+      label: 'salvage-answer',
+      role: job.mode,
+      messages: [
+        {
+          role: 'system',
+          content: 'Answer from the evidence below with inline [N] citations. State plainly what the evidence does not cover.',
+        },
+        { role: 'user', content: `Question: ${job.query}\n\nEvidence:\n${lines.join('\n\n')}` },
+      ],
+      reasoningEffort: 'low',
+      signal: AbortSignal.timeout(SALVAGE_TIMEOUT_MS),
+    });
+    const text = (answer.fullContent ?? '').trim();
+    if (!text) return false;
+    markResearchJobDone(jobId, {
+      query: job.query,
+      answer: `${text}\n\n[Partial answer: the run stalled, so this was written from the evidence gathered so far.]`,
+      sources: sources.map((source) => ({
+        source_index: source.source_index,
+        title: source.title,
+        url: source.url,
+        domain: source.domain,
+      })),
+      steps: [],
+      results_count: sources.length,
+      elapsed_ms: Date.now() - Date.parse(job.startedAt ?? job.createdAt),
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -48,12 +107,40 @@ export async function runResearchJob(jobId: string, meter?: Meter): Promise<void
   const controller = new AbortController();
   attachResearchJobController(jobId, controller);
 
+  /* Stall watchdog. Every timeout below watches a step that can end; this
+     watches the run itself. A broken stream, a hung sandbox RPC, or a model
+     that never answers all look identical from here — silence — and without
+     this the job sits forever while its budget is already spent
+     (`j-pXSYgnHv7IIq`: 3h on one dead round). The abort asks cooperating code
+     to stop; the race guarantees the runner moves on even when nothing
+     cooperates (an await on a never-settling promise ignores abort). On
+     stall the gathered evidence still buys one bounded salvage answer before
+     the run is marked failed, so a dead round costs minutes, not the run. */
+  const stallMs = getConfig().research.stallTimeoutMs;
+  let lastActive = Date.now();
+  let lastEvent = 'start';
+  let stalled = false;
+  let stallReject: ((error: Error) => void) | null = null;
+  const watchdog = setInterval(() => {
+    if (stalled) return;
+    if (Date.now() - lastActive > stallMs) {
+      stalled = true;
+      const error = new Error(
+        `Stalled: no engine progress for ${Math.round(stallMs / 60000)}m (last event: ${lastEvent})`,
+      );
+      controller.abort(error);
+      stallReject?.(error);
+    }
+  }, Math.min(30_000, Math.max(25, Math.floor(stallMs / 4))));
+
   try {
-    await agenticResearchStream(
+    const stream = agenticResearchStream(
       job.query,
       job.history,
       (event: EngineEvent) => {
         if (controller.signal.aborted) return;
+        lastActive = Date.now();
+        lastEvent = event.type;
         switch (event.type) {
           case 'step': {
             appendResearchJobEvent(jobId, { type: 'step', data: event.data, timestamp: nowIso() });
@@ -101,6 +188,8 @@ export async function runResearchJob(jobId: string, meter?: Meter): Promise<void
         verbosity: job.verbosity,
         researchApi: job.researchApi,
         onProgress: (state) => {
+          lastActive = Date.now();
+          lastEvent = 'progress';
           setResearchJobRuntime(jobId, {
             budget: state.budgetState,
             round: state.round,
@@ -110,13 +199,29 @@ export async function runResearchJob(jobId: string, meter?: Meter): Promise<void
         },
       },
     );
+    await Promise.race([
+      stream,
+      new Promise<never>((_, reject) => {
+        stallReject = reject;
+      }),
+    ]);
   } catch (error: unknown) {
-    if (controller.signal.aborted) {
+    if (stalled) {
+      /* The evidence already paid for still has value: one bounded call turns
+         it into a marked partial answer instead of a total loss. */
+      const salvaged = await salvageStalledJob(jobId);
+      if (!salvaged) {
+        markResearchJobFailed(jobId, error instanceof Error ? error.message : 'Research job stalled');
+      }
+    } else if (controller.signal.aborted) {
       const after = getResearchJob(jobId);
       if (after?.status !== 'paused') cancelResearchJob(jobId);
       return;
+    } else {
+      markResearchJobFailed(jobId, error instanceof Error ? error.message : 'Research job failed');
     }
-    markResearchJobFailed(jobId, error instanceof Error ? error.message : 'Research job failed');
+  } finally {
+    clearInterval(watchdog);
   }
 
   try {

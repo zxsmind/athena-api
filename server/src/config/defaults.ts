@@ -64,6 +64,7 @@ export const defaultConfig: AppConfig = {
     toolWaitHeartbeatMs: 10_000,
     historyMessageLimit: 12,
     snippetPreviewChars: 400,
+    stallTimeoutMs: 1_200_000,
   },
   compaction: {
     enabled: false,

@@ -42,6 +42,7 @@ const ENV_MAP: Array<{ path: string; key: string; kind: EnvKind }> = [
   { path: 'research.toolWaitHeartbeatMs', key: 'ATHENA_TOOL_WAIT_HEARTBEAT_MS', kind: 'number' },
   { path: 'research.historyMessageLimit', key: 'ATHENA_HISTORY_MESSAGE_LIMIT', kind: 'number' },
   { path: 'research.snippetPreviewChars', key: 'ATHENA_SNIPPET_PREVIEW_CHARS', kind: 'number' },
+  { path: 'research.stallTimeoutMs', key: 'ATHENA_STALL_TIMEOUT_MS', kind: 'number' },
   { path: 'compaction.enabled', key: 'ATHENA_COMPACTION_ENABLED', kind: 'boolean' },
   { path: 'compaction.triggerTokens', key: 'ATHENA_COMPACTION_TRIGGER_TOKENS', kind: 'number' },
   { path: 'compaction.keepRecentRounds', key: 'ATHENA_COMPACTION_KEEP_ROUNDS', kind: 'number' },
