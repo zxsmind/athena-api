@@ -23,6 +23,7 @@ const ENV_MAP: Array<{ path: string; key: string; kind: EnvKind }> = [
   { path: 'storage.maxEventsPerJob', key: 'ATHENA_MAX_EVENTS_PER_JOB', kind: 'number' },
   { path: 'storage.maxEventsPerBatch', key: 'ATHENA_MAX_EVENTS_PER_BATCH', kind: 'number' },
   { path: 'storage.retentionMinutes', key: 'ATHENA_RETENTION_MINUTES', kind: 'number' },
+  { path: 'storage.maxDataBytes', key: 'ATHENA_MAX_DATA_BYTES', kind: 'number' },
   { path: 'storage.sqliteBusyTimeoutMs', key: 'ATHENA_SQLITE_BUSY_TIMEOUT_MS', kind: 'number' },
   { path: 'logging.maxFileBytes', key: 'ATHENA_LOG_MAX_BYTES', kind: 'number' },
   { path: 'logging.echoToStdout', key: 'ATHENA_LOG_ECHO', kind: 'boolean' },

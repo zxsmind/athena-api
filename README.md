@@ -82,9 +82,11 @@ A read-only checkout, a container, and a notebook runtime all work unchanged.
 
 Growth is capped from `config.yaml`: an hourly sweep cancels paused jobs past
 `research.pausedTtlMinutes` (default 240) and purges terminal jobs, traces,
-and checkpoints past `storage.retentionMinutes` (default 1440). Running jobs
-are never touched. The log file rotates under `logging.maxFileBytes` ×
-`logging.keepFiles`.
+and checkpoints past `storage.retentionMinutes` (default 1440). On top of the
+age ceilings, `storage.maxDataBytes` (default 1 GB, `ATHENA_MAX_DATA_BYTES`)
+is a hard disk guard: over budget, the oldest terminal data goes first.
+Running jobs are never touched. The log file rotates under
+`logging.maxFileBytes` × `logging.keepFiles`.
 
 ## Docker
 

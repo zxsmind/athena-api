@@ -76,6 +76,11 @@ function tracesDir(): string {
   return getDataPath('traces');
 }
 
+/** Absolute traces directory. Exported for retention. */
+export function tracesDirPath(): string {
+  return tracesDir();
+}
+
 function tracePath(jobId: string): string {
   return resolve(tracesDir(), `${jobId}.jsonl`);
 }
@@ -218,6 +223,17 @@ export function deleteTrace(jobId: string): boolean {
 
 export function traceFilePath(jobId: string): string {
   return tracePath(jobId);
+}
+
+/** Combined bytes of a job's trace files, 0 when absent. Exported for retention. */
+export function traceFileBytes(jobId: string): number {
+  let bytes = 0;
+  for (const file of [tracePath(jobId), liveLogPath(jobId)]) {
+    try {
+      bytes += statSync(file).size;
+    } catch { /* absent */ }
+  }
+  return bytes;
 }
 
 /**

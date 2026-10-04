@@ -403,6 +403,16 @@ export function cancelStalePausedJobs(ttlMs: number, nowMs: number = Date.now())
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'declined']);
 
+/** Drops one job from memory and SQLite (rows and events). Returns true when it existed. */
+export function removeJobRecord(id: string): boolean {
+  const job = jobs.get(id);
+  if (!job) return false;
+  jobs.delete(id);
+  listeners.delete(id);
+  purgePersistedResearchJob(id);
+  return true;
+}
+
 /**
  * Drops terminal jobs older than the retention window, from memory and from
  * SQLite (rows and events). Running and paused jobs are never touched no
@@ -414,10 +424,7 @@ export function purgeOldJobs(retentionMs: number, nowMs: number = Date.now()): s
     if (!TERMINAL_JOB_STATUSES.has(job.status)) continue;
     const updatedAt = Date.parse(job.updatedAt);
     if (!Number.isFinite(updatedAt) || nowMs - updatedAt <= retentionMs) continue;
-    jobs.delete(job.id);
-    listeners.delete(job.id);
-    purgePersistedResearchJob(job.id);
-    purged.push(job.id);
+    if (removeJobRecord(job.id)) purged.push(job.id);
   }
   return purged;
 }

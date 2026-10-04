@@ -30,6 +30,11 @@ function checkpointPath(jobId: string): string {
   return resolve(checkpointDir, `${jobId}.json`);
 }
 
+/** Absolute path of one job's checkpoint file. Exported for retention. */
+export function checkpointFilePath(jobId: string): string {
+  return checkpointPath(jobId);
+}
+
 export function saveResearchCheckpoint(data: ResearchCheckpoint): void {
   ensureDir();
   writeFileSync(checkpointPath(data.jobId), JSON.stringify(data, null, 2), 'utf-8');

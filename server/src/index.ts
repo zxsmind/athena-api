@@ -61,8 +61,8 @@ app.use(express.json({ limit: getConfig().server.jsonBodyLimit }));
 /* Data retention from config.yaml: one pass at boot, then hourly. Nothing
    running is ever touched; logs rotate under their own limits. */
 const retention = retentionWindows();
-sweepRetention(retention.pausedTtlMs, retention.retentionMs);
-startRetentionSweeper(retention.pausedTtlMs, retention.retentionMs);
+sweepRetention(retention.pausedTtlMs, retention.retentionMs, retention.maxDataBytes);
+startRetentionSweeper(retention.pausedTtlMs, retention.retentionMs, retention.maxDataBytes);
 
 const apiStore = new ApiPlatformStore();
 const meter = new Meter(apiStore);

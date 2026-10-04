@@ -135,6 +135,13 @@ export const storageConfigSchema = z.object({
   maxEventsPerBatch: positiveInt,
   /** Retention applied to persisted job/event rows. */
   retentionMinutes: positiveInt,
+  /**
+   * Hard ceiling on the data directory in bytes. When the hourly sweep finds
+   * the directory over budget, terminal job data goes first (oldest first),
+   * then orphan traces and checkpoints. Running jobs, live paused jobs,
+   * settings, keys, the log, and the models cache are never touched.
+   */
+  maxDataBytes: positiveInt,
   /** Busy timeout for the SQLite connection. */
   sqliteBusyTimeoutMs: positiveInt,
 });

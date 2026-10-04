@@ -11,7 +11,7 @@ import {
 } from '../src/research-jobs.js';
 import { loadRecentResearchJobs } from '../src/research-job-store.js';
 import { pruneOldTraces, traceFilePath } from '../src/trace.js';
-import { sweepRetention } from '../src/application/retention.js';
+import { enforceDataBudget, sweepRetention } from '../src/application/retention.js';
 import type { SearchResponse } from '../src/schemas.js';
 
 const HOUR = 3_600_000;
@@ -85,10 +85,30 @@ describe('retention', () => {
     backdate(done.id, 25 * HOUR);
     writeTrace(done.id, 25 * HOUR);
 
-    const sweep = sweepRetention(4 * HOUR, 24 * HOUR, Date.now());
+    const sweep = sweepRetention(4 * HOUR, 24 * HOUR, 1_073_741_824, Date.now());
 
     expect(sweep.jobsPurged).toContain(done.id);
     expect(existsSync(traceFilePath(done.id))).toBe(false);
     expect(getResearchJob(done.id)).toBeUndefined();
+  });
+
+  it('enforces a byte budget oldest-first and spares live jobs', () => {
+    const oldDone = createResearchJob({ query: 'q', mode: 'instant', researchApi: true });
+    markResearchJobRunning(oldDone.id);
+    markResearchJobDone(oldDone.id, DONE);
+    backdate(oldDone.id, 2 * HOUR);
+    writeTrace(oldDone.id, 2 * HOUR);
+
+    const running = createResearchJob({ query: 'q', mode: 'instant', researchApi: true });
+    markResearchJobRunning(running.id);
+    writeTrace(running.id, 2 * HOUR);
+
+    /* Budget below any real directory size: everything eligible must go. */
+    const freed = enforceDataBudget(1);
+
+    expect(freed).toBeGreaterThan(0);
+    expect(getResearchJob(oldDone.id)).toBeUndefined();
+    expect(existsSync(traceFilePath(oldDone.id))).toBe(false);
+    expect(getResearchJob(running.id)?.status).toBe('running');
   });
 });

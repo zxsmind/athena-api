@@ -18,6 +18,7 @@ export const defaultConfig: AppConfig = {
     maxEventsPerJob: 500,
     maxEventsPerBatch: 500,
     retentionMinutes: 1440,
+    maxDataBytes: 1_073_741_824,
     sqliteBusyTimeoutMs: 5_000,
   },
   logging: {

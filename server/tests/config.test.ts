@@ -7,7 +7,7 @@ import { getConfig, initConfig, resetConfigForTests, resolveConfig } from '../sr
 import { validateConfig } from '../src/config/defaults.js';
 
 const ENV_KEYS = [
-  'PORT', 'HOST', 'ATHENA_JSON_BODY_LIMIT', 'ATHENA_SSE_HEARTBEAT_MS', 'ATHENA_TRUSTED_PROXIES',
+  'PORT', 'HOST', 'ATHENA_JSON_BODY_LIMIT', 'ATHENA_SSE_HEARTBEAT_MS', 'ATHENA_TRUSTED_PROXIES', 'ATHENA_RETENTION_MINUTES', 'ATHENA_MAX_DATA_BYTES',
   'ATHENA_MAX_ACTIVE_JOBS', 'ATHENA_MAX_ACTIVE_BATCHES', 'ATHENA_MAX_EVENTS_PER_JOB', 'ATHENA_MAX_EVENTS_PER_BATCH',
   'ATHENA_RETENTION_MINUTES', 'ATHENA_SQLITE_BUSY_TIMEOUT_MS', 'ATHENA_SEARCH_URL', 'ATHENA_SEARCH_TIMEOUT_MS',
   'ATHENA_SEARCH_RESULT_COUNT', 'ATHENA_SEARCH_COUNTRY', 'ATHENA_SEARCH_LANGUAGE',
@@ -100,6 +100,14 @@ describe('environment overrides', () => {
     expect(research.pausedTtlMinutes).toBe(240);
     process.env.ATHENA_PAUSED_TTL_MINUTES = '60';
     expect(resolveConfig(configPath()).research.pausedTtlMinutes).toBe(60);
+  });
+
+  it('defaults the data retention window and byte budget', () => {
+    const storage = resolveConfig(configPath()).storage;
+    expect(storage.retentionMinutes).toBe(1440);
+    expect(storage.maxDataBytes).toBe(1_073_741_824);
+    process.env.ATHENA_MAX_DATA_BYTES = '524288000';
+    expect(resolveConfig(configPath()).storage.maxDataBytes).toBe(524_288_000);
   });
 
   it('ignores empty values so an unset variable keeps the default', () => {
