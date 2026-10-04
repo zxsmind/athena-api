@@ -6,6 +6,7 @@ import { createApiV1Router } from '../src/api-v1.js';
 import { getAdminKey, resetAdminKeyCache } from '../src/admin-auth.js';
 import { publicJob, publicProgress, publicResult, publicSources } from '../src/api-v1.js';
 import type { ResearchJobRecord } from '../src/research-jobs.js';
+import { appendResearchJobEvent, createResearchJob } from '../src/research-jobs.js';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 
@@ -280,7 +281,6 @@ describe('public job payload', () => {
       used_fetch_calls: 5,
       used_turns: 7,
       used_tokens: 100,
-      used_cpu_seconds: 10.1,
     });
     expect(JSON.stringify(progress)).not.toContain('tokenLedger');
     expect(JSON.stringify(progress)).not.toContain('startedAt');
@@ -290,5 +290,22 @@ describe('public job payload', () => {
     expect(publicSources([{ title: 'T', url: 'u' }])).toEqual([{ index: 1, title: 'T', url: 'u' }]);
     expect(publicSources(undefined)).toEqual([]);
     expect(publicResult(undefined)).toBeUndefined();
+  });
+
+  it('carries the latest progress note onto the snapshot', () => {
+    const created = createResearchJob({ query: 'q', mode: 'instant' });
+    appendResearchJobEvent(created.id, {
+      type: 'progress_note',
+      data: { headline: 'Searching', body: 'reading sources', round: 2 },
+      timestamp: new Date().toISOString(),
+    });
+    const out = publicJob(created) as { note?: { headline: string; body: string; round?: number } };
+    expect(out.note).toEqual({ headline: 'Searching', body: 'reading sources', round: 2 });
+  });
+
+  it('omits the note before the model publishes one', () => {
+    const out = publicJob(job({})) as Record<string, unknown>;
+    expect('note' in out).toBe(true);
+    expect(out.note).toBeUndefined();
   });
 });

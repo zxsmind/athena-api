@@ -142,7 +142,6 @@ export function publicProgress(runtime: ResearchJobRecord['runtime']): unknown {
   put('used_turns', pick('usedTurns'));
   put('used_tokens', pick('used_tokens', 'usedTokens'));
   put('token_limit', pick('token_limit'));
-  put('used_cpu_seconds', pick('usedCpuMs'));
   put('elapsed_ms', pick('elapsed_ms'));
   return out;
 }
@@ -169,6 +168,7 @@ export function publicJob(job: ResearchJobRecord) {
     finished_at: job.finishedAt,
     progress: publicProgress(job.runtime),
     result: publicResult(job.result),
+    note: job.note,
     error: job.error,
   };
 }

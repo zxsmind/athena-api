@@ -71,6 +71,8 @@ export interface ResearchJobRecord {
   error?: string;
   cancelled: boolean;
   steps?: AgentStep[];
+  /** Latest status note the model published; also served on the job snapshot. */
+  note?: { headline: string; body: string; round?: number };
   result?: SearchResponse;
   finalContext?: string;
   events: ResearchJobEvent[];
@@ -144,6 +146,9 @@ function pushEvent(job: ResearchJobRecord, event: ResearchJobEvent) {
   const seq = (job.lastEventSeq ?? 0) + 1;
   job.lastEventSeq = seq;
   job.events.push({ ...event, seq });
+  /* The snapshot carries the latest note so a poller sees it without reading
+     the event stream. */
+  if (event.type === 'progress_note') job.note = { ...event.data };
   if (job.events.length > MAX_EVENTS) {
     job.events.splice(0, job.events.length - MAX_EVENTS);
   }
