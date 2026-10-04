@@ -23,8 +23,8 @@ import type { ProviderState } from './settings-store.js';
 
 export interface ApiKeySource {
   key: string;
-  /** Where the key came from. Settings keys rotate; env supplies one key. */
-  source: 'settings' | 'env';
+  /** Where the key came from. Settings keys rotate; env supplies one key; anonymous is the keyless slot. */
+  source: 'settings' | 'env' | 'anonymous';
   envName?: string;
 }
 
@@ -91,17 +91,20 @@ export function resolveProvider(providerId: string, state?: ProviderState): Prov
     const fromEnv = firstNonEmptyEnv(state?.env ?? catalog?.env);
     if (fromEnv) apiKeys.push(fromEnv);
   }
-  /* Anonymous endpoints serve keyless callers: an empty key omits the
-     Authorization header downstream, so resolution succeeds with no keys.
-     An explicit key always wins over anonymous. */
-  if (apiKeys.length === 0 && !state?.anonymous) {
-    return {
-      ok: false,
-      error: {
-        id: providerId,
-        reason: `provider "${providerId}" has no API key: add one to settings or set ${(state?.env ?? catalog?.env ?? []).join(' / ') || 'its key variable'}`,
-      },
-    };
+  /* Anonymous endpoints serve keyless callers: a single empty-key slot lets
+     the key-rotation loops run exactly once without credentials. An explicit
+     key always wins over anonymous. */
+  if (apiKeys.length === 0) {
+    if (!state?.anonymous) {
+      return {
+        ok: false,
+        error: {
+          id: providerId,
+          reason: `provider "${providerId}" has no API key: add one to settings or set ${(state?.env ?? catalog?.env ?? []).join(' / ') || 'its key variable'}`,
+        },
+      };
+    }
+    apiKeys.push({ key: '', source: 'anonymous' });
   }
   return {
     ok: true,

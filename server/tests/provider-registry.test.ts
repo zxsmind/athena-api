@@ -125,12 +125,12 @@ describe('resolveProvider', () => {
   });
 
   it('resolves a keyless provider flagged anonymous', () => {
-    /* Anonymous endpoints serve key callers: the SDK omits the Authorization
-       header on an empty key, so resolution succeeds with no keys. */
+    /* Anonymous endpoints serve key callers: one empty-key slot lets the
+       rotation loops run once without credentials. */
     const r = resolveProvider('groq', state({ anonymous: true }));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.provider.apiKeys).toEqual([]);
+    expect(r.provider.apiKeys).toEqual([{ key: '', source: 'anonymous' }]);
   });
 
   it('prefers an explicit key over anonymous', () => {
