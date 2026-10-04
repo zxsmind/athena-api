@@ -117,7 +117,12 @@ use local access. Full contract: [docs/API.md](docs/API.md).
 | Reasoning effort | `none` | `low` | `medium` | `xhigh` |
 | Independent sources | 2 | 2 | 3 | 3 |
 
-`mode` is the only effort selector; reasoning effort follows from it. Two
+`mode` is the only effort selector; reasoning effort follows from it and is
+not settable per request. The values above are what Athena requests — what the
+provider makes of them depends on the model: capabilities come from the
+models.dev catalog, providers that only accept `none`/`default` are handled
+where the request is built, and models that must not receive an effort value
+go in `disabledThinkingModels`. Two
 further request fields are independent of it. `response_length`
 (`short`, `long`, `exhaustive`) sets how much of the gathered evidence is
 written down, and `verbosity` (`summary`, `detailed`) sets what the caller sees
@@ -131,8 +136,7 @@ context, and the model reads its own notes back on demand. See
 ## Technology
 
 - Node.js 24, Express 5, TypeScript 5.9
-- AI SDK for model calls, with an OpenAI-compatible adapter and a Google provider
-- models.dev for model capabilities, context limits, and pricing (12 h refresh)
+- Model calls through the Vercel AI SDK, routed across providers via the models.dev catalog (capabilities, context limits, pricing; 12 h refresh)
 - SQLite (`node:sqlite`) for keys, analytics, jobs, and events
 - 14 search provider modules behind a registry, with key rotation
 - `@inquirer/prompts`, `ora`, `picocolors`, `js-yaml` for the CLI
