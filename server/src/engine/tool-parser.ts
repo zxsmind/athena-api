@@ -1,16 +1,25 @@
-interface InlineToolCall {
+﻿interface InlineToolCall {
   raw: string;
   query: string;
   queries?: string[];
 }
 
+/**
+ * Recovers a tool call that a model wrote into its text body as JSON or XML
+ * instead of using the native `tool_calls` field.
+ *
+ * This is only consulted for models declared in `settings.inlineToolCallModels`;
+ * see `usesInlineToolCalls` in `provider-registry.ts`. The catalog cannot
+ * describe an endpoint it has never seen, so the declaration is what keeps this
+ * from firing on an ordinary answer that happens to contain a JSON object.
+ */
 function extractQuery(obj: unknown): string | null {
   if (!obj || typeof obj !== 'object') return null;
   const o = obj as Record<string, unknown>;
   const params = (o.parameters || o) as Record<string, unknown>;
   return (params.search_query || params.query || params.searchquery || params.q) as string | null;
 }
-
+
 export function parseInlineToolCall(content: string): InlineToolCall | null {
   const trimmed = content.trim();
   try {

@@ -23,34 +23,13 @@ dist-ssr
 *.sln
 *.sw?
 
-# Runtime data (auto-generated, not committed)
-server/data/db.json
-server/data/settings.json
-server/data/notebooks/
-server/data/research-checkpoints/
-
-*.err
-*.png
-*.webp
+# Runtime data lives outside the checkout by default (platform data directory,
+# or ATHENA_DATA_DIR). These entries only matter when someone deliberately points
+# ATHENA_DATA_DIR back into the tree, e.g. for a portable demo.
+server/data/
 
 # Environment files
 .env
 .env.*
 !.env.example
 *.env
-
-# Python artifacts
-__pycache__/
-*.pyc
-
-# Bolt
-.bolt/
-
-# Deploy state (connection info + file hashes)
-scripts/.deploy-state/
-
-# Generated config (apiUrl per deployment)
-public/config.json
-
-# Random generated files
-erseryykDesktopATHENA-001

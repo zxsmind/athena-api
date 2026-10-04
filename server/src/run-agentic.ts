@@ -8,7 +8,7 @@ async function run() {
     } else if (ev.type === 'error') {
       console.error(`[Error] ${ev.message}`);
     }
-  }, 'quick');
+  }, 'default');
   console.log("Finished agentic research stream test.");
 }
 

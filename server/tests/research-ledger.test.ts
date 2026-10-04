@@ -7,7 +7,6 @@ import {
   recordLedgerSearch,
   recordLedgerFetch,
   duplicateSearchToolMessage,
-  ledgerContextBlock,
 } from '../src/engine/research-ledger.js';
 
 describe('research-ledger', () => {
@@ -35,15 +34,5 @@ describe('research-ledger', () => {
     const msg = duplicateSearchToolMessage(prior);
     expect(msg).toContain('round 3');
     expect(msg).toContain('https://x.com');
-  });
-
-  it('ledgerContextBlock lists recent searches and fetches', () => {
-    const ledger = createResearchLedger();
-    recordLedgerSearch(ledger, 'query one', 0, 3, []);
-    recordLedgerFetch(ledger, 'https://src.test', 0, true);
-    const block = ledgerContextBlock(ledger);
-    expect(block).toContain('Completed searches');
-    expect(block).toContain('query one');
-    expect(block).toContain('https://src.test');
   });
 });

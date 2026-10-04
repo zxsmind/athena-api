@@ -1,0 +1,24 @@
+services:
+  athena:
+    build:
+      context: .
+    image: athena:local
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "39921"
+      HOST: 0.0.0.0
+      ATHENA_DATA_DIR: /data
+    ports:
+      - "${ATHENA_PORT:-39921}:39921"
+    volumes:
+      - athena-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:39921/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  athena-data:

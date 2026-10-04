@@ -5,5 +5,7 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    /* Runs before each test file's imports, so it can set ATHENA_DATA_DIR. */
+    setupFiles: ['tests/setup.ts'],
   },
 });

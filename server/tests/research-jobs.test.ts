@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import {
+  newJobId,
   createResearchJob,
   getResearchJob,
   markResearchJobRunning,
@@ -20,10 +21,10 @@ describe('ResearchJobs', () => {
   });
 
   it('should create a job with queued status', () => {
-    const job = createResearchJob({ query: 'What is AI?', mode: 'quick' });
+    const job = createResearchJob({ query: 'What is AI?', mode: 'standard' });
     expect(job.status).toBe('queued');
     expect(job.query).toBe('What is AI?');
-    expect(job.mode).toBe('quick');
+    expect(job.mode).toBe('standard');
     expect(job.cancelled).toBe(false);
     expect(job.id).toBeDefined();
   });
@@ -148,5 +149,20 @@ describe('ResearchJobs', () => {
 
     markResearchJobRunning(job.id);
     expect(getResearchJob(job.id)!.status).toBe('running');
+  });
+});
+
+describe('job ids', () => {
+  it('issues short readable ids with a j- prefix', () => {
+    /* UUIDs are correct but unreadable in URLs, filenames and consoles. The id
+       below is what a human copies from all three. */
+    for (let i = 0; i < 50; i += 1) {
+      expect(newJobId()).toMatch(/^j-[A-Za-z0-9]{12}$/);
+    }
+  });
+
+  it('creates jobs under the new id shape', () => {
+    const job = createResearchJob({ query: 'q', researchApi: true });
+    expect(job.id).toMatch(/^j-[A-Za-z0-9]{12}$/);
   });
 });

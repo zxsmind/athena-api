@@ -1,23 +1,61 @@
-import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
-import type { DeepDepth, ResearchDepthPresetConfig } from './engine/depth-presets.js';
-import { DEFAULT_RESEARCH_DEPTH_PRESETS, DEEP_DEPTHS, DEFAULT_DEEP_DEPTH } from './engine/depth-presets.js';
+import { existsSync } from 'fs';
+import { getDataPath } from './storage.js';
+import { readStructuredFile, writeStructuredFile } from './config-file.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const settingsPath = resolve(__dirname, '..', 'data', 'settings.json');
+const settingsPath = getDataPath('settings.yaml');
 
 export const SETTINGS_VERSION = 2;
 
+/**
+ * One provider entry. The key of this entry in `SettingsStore.providers` is the
+ * provider's models.dev catalog id (for example `anthropic`, `google`,
+ * `openrouter`) — never an invented name. The catalog owns the provider's
+ * display name, API endpoint, key env vars, runtime package, and model list;
+ * every field here is an overlay on top of it:
+ *
+ * - `enabled`, `keys`: whether the provider is used and which keys to rotate.
+ * - `models`: whitelist of catalog model ids; empty means every catalog model.
+ * - `url`: baseURL override (proxy or compatible endpoint).
+ * - `name`: display-name override.
+ * - `npm`, `env`: only for providers the catalog does not know (a self-hosted
+ *   endpoint, for example). `npm` is the AI SDK package that speaks it, `env`
+ *   the environment variables a key may come from, and `models` the explicit
+ *   model ids it serves.
+ */
 export interface ProviderState {
   enabled: boolean;
   keys: string[];
   models: string[];
-  url: string;
+  url?: string;
   name?: string;
-  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high';
+  npm?: string;
+  env?: string[];
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
   includeThoughts?: boolean;
   disabledThinkingModels?: string[];
+  /**
+   * Models that emit a tool call as inline JSON/XML text instead of the native
+   * `tool_calls` field. The catalog cannot detect this, so it is declared here.
+   */
+  inlineToolCallModels?: string[];
+  /**
+   * Per-model price override, in US dollars per million tokens, keyed by model id.
+   *
+   * The models.dev catalog has no entry for a self-hosted or newly released
+   * model, and `cli stats` reports those as unpriced rather than free. This is
+   * where that number comes from: what the provider charges, written down by
+   * whoever knows. It never reaches the model, so a wrong value misstates a
+   * report and nothing else.
+   */
+  modelPrices?: Record<string, ModelPrice>;
+}
+
+/** US dollars per million tokens. A missing field is billed at zero. */
+export interface ModelPrice {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
 }
 
 export interface ModelReference {
@@ -25,16 +63,37 @@ export interface ModelReference {
   model: string;
 }
 
+/**
+ * One search backend entry, keyed by provider id (`serper`, `tavily`,
+ * `brave`, …). Only `keys` is required; `url` overrides the default endpoint
+ * and `zone` is only read by providers that need one (Bright Data).
+ */
+export interface SearchProviderState {
+  keys: string[];
+  url?: string;
+  zone?: string;
+}
+
 export interface ModelRoute {
   primary: ModelReference;
   fallback: ModelReference[];
 }
 
+/**
+ * One route per research mode.
+ *
+ * The keys are the modes, not the stages. This used to carry `title`,
+ * `reasoning`, `instant` and `deep`, which had two problems: `title` and
+ * `reasoning` were never read by anything, and `default` and `max` had no entry
+ * at all, so a job in either mode found no route and fell through to catalog
+ * selection. `LLMRole` is derived from these keys, so a stage that is not a mode
+ * cannot be a role either.
+ */
 export interface ModelRouting {
-  title: ModelRoute;
-  reasoning: ModelRoute;
   instant: ModelRoute;
+  default: ModelRoute;
   deep: ModelRoute;
+  max: ModelRoute;
 }
 
 export interface ApiSettings {
@@ -44,13 +103,9 @@ export interface ApiSettings {
   maxEventsPerJob: number;
   maxEventsPerBatch: number;
   maxRetentionMinutes: number;
-  defaultMode: 'quick' | 'deep';
+  defaultMode: import('./engine/modes.js').ResearchMode;
 }
 
-export interface ResearchDepthsSettings {
-  defaultDepth: DeepDepth;
-  presets: Record<DeepDepth, ResearchDepthPresetConfig>;
-}
 
 export interface SettingsStore {
   version: number;
@@ -58,11 +113,13 @@ export interface SettingsStore {
   host: string;
   providerOrder: string[];
   providers: Record<string, ProviderState>;
-  serper: { keys: string[]; url: string };
+  /** Search backends by provider id. The old top-level `serper` field migrates here on load. */
+  searchProviders: Record<string, SearchProviderState>;
+  /** Try order for search backends; unlisted ids follow the registry order. */
+  searchProviderOrder: string[];
   research: {
     [key: string]: unknown;
   };
-  researchDepths: ResearchDepthsSettings;
   modelRouting: ModelRouting;
   api: ApiSettings;
   general: {
@@ -72,11 +129,8 @@ export interface SettingsStore {
     titleModel: string;
     showDebugContext: boolean;
     autocompleteCount: number;
-    notebookEnabled: boolean;
   };
 }
-
-const providerOrder = ['groq', 'gemini', 'vercel', 'openrouter', 'custom'];
 
 function createReference(providerId = '', model = ''): ModelReference {
   return { providerId, model };
@@ -88,10 +142,10 @@ function createRoute(providerId = '', model = ''): ModelRoute {
 
 function createModelRouting(): ModelRouting {
   return {
-    title: createRoute(),
-    reasoning: createRoute(),
     instant: createRoute(),
+    default: createRoute(),
     deep: createRoute(),
+    max: createRoute(),
   };
 }
 
@@ -102,94 +156,81 @@ const apiDefaults: ApiSettings = {
   maxEventsPerJob: 250,
   maxEventsPerBatch: 300,
   maxRetentionMinutes: 1440,
-  defaultMode: 'quick',
+  defaultMode: 'default',
 };
 
-function createDefaultResearchDepths(): ResearchDepthsSettings {
-  const presets = {} as Record<DeepDepth, ResearchDepthPresetConfig>;
-  for (const depth of DEEP_DEPTHS) {
-    const { depth: _depthKey, ...config } = DEFAULT_RESEARCH_DEPTH_PRESETS[depth];
-    void _depthKey;
-    presets[depth] = config;
-  }
-  return { defaultDepth: DEFAULT_DEEP_DEPTH, presets };
-}
 
 const defaults: SettingsStore = {
   version: SETTINGS_VERSION,
-  port: 3001,
+  port: 39921,
   host: '0.0.0.0',
-  providerOrder,
-  providers: {
-    groq: { enabled: false, keys: [], models: [], url: 'https://api.groq.com/openai/v1/chat/completions' },
-    gemini: { enabled: false, keys: [], models: [], url: 'https://generativelanguage.googleapis.com/v1beta' },
-    vercel: { enabled: false, keys: [], models: [], url: 'https://ai-gateway.vercel.sh/v1/chat/completions' },
-    openrouter: { enabled: false, keys: [], models: [], url: 'https://openrouter.ai/api/v1/chat/completions' },
-    custom: { enabled: false, keys: [], models: [], url: '', name: 'custom' },
-  },
-  serper: { keys: [], url: 'https://google.serper.dev/search' },
+  providerOrder: [],
+  /* No provider is listed here on purpose. Providers come from the models.dev
+     catalog at runtime; settings only overlay enabled keys and model choices
+     onto catalog ids. Adding a provider never touches this file. */
+  providers: {},
+  searchProviders: {},
+  searchProviderOrder: [],
   research: {},
-  researchDepths: createDefaultResearchDepths(),
   modelRouting: createModelRouting(),
   api: { ...apiDefaults },
-  general: { maxSources: 8, deepIterations: 3, thinkingStripPatterns: '', titleModel: '', showDebugContext: false, autocompleteCount: 5, notebookEnabled: true },
+  general: { maxSources: 8, deepIterations: 3, thinkingStripPatterns: '', titleModel: '', showDebugContext: false,     autocompleteCount: 5 },
 };
 
 function cloneDefaults(): SettingsStore {
   return JSON.parse(JSON.stringify(defaults)) as SettingsStore;
 }
 
-function clampInt(value: unknown, fallback: number, min = 0): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-  return Math.max(min, Math.floor(value));
-}
 
-function normalizeDepthPresetConfig(
-  value: unknown,
-  fallback: ResearchDepthPresetConfig,
-): ResearchDepthPresetConfig {
-  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
-  return {
-    budgetCredits: clampInt(v.budgetCredits, fallback.budgetCredits, 1),
-    maxRounds: clampInt(v.maxRounds, fallback.maxRounds, 1),
-    minCooldownMs: clampInt(v.minCooldownMs, fallback.minCooldownMs, 0),
-    maxCooldownMs: clampInt(v.maxCooldownMs, fallback.maxCooldownMs, 0),
-    notebookCadenceRawBlocks: clampInt(v.notebookCadenceRawBlocks, fallback.notebookCadenceRawBlocks, 1),
-    minIndependentSourcesForKeyClaims: clampInt(v.minIndependentSourcesForKeyClaims, fallback.minIndependentSourcesForKeyClaims, 1),
-    contradictionPass: typeof v.contradictionPass === 'boolean' ? v.contradictionPass : fallback.contradictionPass,
-    primarySourcePreference: typeof v.primarySourcePreference === 'boolean' ? v.primarySourcePreference : fallback.primarySourcePreference,
-    exhaustiveGapReview: typeof v.exhaustiveGapReview === 'boolean' ? v.exhaustiveGapReview : fallback.exhaustiveGapReview,
-    checkpointEveryRounds: clampInt(v.checkpointEveryRounds, fallback.checkpointEveryRounds, 0),
-  };
-}
 
-function normalizeResearchDepths(raw: unknown): ResearchDepthsSettings {
-  const base = createDefaultResearchDepths();
-  const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  const defaultDepth = DEEP_DEPTHS.includes(source.defaultDepth as DeepDepth)
-    ? source.defaultDepth as DeepDepth
-    : base.defaultDepth;
-  const presetsRaw = (source.presets && typeof source.presets === 'object' ? source.presets : {}) as Record<string, unknown>;
-  const presets = {} as Record<DeepDepth, ResearchDepthPresetConfig>;
-  for (const depth of DEEP_DEPTHS) {
-    presets[depth] = normalizeDepthPresetConfig(presetsRaw[depth], base.presets[depth]);
+/**
+ * Keeps only usable price entries: a model id, and numbers for the fields that
+ * were given. A non-number is dropped rather than coerced to zero, so a typo in
+ * the settings file leaves the model unpriced instead of free.
+ */
+function normalizeModelPrices(value: unknown): Record<string, ModelPrice> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, ModelPrice> = {};
+  for (const [modelId, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const entry = raw as Record<string, unknown>;
+    const price: ModelPrice = {};
+    /* Both spellings are accepted. The file is written by the CLI, which uses the
+       camelCase key, while models.dev uses snake_case, and an earlier version
+       read only snake_case: a price entered through the wizard was silently
+       dropped on the next load and the stream reported as free. */
+    const read = (key: keyof ModelPrice): void => {
+      const value = entry[key] ?? (key === 'cacheRead' ? entry.cache_read : key === 'cacheWrite' ? entry.cache_write : undefined);
+      if (typeof value === 'number' && Number.isFinite(value) && value >= 0) price[key] = value;
+    };
+    read('input');
+    read('output');
+    read('cacheRead');
+    read('cacheWrite');
+    if (Object.keys(price).length > 0) out[modelId] = price;
   }
-  return { defaultDepth, presets };
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function normalizeProviderState(id: string, value: Partial<ProviderState> | undefined): ProviderState {
-  const def = defaults.providers[id] || { enabled: false, keys: [], models: [], url: '', name: id };
+  const def = defaults.providers[id] || { enabled: false, keys: [], models: [] };
   const rawEffort = value?.reasoningEffort;
-  const validEfforts = ['none', 'minimal', 'low', 'medium', 'high'] as const;
+  const validEfforts = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
+  const url = typeof value?.url === 'string' && value.url.length > 0 ? value.url : undefined;
+  const npm = typeof value?.npm === 'string' && value.npm.length > 0 ? value.npm : undefined;
   return {
-    enabled: value?.enabled ?? def.enabled,
-    keys: Array.isArray(value?.keys) ? value!.keys.filter((k): k is string => typeof k === 'string') : [...def.keys],
-    models: Array.isArray(value?.models) ? value!.models.filter((m): m is string => typeof m === 'string') : [...def.models],
-    url: typeof value?.url === 'string' && value.url.length > 0 ? value.url : def.url,
-    name: typeof value?.name === 'string' ? value.name : def.name,
+    enabled: value?.enabled ?? def.enabled ?? false,
+    keys: Array.isArray(value?.keys) ? value!.keys.filter((k): k is string => typeof k === 'string') : [...(def.keys ?? [])],
+    models: Array.isArray(value?.models) ? value!.models.filter((m): m is string => typeof m === 'string') : [...(def.models ?? [])],
+    ...(url ? { url } : {}),
+    ...(typeof value?.name === 'string' ? { name: value.name } : def.name ? { name: def.name } : {}),
+    ...(npm ? { npm } : {}),
+    ...(Array.isArray(value?.env) ? { env: value!.env.filter((e): e is string => typeof e === 'string') } : {}),
     reasoningEffort: typeof rawEffort === 'string' && (validEfforts as readonly string[]).includes(rawEffort) ? rawEffort as ProviderState['reasoningEffort'] : def.reasoningEffort,
     includeThoughts: typeof value?.includeThoughts === 'boolean' ? value.includeThoughts : def.includeThoughts,
     disabledThinkingModels: Array.isArray(value?.disabledThinkingModels) ? value!.disabledThinkingModels.filter((m): m is string => typeof m === 'string') : (def.disabledThinkingModels ? [...def.disabledThinkingModels] : []),
+    inlineToolCallModels: Array.isArray(value?.inlineToolCallModels) ? value!.inlineToolCallModels.filter((m): m is string => typeof m === 'string') : (def.inlineToolCallModels ? [...def.inlineToolCallModels] : []),
+    ...(normalizeModelPrices(value?.modelPrices) ? { modelPrices: normalizeModelPrices(value?.modelPrices)! } : {}),
   };
 }
 
@@ -213,14 +254,15 @@ function normalizeRoute(value: unknown, fallbackProviderId = '', fallbackModel =
   return { primary, fallback };
 }
 
-function normalizeModelRouting(raw: unknown, providerFallbackId: string, titleFallback: string): ModelRouting {
+function normalizeModelRouting(raw: unknown, providerFallbackId: string, modelFallback: string): ModelRouting {
   const base = createModelRouting();
   const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const fallbackModel = modelFallback || base.default.primary.model;
   return {
-    title: normalizeRoute(source.title, providerFallbackId, titleFallback || base.title.primary.model),
-    reasoning: normalizeRoute(source.reasoning, providerFallbackId, base.reasoning.primary.model),
-    instant: normalizeRoute(source.instant, providerFallbackId, base.instant.primary.model),
-    deep: normalizeRoute(source.deep, providerFallbackId, base.deep.primary.model),
+    instant: normalizeRoute(source.instant, providerFallbackId, fallbackModel),
+    default: normalizeRoute(source.default, providerFallbackId, fallbackModel),
+    deep: normalizeRoute(source.deep, providerFallbackId, fallbackModel),
+    max: normalizeRoute(source.max, providerFallbackId, fallbackModel),
   };
 }
 
@@ -242,11 +284,40 @@ function normalizeProviderOrder(
   return Array.from(merged);
 }
 
+function normalizeSearchProviderState(value: unknown): SearchProviderState {
+  const v = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
+  const out: SearchProviderState = {
+    keys: Array.isArray(v.keys) ? v.keys.filter((k): k is string => typeof k === 'string') : [],
+  };
+  if (typeof v.url === 'string' && v.url.length > 0) out.url = v.url;
+  if (typeof v.zone === 'string' && v.zone.length > 0) out.zone = v.zone;
+  return out;
+}
+
+/**
+ * Search backends by id. Only `searchProviders` is read; there is no legacy
+ * field and no migration.
+ */
+function normalizeSearchProviders(r: Record<string, unknown>): Record<string, SearchProviderState> {
+  const out: Record<string, SearchProviderState> = {};
+  const source = (r.searchProviders && typeof r.searchProviders === 'object' ? r.searchProviders : {}) as Record<string, unknown>;
+  for (const [id, value] of Object.entries(source)) {
+    if (typeof id === 'string' && id.length > 0) out[id] = normalizeSearchProviderState(value);
+  }
+  return out;
+}
+
+function normalizeSearchProviderOrder(rawOrder: unknown, providers: Record<string, SearchProviderState>): string[] {
+  if (!Array.isArray(rawOrder)) return [];
+  return rawOrder.filter((id): id is string => typeof id === 'string' && !!providers[id]);
+}
+
 function normalizeSettings(raw: unknown): SettingsStore {
   const merged = cloneDefaults();
-  const providers = Object.keys(merged.providers);
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const sourceProviders = (r.providers && typeof r.providers === 'object' ? r.providers : {}) as Record<string, unknown>;
+  /* Provider ids come from the file, keyed by catalog id. */
+  const providers = [...new Set([...Object.keys(merged.providers), ...Object.keys(sourceProviders)])];
   for (const id of providers) {
     merged.providers[id] = normalizeProviderState(id, sourceProviders[id] as Partial<ProviderState> | undefined);
   }
@@ -256,13 +327,9 @@ function normalizeSettings(raw: unknown): SettingsStore {
   merged.port = typeof r?.port === 'number' ? r.port as number : merged.port;
   merged.host = typeof r?.host === 'string' ? r.host as string : merged.host;
   merged.providerOrder = normalizeProviderOrder(r?.providerOrder, merged.providers, Object.keys(sourceProviders));
-  const serperRaw = (r.serper && typeof r.serper === 'object' ? r.serper : {}) as Record<string, unknown>;
-  merged.serper = {
-    keys: Array.isArray(serperRaw?.keys) ? (serperRaw.keys as unknown[]).filter((k: unknown) => typeof k === 'string') as string[] : [...merged.serper.keys],
-    url: typeof serperRaw?.url === 'string' ? serperRaw.url as string : merged.serper.url,
-  };
+  merged.searchProviders = normalizeSearchProviders(r);
+  merged.searchProviderOrder = normalizeSearchProviderOrder(r?.searchProviderOrder, merged.searchProviders);
   merged.research = (r.research && typeof r.research === 'object' ? { ...r.research } : {});
-  merged.researchDepths = normalizeResearchDepths(r?.researchDepths);
   merged.general = {
     maxSources: typeof general?.maxSources === 'number' ? general.maxSources as number : merged.general.maxSources,
     deepIterations: typeof general?.deepIterations === 'number' ? general.deepIterations as number : merged.general.deepIterations,
@@ -270,9 +337,8 @@ function normalizeSettings(raw: unknown): SettingsStore {
     titleModel: titleFallback,
     showDebugContext: typeof general?.showDebugContext === 'boolean' ? general.showDebugContext as boolean : merged.general.showDebugContext,
     autocompleteCount: typeof general?.autocompleteCount === 'number' ? general.autocompleteCount as number : merged.general.autocompleteCount,
-    notebookEnabled: typeof general?.notebookEnabled === 'boolean' ? general.notebookEnabled as boolean : merged.general.notebookEnabled,
   };
-  merged.modelRouting = normalizeModelRouting(r?.modelRouting, merged.providerOrder[0] || 'groq', titleFallback);
+  merged.modelRouting = normalizeModelRouting(r?.modelRouting, merged.providerOrder[0] || '', titleFallback);
   const apiRaw = r.api && typeof r.api === 'object' ? r.api as Record<string, unknown> : null;
   merged.api = apiRaw ? {
     defaultMaxConcurrent: typeof apiRaw.defaultMaxConcurrent === 'number' ? apiRaw.defaultMaxConcurrent as number : apiDefaults.defaultMaxConcurrent,
@@ -281,7 +347,7 @@ function normalizeSettings(raw: unknown): SettingsStore {
     maxEventsPerJob: typeof apiRaw.maxEventsPerJob === 'number' ? apiRaw.maxEventsPerJob as number : apiDefaults.maxEventsPerJob,
     maxEventsPerBatch: typeof apiRaw.maxEventsPerBatch === 'number' ? apiRaw.maxEventsPerBatch as number : apiDefaults.maxEventsPerBatch,
     maxRetentionMinutes: typeof apiRaw.maxRetentionMinutes === 'number' ? apiRaw.maxRetentionMinutes as number : apiDefaults.maxRetentionMinutes,
-    defaultMode: apiRaw.defaultMode === 'quick' || apiRaw.defaultMode === 'deep' ? apiRaw.defaultMode as 'quick' | 'deep' : apiDefaults.defaultMode,
+    defaultMode: apiRaw.defaultMode === 'default' || apiRaw.defaultMode === 'deep' || apiRaw.defaultMode === 'max' ? apiRaw.defaultMode as import('./engine/modes.js').ResearchMode : apiDefaults.defaultMode,
   } : { ...apiDefaults };
   return merged;
 }
@@ -295,13 +361,27 @@ export function loadSettings(): SettingsStore {
   if (settingsCache && (now - settingsCacheTime) < CACHE_TTL_MS) {
     return settingsCache;
   }
+  /* A settings file that exists but cannot be parsed is a problem to report,
+     not a file to replace. It holds API keys, and writing defaults over it
+     destroyed a working configuration once already: a locked or half-written
+     file threw, the read fell through, and the empty defaults were saved on top
+     of it. Losing the keys means re-issuing them; losing the routing means
+     re-deciding it. */
   if (existsSync(settingsPath)) {
     try {
-      const raw = readFileSync(settingsPath, 'utf-8');
-      settingsCache = normalizeSettings(JSON.parse(raw));
+      settingsCache = normalizeSettings(readStructuredFile(settingsPath));
       settingsCacheTime = now;
       return settingsCache;
-    } catch { /* fall through */ }
+    } catch (error) {
+      console.error(
+        `[settings] ${settingsPath} could not be read; using defaults in memory and leaving the file alone. ` +
+        `Fix or move the file, then restart. Cause: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      settingsCache = cloneDefaults();
+      settingsCacheTime = now;
+      /* Not persisted: writing here is the destructive step being avoided. */
+      return settingsCache;
+    }
   }
 
   const def = cloneDefaults();
@@ -311,7 +391,7 @@ export function loadSettings(): SettingsStore {
 
 export function saveSettings(store: SettingsStore): void {
   const normalized = normalizeSettings(store);
-  writeFileSync(settingsPath, JSON.stringify(normalized, null, 2), 'utf-8');
+  writeStructuredFile(settingsPath, normalized);
   settingsCache = normalized;
   settingsCacheTime = Date.now();
 }

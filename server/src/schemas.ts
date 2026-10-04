@@ -1,12 +1,5 @@
-export interface SearchRequest {
-  query: string;
-  mode?: string;
-  depth?: import('./engine/depth-presets.js').DeepDepth;
-  history?: { role: string; content: string }[];
-  conversationId?: string;
-}
-
-export interface Source {
+﻿export interface Source {
+  source_index?: number;
   title: string | null;
   url: string;
   domain: string;
@@ -19,6 +12,8 @@ export interface SearchResult {
   url: string;
   snippet: string | null;
   date: string | null;
+  content?: string;
+  extract_error?: string;
 }
 
 export interface AgentStep {
@@ -40,24 +35,11 @@ export interface SearchResponse {
   results_count: number;
   elapsed_ms: number;
   finalContext?: string;
-  research_budget?: {
-    used: number;
-    limit: number;
-    exhausted: boolean;
-  };
-  research_notebook?: {
-    id: string;
-    path: string;
-    updates: number;
-    updatedAt: string;
-  };
-  research_depth?: import('./engine/depth-presets.js').DeepDepth;
+  research_budget?: import('./engine/modes.js').BudgetSnapshot;
+  mode?: import('./engine/modes.js').ResearchMode;
+  reasoning_effort?: import('./engine/modes.js').ReasoningEffort;
+  verbosity?: import('./engine/modes.js').ResearchVerbosity;
+  /** Present on the v1 research path; the structured evidence contract. */
+  report?: import('./engine/report.js').ResearchReport;
 }
 
-export interface Message {
-  type: 'user' | 'assistant';
-  content: string;
-  data?: SearchResponse;
-  error?: string;
-  loading?: boolean;
-}

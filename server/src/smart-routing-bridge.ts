@@ -13,12 +13,12 @@ import type {
 } from '@mindbox/smart-routing-core';
 import { loadSettings } from './settings-store.js';
 import type { LLMRole, TargetReference } from './llm.js';
+import { getCachedModelsDevModel, listCachedModelsDevProviderIds } from './models-dev.js';
+import { canUseTools, listRoutableModels } from './provider-registry.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { resolve, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { getDataPath } from './storage.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SNAPSHOT_PATH = resolve(__dirname, '..', 'data', 'smart-routing-snapshot.json');
+const SNAPSHOT_PATH = getDataPath('smart-routing-snapshot.json');
 
 function loadSnapshotFromDisk(): SmartRoutingEngineSnapshot | null {
   if (!existsSync(SNAPSHOT_PATH)) return null;
@@ -48,40 +48,41 @@ export class SmartRoutingBridge {
     console.log(`[SmartRoutingBridge] Initialized with ${Object.keys(snapshot.scopes).length} known scopes`);
   }
 
-  buildCandidates(role?: LLMRole): {
+  buildCandidates(role?: LLMRole, requirements: { toolCall?: boolean; reasoning?: boolean } = {}): {
     candidates: RouteCandidate[];
     providerMap: Map<string, TargetReference>;
   } {
     const store = loadSettings();
     const allCandidates: RouteCandidate[] = [];
     const providerMap = new Map<string, TargetReference>();
-    const providerOrder = store.providerOrder || Object.keys(store.providers);
     let index = 0;
 
-    for (const pid of providerOrder) {
-      const provider = store.providers[pid];
-      if (!provider?.enabled) continue;
-      for (const model of provider.models || []) {
-        const routeId = `${pid}/${model}`;
-        const scope: RouteScope = {
-          scopeId: routeId,
-          limits: { rpm: null, tpm: null, rpd: null, budgetMode: 'requests', budgetLimit: null },
-        };
-        allCandidates.push({
-          routeId,
-          sortKey: pid,
-          rotationGroupId: pid,
-          rotationIndex: index,
-          scopes: [scope],
-        });
-        providerMap.set(routeId, {
-          source: 'provider',
-          id: pid,
-          url: provider.url,
-          model,
-        });
-        index++;
-      }
+    for (const { providerId: pid, model } of listRoutableModels(store, listCachedModelsDevProviderIds())) {
+      const metadata = getCachedModelsDevModel(pid, model);
+      /* A model that is neither cataloged nor declared cannot be shown to call
+         a tool, so it is not offered for work that needs one. Declaring it in
+         settings makes it eligible again. */
+      if (requirements.toolCall && !canUseTools(pid, model, store.providers[pid])) continue;
+      if (requirements.reasoning && metadata?.reasoning === false) continue;
+      const routeId = `${pid}/${model}`;
+      const scope: RouteScope = {
+        scopeId: routeId,
+        limits: { rpm: null, tpm: null, rpd: null, budgetMode: 'requests', budgetLimit: null },
+      };
+      allCandidates.push({
+        routeId,
+        sortKey: pid,
+        rotationGroupId: pid,
+        rotationIndex: index,
+        scopes: [scope],
+      });
+      providerMap.set(routeId, {
+        source: 'provider',
+        id: pid,
+        url: store.providers[pid]?.url ?? '',
+        model,
+      });
+      index++;
     }
 
     // Filter candidates by role-specific modelRouting if a role is given
@@ -111,12 +112,12 @@ export class SmartRoutingBridge {
     return { candidates: allCandidates, providerMap };
   }
 
-  selectTarget(role?: LLMRole): {
+  selectTarget(role?: LLMRole, requirements: { toolCall?: boolean; reasoning?: boolean } = {}): {
     target: TargetReference;
     leaseId: string;
     routeId: string;
   } | null {
-    const { candidates, providerMap } = this.buildCandidates(role);
+    const { candidates, providerMap } = this.buildCandidates(role, requirements);
     if (candidates.length === 0) {
       return null;
     }
@@ -179,8 +180,8 @@ export class SmartRoutingBridge {
     return minMs;
   }
 
-  isAnyRouteAvailable(role?: LLMRole): boolean {
-    const { candidates } = this.buildCandidates(role);
+  isAnyRouteAvailable(role?: LLMRole, requirements: { toolCall?: boolean; reasoning?: boolean } = {}): boolean {
+    const { candidates } = this.buildCandidates(role, requirements);
     if (candidates.length === 0) return false;
     const result = this.engine.selectRoute({
       candidates,

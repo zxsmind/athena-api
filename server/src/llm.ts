@@ -1,18 +1,12 @@
+﻿import { generateText, jsonSchema, streamText, tool, type ModelMessage, type ToolChoice, type ToolSet } from 'ai';
+import type { ResponseLength } from './engine/modes.js';
+import { createLanguageModel, resolveProvider, usesGoogleOptions } from './provider-registry.js';
 import { loadSettings } from './settings-store.js';
-import { parseRetryAfterMs, recordRateLimitHit, recordRateLimitSuccess } from './engine/rate-signals.js';
-import fs from 'fs';
-import path from 'path';
-import { buildLLMRequestBody } from './llm-utils.js';
 import { smartRouting } from './smart-routing-bridge.js';
-
-const LOG_FILE = path.resolve(process.cwd(), 'llm-errors.log');
-
-function logError(label: string, target: string, status: number, body: string): void {
-  const ts = new Date().toISOString();
-  const line = `[${ts}] [${label}] [${status}] ${target}\n${body}\n${'─'.repeat(80)}\n`;
-  try { fs.appendFileSync(LOG_FILE, line, 'utf8'); } catch (e) { console.error('[logError] Failed to write log:', e); }
-  console.error(`[${status}] ${label} (${target}):\n${body}`);
-}
+import { withRetry } from './engine/retry.js';
+import { getConfig } from './config/load.js';
+import { traceEvent } from './trace.js';
+import { traceLive } from './trace.js';
 
 export type LLMRole = keyof import('./settings-store.js').ModelRouting;
 
@@ -22,6 +16,8 @@ export interface TargetReference {
   url: string;
   model: string;
 }
+
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 export interface LLMOptions {
   messages: unknown[];
@@ -34,8 +30,29 @@ export interface LLMOptions {
   onModelSelected?: (model: string, provider: string) => void;
   label?: string;
   role?: LLMRole;
+  /** The requested answer length. Only read for output-side timeouts. */
+  responseLength?: ResponseLength;
+  /** True on the forced final-answer call, whose output dwarfs other turns. */
+  finalAnswer?: boolean;
   signal?: AbortSignal;
   responseFormat?: unknown;
+  reasoningEffort?: ReasoningEffort;
+  /** Job id, so every provider attempt lands in that job's trace file. */
+  traceId?: string;
+  /** Research round, for grouping a trace by step. */
+  traceRound?: number;
+}
+
+/** Token counts as reported by the provider, split by billing category. */
+export interface LLMUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  requests: number;
+  /** False when the provider returned no usage data; the call is then unpriced. */
+  reported: boolean;
 }
 
 export interface LLMResult {
@@ -43,855 +60,926 @@ export interface LLMResult {
   fullContent?: string;
   model: string;
   provider: string;
+  usage: LLMUsage;
 }
 
-function convertToGeminiBody(body: Record<string, unknown>, model: string, provider?: { reasoningEffort?: string; includeThoughts?: boolean; disabledThinkingModels?: string[] }): Record<string, unknown> {
-  const messages = (body.messages || []) as Record<string, unknown>[];
+type FailureReason = 'auth' | 'rate-limit' | 'transient';
+type AttemptResult =
+  | { ok: true; data: unknown; fullContent?: string; usage: LLMUsage; observations?: CapacityObservation[] }
+  | { ok: false; reason: FailureReason; observations?: CapacityObservation[]; detail?: string };
 
-  const systemParts: string[] = [];
-  const chatMessages: Record<string, unknown>[] = [];
-  for (const msg of messages) {
-    if (msg.role === 'system') {
-      systemParts.push(String(msg.content || ''));
-    } else {
-      chatMessages.push(msg);
-    }
-  }
+interface CapacityObservation {
+  scopeId: string;
+  source: 'response-header' | 'retry-after';
+  observedAt: string;
+  request?: { limit: number | null; remaining: number | null; resetAt: string | null };
+  tokens?: { limit: number | null; remaining: number | null; resetAt: string | null };
+  retryAfterSeconds?: number | null;
+}
 
-  const toolCallIdToName = new Map<string, string>();
-  for (const msg of chatMessages) {
-    if (msg.role === 'assistant' && msg.tool_calls) {
-      for (const tc of (msg.tool_calls as Record<string, unknown>[])) {
-        toolCallIdToName.set(tc.id as string, ((tc.function as Record<string, unknown>)?.name) as string);
+interface RawMessage extends Record<string, unknown> {
+  role?: unknown;
+  content?: unknown;
+  tool_calls?: unknown;
+  tool_call_id?: unknown;
+}
+
+function logError(label: string, target: string, status: number, message: string): void {
+  console.error(`[${status}] ${label} (${target}): ${message.slice(0, 1000)}`);
+}
+
+/**
+ * Flattens a message array for the trace. The raw SDK shape is nested and hard
+ * to read after the fact; what matters when diagnosing a run is which role said
+ * what, which tool was called with which arguments, and how big the prompt got.
+ *
+ * `sizes` records every message as {role, chars} in order, with tool results
+ * attributed to their tool by call id. Phase 0 needs this to measure what share
+ * of context is raw tool output versus assistant text versus fixed parts, and
+ * that split is only computable if each message carries its own size.
+ */
+function summarizeMessages(messages: unknown[]): {
+  count: number;
+  chars: number;
+  roles: Record<string, number>;
+  preview: string[];
+  sizes: { role: string; chars: number; tool?: string }[];
+} {
+  const roles: Record<string, number> = {};
+  let chars = 0;
+  const preview: string[] = [];
+  const sizes: { role: string; chars: number; tool?: string }[] = [];
+  /* Tool results carry no name, so attribute them by matching the call id the
+     assistant used when it invoked them. Unmatched results stay 'unknown'
+     rather than guessed. */
+  const callIdToTool = new Map<string, string>();
+  for (const raw of messages) {
+    const m = asRecord(raw);
+    if (m.role !== 'assistant' || !Array.isArray(m.tool_calls)) continue;
+    for (const call of m.tool_calls) {
+      const c = asRecord(call);
+      const fn = asRecord(c.function);
+      if (typeof c.id === 'string' && typeof fn.name === 'string') {
+        callIdToTool.set(c.id, fn.name);
       }
     }
   }
+  for (const raw of messages) {
+    const m = asRecord(raw);
+    const role = typeof m.role === 'string' ? m.role : 'unknown';
+    roles[role] = (roles[role] ?? 0) + 1;
+    let text = '';
+    if (typeof m.content === 'string') {
+      text = m.content;
+    } else if (Array.isArray(m.content)) {
+      text = m.content.map((part) => asRecord(part).text ?? '').join(' ');
+    }
+    if (Array.isArray(m.tool_calls)) {
+      for (const call of m.tool_calls) {
+        const fn = asRecord(asRecord(call).function);
+        text += `\n[tool_call ${String(fn.name)} ${typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments)}]`;
+      }
+    }
+    chars += text.length;
+    const sizeEntry: { role: string; chars: number; tool?: string } = { role, chars: text.length };
+    if (role === 'tool') {
+      const callId = typeof m.tool_call_id === 'string' ? m.tool_call_id : null;
+      sizeEntry.tool = (callId && callIdToTool.get(callId)) ?? 'unknown';
+    }
+    sizes.push(sizeEntry);
+    if (role === 'system' || role === 'user') {
+      preview.push(`--- ${role} (${text.length} chars) ---\n${text.slice(0, 600)}`);
+    }
+  }
+  return { count: messages.length, chars, roles, preview, sizes };
+}
 
-  const contents: Record<string, unknown>[] = [];
-  for (const msg of chatMessages) {
-    if (msg.role === 'tool') {
-      const tcId = msg.tool_call_id as string;
-      const funcName = toolCallIdToName.get(tcId) || 'unknown';
-      const raw = msg.content;
-      let response: Record<string, unknown> = { result: String(raw || '') };
-      if (typeof raw === 'string') { try { const p = JSON.parse(raw); if (typeof p === 'object') response = p; } catch { /* tool payload is plain text */ } }
-      contents.push({ role: 'function', parts: [{ functionResponse: { name: funcName, response } }] });
-    } else if (msg.role === 'assistant') {
-      const parts: Record<string, unknown>[] = [];
-      if (msg.content) parts.push({ text: String(msg.content) });
-      if (msg.tool_calls) {
-        for (const tc of (msg.tool_calls as Record<string, unknown>[])) {
-          const func = tc.function as Record<string, unknown> || {};
-          let args: Record<string, unknown> = {};
-          if (typeof func.arguments === 'string') { try { args = JSON.parse(func.arguments); } catch { /* provider returned malformed tool args */ } }
-          else if (typeof func.arguments === 'object') args = func.arguments as Record<string, unknown>;
-          const ts = tc.thought_signature as string | undefined;
-          const fcPart: Record<string, unknown> = { functionCall: { name: func.name, args: args || {} } };
-          if (ts) fcPart.thoughtSignature = ts;
-          parts.push(fcPart);
+/**
+ * Renders every message in full for the live log. Unlike the trace summary
+ * above, nothing is previewed or clipped: this is what the provider actually
+ * received. Tool results are labeled with the tool they came from, matched by
+ * call id the same way.
+ */
+function formatMessagesFull(messages: unknown[]): string {
+  const callIdToTool = new Map<string, string>();
+  for (const raw of messages) {
+    const m = asRecord(raw);
+    if (m.role !== 'assistant' || !Array.isArray(m.tool_calls)) continue;
+    for (const call of m.tool_calls) {
+      const c = asRecord(call);
+      const fn = asRecord(c.function);
+      if (typeof c.id === 'string' && typeof fn.name === 'string') {
+        callIdToTool.set(c.id, fn.name);
+      }
+    }
+  }
+  const parts: string[] = [];
+  for (const raw of messages) {
+    const m = asRecord(raw);
+    const role = typeof m.role === 'string' ? m.role : 'unknown';
+    let label = `[${role}]`;
+    if (role === 'tool') {
+      const callId = typeof m.tool_call_id === 'string' ? m.tool_call_id : null;
+      label = `[tool:${(callId && callIdToTool.get(callId)) ?? 'unknown'}]`;
+    }
+    let text = '';
+    if (typeof m.content === 'string') {
+      text = m.content;
+    } else if (Array.isArray(m.content)) {
+      text = m.content.map((part) => {
+        const p = asRecord(part);
+        return typeof p.text === 'string' ? p.text : JSON.stringify(part);
+      }).join('\n');
+    }
+    if (Array.isArray(m.tool_calls)) {
+      for (const call of m.tool_calls) {
+        const fn = asRecord(asRecord(call).function);
+        text += `\n[tool_call ${String(fn.name)}]\n${typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments)}`;
+      }
+    }
+    parts.push(`${label} (${text.length} chars)\n${text}`);
+  }
+  return parts.join('\n\n---\n\n');
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function parseJsonObject(value: unknown): unknown {
+  if (typeof value !== 'string') return value ?? {};
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return {};
+  }
+}
+
+function toModelMessages(input: unknown[]): ModelMessage[] {
+  const toolNames = new Map<string, string>();
+  for (const value of input) {
+    const message = asRecord(value);
+    if (message.role !== 'assistant' || !Array.isArray(message.tool_calls)) continue;
+    for (const rawCall of message.tool_calls) {
+      const call = asRecord(rawCall);
+      const fn = asRecord(call.function);
+      if (typeof call.id === 'string' && typeof fn.name === 'string') toolNames.set(call.id, fn.name);
+    }
+  }
+
+  const messages: ModelMessage[] = [];
+  for (const value of input) {
+    const message = asRecord(value) as RawMessage;
+    const role = message.role;
+    if (role === 'system') {
+      messages.push({ role: 'system', content: typeof message.content === 'string' ? message.content : '' });
+      continue;
+    }
+    if (role === 'user') {
+      messages.push({ role: 'user', content: typeof message.content === 'string' ? message.content : String(message.content ?? '') });
+      continue;
+    }
+    if (role === 'assistant') {
+      const parts: Array<Record<string, unknown>> = [];
+      /* Preserved deliberation travels as a reasoning part, mirroring the
+         shape the transport itself parses responses into
+         ({ type: 'reasoning', text }), which packages map to their thinking
+         channel (reasoning_content and friends). An extra plain field here
+         would be dropped silently, so this stays explicit. */
+      const priorReasoning = asRecord(message).reasoning;
+      if (typeof priorReasoning === 'string' && priorReasoning.length > 0) {
+        parts.push({ type: 'reasoning', text: priorReasoning });
+      }
+      if (typeof message.content === 'string' && message.content.length > 0) {
+        parts.push({ type: 'text', text: message.content });
+      }
+      if (Array.isArray(message.tool_calls)) {
+        for (const rawCall of message.tool_calls) {
+          const call = asRecord(rawCall);
+          const fn = asRecord(call.function);
+          if (typeof call.id !== 'string' || typeof fn.name !== 'string') continue;
+          parts.push({
+            type: 'tool-call',
+            toolCallId: call.id,
+            toolName: fn.name,
+            input: parseJsonObject(fn.arguments),
+            ...(call.providerOptions ? { providerOptions: call.providerOptions } : {}),
+          });
         }
       }
-      contents.push({ role: 'model', parts });
-    } else {
-      const parts: Record<string, unknown>[] = [];
-      if (msg.content) parts.push({ text: String(msg.content) });
-      contents.push({ role: 'user', parts });
+      if (parts.length > 0) messages.push({ role: 'assistant', content: parts } as unknown as ModelMessage);
+      continue;
     }
-  }
-
-  const geminiBody: Record<string, unknown> = { contents };
-  if (systemParts.length > 0) {
-    geminiBody.system_instruction = { parts: [{ text: systemParts.join('\n') }] };
-  }
-
-  const genConfig: Record<string, unknown> = {};
-  if (body.temperature != null) genConfig.temperature = body.temperature;
-  if (body.max_completion_tokens != null) genConfig.maxOutputTokens = body.max_completion_tokens as number;
-
-  const disabled = provider?.disabledThinkingModels;
-  const isDisabled = Array.isArray(disabled) && disabled.includes(model);
-  if (!isDisabled) {
-    let budget = -1; // Default dynamic budget
-    if (provider?.reasoningEffort === 'none' || provider?.reasoningEffort === 'minimal') {
-      budget = 0; // Disable thinking
-    } else if (provider?.reasoningEffort === 'low') {
-      budget = 2048;
-    } else if (provider?.reasoningEffort === 'medium') {
-      budget = 8192;
-    } else if (provider?.reasoningEffort === 'high') {
-      budget = 16384;
-    }
-    genConfig.thinkingConfig = {
-      thinkingBudget: budget,
-      includeThoughts: budget !== 0,
-    };
-  } else {
-    genConfig.thinkingConfig = {
-      thinkingBudget: 0,
-      includeThoughts: false,
-    };
-  }
-
-  if (Object.keys(genConfig).length > 0) {
-    geminiBody.generationConfig = genConfig;
-  }
-
-  if (body.tools) {
-    const openAITools = body.tools as Record<string, unknown>[];
-    geminiBody.tools = openAITools.map(t => ({
-      functionDeclarations: [(t.function as Record<string, unknown>) || {}],
-    }));
-  }
-
-  return geminiBody;
-}
-
-function buildGeminiUrl(baseUrl: string, model: string, stream: boolean): string {
-  const base = baseUrl.replace(/\/+$/, '');
-  return stream
-    ? `${base}/models/${model}:streamGenerateContent?alt=sse`
-    : `${base}/models/${model}:generateContent`;
-}
-
-function parseNonSseGeminiResponse(
-  data: unknown,
-  fullContentRef: { value: string },
-  toolCallAccumulators: Map<number, Record<string, unknown>>,
-  onToken?: (text: string) => void,
-): void {
-  const items = Array.isArray(data) ? data : [data];
-  for (const item of items) {
-    const candidates = (item as Record<string, unknown>)?.candidates as Record<string, unknown>[] | undefined;
-    if (!candidates?.length) continue;
-    const content = (candidates[0]?.content as Record<string, unknown> | undefined);
-    const parts = content?.parts as Record<string, unknown>[] | undefined;
-    if (!parts) continue;
-    for (const part of parts) {
-      if (part.text && !part.thought) {
-        const text = String(part.text);
-        fullContentRef.value += text;
-        onToken?.(text);
-      }
-      const fc = part.functionCall as Record<string, unknown> | undefined;
-      if (fc) {
-        const tcIndex = toolCallAccumulators.size;
-        const tc: Record<string, unknown> = {
-          id: `call_${Date.now()}_${tcIndex}`,
-          type: 'function',
-          function: { name: fc.name as string, arguments: JSON.stringify(fc.args || {}) },
-        };
-        if (part.thoughtSignature) tc.thought_signature = part.thoughtSignature as string;
-        toolCallAccumulators.set(tcIndex, tc);
-      }
-    }
-  }
-}
-
-function parseNonSseOpenAiResponse(
-  data: unknown,
-  fullContentRef: { value: string },
-  toolCallAccumulators: Map<number, Record<string, unknown>>,
-  onToken?: (text: string) => void,
-): void {
-  const d = data as Record<string, unknown>;
-  const choices = d.choices as Record<string, unknown>[] | undefined;
-  if (!choices?.length) return;
-  const msg = choices[0].message as Record<string, unknown> | undefined;
-  if (!msg) return;
-  if (msg.content) {
-    const text = stripThinkingTags(String(msg.content));
-    if (text) {
-      fullContentRef.value += text;
-      onToken?.(text);
-    }
-  }
-  const rct = msg.reasoning_content || msg.reasoning;
-  if (rct && typeof rct === 'string') {
-    (msg as Record<string, unknown>).reasoning = rct;
-  }
-  const toolCalls = msg.tool_calls as Record<string, unknown>[] | undefined;
-  if (toolCalls) {
-    for (const tc of toolCalls) {
-      const tcIndex = toolCallAccumulators.size;
-      toolCallAccumulators.set(tcIndex, {
-        id: tc.id as string || `call_${Date.now()}_${tcIndex}`,
-        type: 'function',
-        function: tc.function as Record<string, unknown>,
+    if (role === 'tool' && typeof message.tool_call_id === 'string') {
+      const toolCallId = message.tool_call_id;
+      const toolName = toolNames.get(toolCallId);
+      if (!toolName) continue;
+      messages.push({
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId,
+          toolName,
+          output: { type: 'text', value: typeof message.content === 'string' ? message.content : String(message.content ?? '') },
+        }],
       });
     }
   }
+  return messages;
 }
 
-function normalizeGeminiResponse(data: unknown, model: string): unknown {
-  const d = data as Record<string, unknown>;
-  const candidates = (d.candidates || []) as unknown[];
-  if (candidates.length === 0) return data;
-  const c = candidates[0] as Record<string, unknown>;
-  const content = c.content as Record<string, unknown> | undefined;
-  const parts = (content?.parts || []) as Record<string, unknown>[];
-  const text = parts.filter(p => !p.thought).map(p => String(p.text || '')).join('');
-  const reasoning = parts.filter(p => p.thought).map(p => String(p.text || '')).join('');
-  let finish = String(c.finishReason || 'stop');
-  const toolCalls: Record<string, unknown>[] = [];
-  for (const p of parts) {
-    const pp = p as Record<string, unknown>;
-    if (pp.functionCall) {
-      const fc = pp.functionCall as Record<string, unknown>;
-      const tc: Record<string, unknown> = {
-        id: `call_${Date.now()}_${toolCalls.length}`,
-        type: 'function',
-        function: { name: fc.name, arguments: JSON.stringify(fc.args || {}) },
-      };
-      if (pp.thoughtSignature) tc.thought_signature = pp.thoughtSignature as string;
-      toolCalls.push(tc);
-    }
+function toSdkTools(rawTools: unknown[] | undefined): ToolSet | undefined {
+  if (!rawTools?.length) return undefined;
+  const tools: Record<string, ReturnType<typeof tool>> = {};
+  for (const rawTool of rawTools) {
+    const wrapper = asRecord(rawTool);
+    const definition = asRecord(wrapper.function ?? wrapper);
+    if (typeof definition.name !== 'string' || !definition.name) continue;
+    const schema = asRecord(definition.parameters);
+    tools[definition.name] = tool({
+      description: typeof definition.description === 'string' ? definition.description : '',
+      inputSchema: jsonSchema(schema as never),
+    });
   }
-  if (toolCalls.length > 0 && finish === 'STOP') finish = 'tool_calls';
-  const msg: Record<string, unknown> = { role: 'assistant', content: text || null };
-  if (toolCalls.length > 0) msg.tool_calls = toolCalls;
-  if (reasoning) msg.reasoning = reasoning;
+  return tools as ToolSet;
+}
+
+function toSdkToolChoice(choice: LLMOptions['toolChoice']): ToolChoice<ToolSet> | undefined {
+  if (choice === 'auto' || choice === 'none') return choice;
+  if (choice && typeof choice === 'object') {
+    return { type: 'tool', toolName: choice.function.name } as ToolChoice<ToolSet>;
+  }
+  return undefined;
+}
+
+function googleOptions(target: TargetReference, provider: ReturnType<typeof loadSettings>['providers'][string], effort?: ReasoningEffort): Record<string, unknown> | undefined {
+  const resolvedEffort = effort ?? provider.reasoningEffort;
+  if (!resolvedEffort || provider.disabledThinkingModels?.includes(target.model)) return undefined;
+  const modelId = target.model.toLowerCase();
+  const includeThoughts = provider.includeThoughts ?? false;
+  if (modelId.includes('gemini-3')) {
+    const thinkingLevel = resolvedEffort === 'none' || resolvedEffort === 'minimal'
+      ? 'minimal'
+      : resolvedEffort === 'xhigh' ? 'high' : resolvedEffort;
+    return { google: { thinkingConfig: { thinkingLevel, includeThoughts } } };
+  }
+  if (modelId.includes('gemini-2.5')) {
+    const thinkingBudget = resolvedEffort === 'none' ? 0
+      : resolvedEffort === 'minimal' || resolvedEffort === 'low' ? 2048
+        : resolvedEffort === 'medium' ? 8192 : -1;
+    return { google: { thinkingConfig: { thinkingBudget, includeThoughts } } };
+  }
+  return undefined;
+}
+
+function toCamelCase(value: string): string {
+  return value.replace(/[-_ ]+([a-z0-9])/gi, (_match, letter: string) => letter.toUpperCase());
+}
+
+export function modelProviderOptions(
+  target: TargetReference,
+  provider: ReturnType<typeof loadSettings>['providers'][string],
+  npm: string,
+  effort?: ReasoningEffort,
+): Record<string, unknown> | undefined {
+  /* The Google SDK shapes thinking options its own way; every other package
+     takes the generic reasoning-effort field under its provider key. A setting
+     a package does not understand is ignored by that package. */
+  if (usesGoogleOptions(npm)) return googleOptions(target, provider, effort);
+
+  const resolvedEffort = effort ?? provider.reasoningEffort;
+  if (!resolvedEffort || provider.disabledThinkingModels?.includes(target.model)) return undefined;
+  /* Generic packages read their own namespace, not the provider id: a custom
+     endpoint on the openai-compatible package never saw `sovinfra`, so the
+     effort died in the SDK while the trace still labelled it. Measured: no
+     thinking in any qwen response at any effort level. */
+  if (npm === '@ai-sdk/openai-compatible') return { openaiCompatible: { reasoningEffort: resolvedEffort } };
+  return { [toCamelCase(target.id)]: { reasoningEffort: resolvedEffort } };
+}
+
+function createTimeoutSignal(parent: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return parent ? AbortSignal.any([parent, timeout]) : timeout;
+}
+
+/** Stall after which a flowing stream is declared dead. Chunks arrive far more
+ *  often than this in a healthy stream; an hour-long silence is not patience. */
+export const LLM_STREAM_IDLE_TIMEOUT_MS = 60_000;
+
+/** Output-side budgets for the forced final answer, by requested length. The
+ *  input-scaled total covers prefill; these cover generating the report,
+ *  which is the largest output of the whole run. */
+export const FINAL_ANSWER_TIMEOUT_MS = {
+  short: 240_000,
+  long: 540_000,
+  exhaustive: 900_000,
+} as const satisfies Record<ResponseLength, number>;
+
+/**
+ * Total budget for one model call, scaled with context. The forced answer at a
+ * ceiling is the largest prompt of the run: a flat total-only deadline killed
+ * runs that were still streaming (`j-faE5hOH46vGt`, then `j-iOjo2HjVNvkC` at
+ * 377K chars against a 75s guillotine). A final answer takes the larger of the
+ * input-scaled budget and its length's output budget
+ * (`j-AbdnmdUTgeLo`: 405K chars in, long report out, dead at ~200s).
+ * Streaming calls pair this with the idle timer below instead of relying on
+ * it alone.
+ */
+export function llmTotalTimeoutMs(contextChars: number, responseLength?: ResponseLength | null): number {
+  const inputScaled = 120_000 + Math.min(480_000, Math.floor(Math.max(0, contextChars) / 5_000) * 1_000);
+  if (!responseLength) return inputScaled;
+  return Math.max(inputScaled, FINAL_ANSWER_TIMEOUT_MS[responseLength]);
+}
+
+/**
+ * Retry schedule for one model call. A final-answer call gets a single retry:
+ * the final phase is wall-clock-bound, and six dead attempts is how a
+ * finished run dies with nothing (`j-AbdnmdUTgeLo`). The real error surfaces
+ * after the second failure instead.
+ */
+export function retryDelaysForFinalAnswer(allDelaysMs: number[], finalAnswer: boolean | undefined): number[] {
+  return finalAnswer ? allDelaysMs.slice(0, 1) : allDelaysMs;
+}
+
+/**
+ * Streaming-aware timeout: a total deadline plus an idle deadline that
+ * restarts on every reported chunk. A stream that flows is never cut; a stream
+ * that stalls still dies. The idle arm starts on the first chunk, so a long
+ * prefill is governed by the total alone. Call `dispose` once the stream is
+ * fully consumed so neither timer outlives the call.
+ */
+export function createStreamingTimeout(
+  parent: AbortSignal | undefined,
+  totalMs: number,
+  idleMs: number = LLM_STREAM_IDLE_TIMEOUT_MS,
+): { signal: AbortSignal; chunk: () => void; dispose: () => void } {
+  const controller = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const totalTimer = setTimeout(() => {
+    controller.abort(new Error(`LLM call exceeded its total budget of ${totalMs}ms`));
+  }, totalMs);
+  const chunk = (): void => {
+    if (controller.signal.aborted) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      controller.abort(new Error(`LLM stream stalled for ${idleMs}ms`));
+    }, idleMs);
+  };
+  const dispose = (): void => {
+    clearTimeout(totalTimer);
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  };
   return {
-    id: d.id || 'gemini-response',
-    object: 'chat.completion',
-    created: Date.now(),
-    model,
-    choices: [{ index: 0, message: msg, finish_reason: finish === 'STOP' ? 'stop' : (finish?.toLowerCase() || 'stop') }],
-    usage: d.usage || {},
+    signal: parent ? AbortSignal.any([parent, controller.signal]) : controller.signal,
+    chunk,
+    dispose,
   };
 }
 
-export class ThinkStripper {
-  private inThinkBlock = false;
-  private streamBuffer = '';
-  private onToken: (text: string) => void;
-  private fullContentRef: { value: string };
-  constructor(onToken: ((text: string) => void) | undefined, fullContentRef: { value: string }) {
-    this.onToken = onToken || (() => {});
-    this.fullContentRef = fullContentRef;
-  }
-  process(text: string) {
-    this.streamBuffer += text;
-    while (true) {
-      if (!this.inThinkBlock) {
-        const idx = this.streamBuffer.indexOf('<think>');
-        if (idx !== -1) {
-          const before = this.streamBuffer.slice(0, idx);
-          if (before) { this.fullContentRef.value += before; this.onToken(before); }
-          this.inThinkBlock = true;
-          this.streamBuffer = this.streamBuffer.slice(idx + 7);
-          continue;
-        }
-        const prefixes = ['<think', '<thin', '<thi', '<th', '<t', '<'];
-        let matchedPrefix = false;
-        for (const pfx of prefixes) {
-          if (this.streamBuffer.endsWith(pfx)) {
-            const pIdx = this.streamBuffer.length - pfx.length;
-            const before = this.streamBuffer.slice(0, pIdx);
-            if (before) { this.fullContentRef.value += before; this.onToken(before); }
-            this.streamBuffer = this.streamBuffer.slice(pIdx);
-            matchedPrefix = true; break;
-          }
-        }
-        if (matchedPrefix) break;
-        if (this.streamBuffer) { this.fullContentRef.value += this.streamBuffer; this.onToken(this.streamBuffer); this.streamBuffer = ''; }
-        break;
-      } else {
-        const idx = this.streamBuffer.indexOf('</think>');
-        if (idx !== -1) { this.inThinkBlock = false; this.streamBuffer = this.streamBuffer.slice(idx + 8); continue; }
-        const prefixes = ['</think', '</thin', '</thi', '</th', '</t', '</', '<'];
-        let matchedPrefix = false;
-        for (const pfx of prefixes) {
-          if (this.streamBuffer.endsWith(pfx)) { this.streamBuffer = this.streamBuffer.slice(this.streamBuffer.length - pfx.length); matchedPrefix = true; break; }
-        }
-        if (matchedPrefix) break;
-        this.streamBuffer = '';
-        break;
-      }
-    }
-  }
-  flush() { if (!this.inThinkBlock && this.streamBuffer) { this.fullContentRef.value += this.streamBuffer; this.onToken(this.streamBuffer); this.streamBuffer = ''; } }
+function toUsageTokens(value: unknown): number {
+  const usage = asRecord(value);
+  const input = typeof usage.inputTokens === 'number' ? usage.inputTokens : 0;
+  const output = typeof usage.outputTokens === 'number' ? usage.outputTokens : 0;
+  return typeof usage.totalTokens === 'number' ? usage.totalTokens : input + output;
 }
 
-export function stripThinkingTags(text: string): string {
-  if (!text) return '';
-  return text.replace(/<think>[\s\S]*?<\/think>/g, '').replace(/<think>[\s\S]*/g, '');
+function numberOr(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-function extractDeltaText(delta: unknown): string {
-  if (!delta) return '';
-  const d = delta as Record<string, unknown>;
-
-  // Native Gemini streaming: candidates[0].content.parts[x].text
-  const candidates = d.candidates as Record<string, unknown>[] | undefined;
-  if (candidates?.length) {
-    const c = candidates[0];
-    const content = c?.content as Record<string, unknown> | undefined;
-    const parts = content?.parts as Record<string, unknown>[] | undefined;
-    if (parts?.length) {
-      const textParts = parts.filter(p => !p.thought).map(p => String(p.text || ''));
-      if (textParts.length > 0) return textParts.join('');
-      const thoughtParts = parts.filter(p => p.thought).map(p => String(p.text || ''));
-      if (thoughtParts.length > 0) return '';
-    }
-    return '';
-  }
-
-  // OpenAI-compatible format
-  const GEMINI_CONTENT_FIELDS = ['content', 'text', 'message.content'];
-  if (d.reasoning_content || d.reasoning || d.thought) {
-    for (const path of GEMINI_CONTENT_FIELDS) {
-      const val = path.split('.').reduce((o: Record<string, unknown> | undefined, k: string) => o?.[k] as Record<string, unknown> | undefined, d);
-      if (val) return String(val);
-    }
-    return '';
-  }
-  for (const path of GEMINI_CONTENT_FIELDS) {
-    const val = path.split('.').reduce((o: Record<string, unknown> | undefined, k: string) => o?.[k] as Record<string, unknown> | undefined, d);
-    if (val) return String(val);
-  }
-  return '';
+/**
+ * Normalises provider-reported usage into billing categories. Nothing is
+ * inferred: a category the provider did not report is zero, and `reported` is
+ * false when the provider sent no usage at all.
+ */
+function toTokenUsage(value: unknown): LLMUsage {
+  const usage = asRecord(value);
+  const details = asRecord(usage.inputTokenDetails);
+  const inputTokens = numberOr(usage.inputTokens);
+  const outputTokens = numberOr(usage.outputTokens);
+  const cacheReadTokens = numberOr(details.cacheReadTokens);
+  const cacheWriteTokens = numberOr(details.cacheWriteTokens);
+  return {
+    inputTokens: Math.max(0, inputTokens - cacheReadTokens - cacheWriteTokens),
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    totalTokens: toUsageTokens(usage),
+    requests: 1,
+    reported: toUsageTokens(usage) > 0,
+  };
 }
 
-function makeRequestSignal(timeoutMs: number, external?: AbortSignal): { signal: AbortSignal; cleanup: () => void } {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  if (external) {
-    if (external.aborted) { controller.abort(); }
-    else { external.addEventListener('abort', () => controller.abort(), { once: true }); }
-  }
-  return { signal: controller.signal, cleanup: () => clearTimeout(timer) };
-}
-
-import type { CapacityObservation } from '@mindbox/smart-routing-core';
-
-type ProviderErrorKind = 'rate-limit' | 'auth' | 'transient';
-
-type ProviderSuccess = { ok: true; data: unknown; provider: string; model: string; observations?: CapacityObservation[]; usage?: { tokens?: number; requests?: number } };
-type ProviderFailure = { ok: false; reason: ProviderErrorKind; observations?: CapacityObservation[] };
-type ProviderResult = ProviderSuccess | ProviderFailure | null;
-
-function parseRateLimitHeaders(res: Response, scopeId: string): CapacityObservation[] {
-  const obs: CapacityObservation[] = [];
-  const now = new Date().toISOString();
-
-  const reqLimit = res.headers.get('x-ratelimit-limit-requests');
-  const reqRemaining = res.headers.get('x-ratelimit-remaining-requests');
-  const reqReset = res.headers.get('x-ratelimit-reset-requests');
-  if (reqLimit || reqRemaining || reqReset) {
-    obs.push({
+function responseHeadersToObservations(headers: Headers | null, scopeId: string): CapacityObservation[] | undefined {
+  if (!headers) return undefined;
+  const observedAt = new Date().toISOString();
+  const parseIntHeader = (name: string): number | null => {
+    const value = headers.get(name);
+    return value ? Number.parseInt(value, 10) || null : null;
+  };
+  const requestLimit = parseIntHeader('x-ratelimit-limit-requests');
+  const requestRemaining = parseIntHeader('x-ratelimit-remaining-requests');
+  const requestReset = parseIntHeader('x-ratelimit-reset-requests');
+  const tokenLimit = parseIntHeader('x-ratelimit-limit-tokens');
+  const tokenRemaining = parseIntHeader('x-ratelimit-remaining-tokens');
+  const tokenReset = parseIntHeader('x-ratelimit-reset-tokens');
+  const observations: CapacityObservation[] = [];
+  if (requestLimit !== null || requestRemaining !== null || requestReset !== null) {
+    observations.push({
       scopeId,
       source: 'response-header',
-      observedAt: now,
+      observedAt,
       request: {
-        limit: reqLimit ? parseInt(reqLimit, 10) || null : null,
-        remaining: reqRemaining ? parseInt(reqRemaining, 10) || null : null,
-        resetAt: reqReset ? new Date(parseInt(reqReset, 10) * 1000).toISOString() : null,
+        limit: requestLimit,
+        remaining: requestRemaining,
+        resetAt: requestReset === null ? null : new Date(requestReset * 1000).toISOString(),
       },
     });
   }
-
-  const tokLimit = res.headers.get('x-ratelimit-limit-tokens');
-  const tokRemaining = res.headers.get('x-ratelimit-remaining-tokens');
-  const tokReset = res.headers.get('x-ratelimit-reset-tokens');
-  if (tokLimit || tokRemaining || tokReset) {
-    obs.push({
+  if (tokenLimit !== null || tokenRemaining !== null || tokenReset !== null) {
+    observations.push({
       scopeId,
       source: 'response-header',
-      observedAt: now,
+      observedAt,
       tokens: {
-        limit: tokLimit ? parseInt(tokLimit, 10) || null : null,
-        remaining: tokRemaining ? parseInt(tokRemaining, 10) || null : null,
-        resetAt: tokReset ? new Date(parseInt(tokReset, 10) * 1000).toISOString() : null,
+        limit: tokenLimit,
+        remaining: tokenRemaining,
+        resetAt: tokenReset === null ? null : new Date(tokenReset * 1000).toISOString(),
       },
     });
   }
-
-  return obs;
+  return observations.length ? observations : undefined;
 }
 
-async function tryProvider(
-  target: TargetReference,
-  opts: LLMOptions,
-  body: Record<string, unknown>,
-  label: string,
-  tried: string[],
-): Promise<ProviderResult> {
-  const model = target.model;
-
-  const store = loadSettings();
-  const provider = store.providers[target.id];
-  if (!provider || provider.keys.length === 0) {
-    tried.push(`${target.id}/${model} -> no keys`);
-    return null;
-  }
-
-  const isGemini = target.id === 'gemini';
-  const reqBody: Record<string, unknown> = isGemini
-    ? convertToGeminiBody(body, model, provider)
-    : { ...body, model, stream: false };
-
-  if (!isGemini) {
-    const supportsThinking = !provider.disabledThinkingModels || !provider.disabledThinkingModels.includes(model);
-    if (supportsThinking && provider.reasoningEffort) {
-      const allowedValues = target.id === 'groq' ? ['none', 'default'] : ['low', 'medium', 'high'];
-      if (allowedValues.includes(provider.reasoningEffort)) {
-        reqBody.reasoning_effort = provider.reasoningEffort;
-      }
-    }
-  }
-
-  const effectiveUrl = isGemini ? buildGeminiUrl(provider.url, model, false) : target.url;
-
-  let lastError: ProviderErrorKind | null = null;
-  let lastErrorObservations: CapacityObservation[] | null = null;
-
-  for (const apiKey of provider.keys) {
-    try {
-      const { signal, cleanup } = makeRequestSignal(30000, opts.signal);
-      try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (isGemini) {
-          headers['x-goog-api-key'] = apiKey;
-        } else {
-          headers['Authorization'] = `Bearer ${apiKey}`;
-        }
-
-        const res = await fetch(effectiveUrl, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(reqBody),
-          signal,
-        });
-
-        if (res.status === 429) {
-          const retryAfterMs = parseRetryAfterMs(res);
-          recordRateLimitHit(retryAfterMs);
-          tried.push(`${target.id}/${model} -> rate limited (key ${apiKey.slice(-6)})`);
-          logError(label, effectiveUrl, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
-          lastError = 'rate-limit';
-          lastErrorObservations = [{
-            scopeId: `${target.id}/${model}`,
-            source: 'retry-after',
-            observedAt: new Date().toISOString(),
-            retryAfterSeconds: retryAfterMs && retryAfterMs > 0 ? retryAfterMs / 1000 : null,
-          }];
-          continue;
-        }
-        if (res.status === 401) {
-          tried.push(`${target.id}/${model} -> unauthorized (key ${apiKey.slice(-6)})`);
-          if (lastError !== 'rate-limit') lastError = 'auth';
-          continue;
-        }
-        if (res.status === 400 || res.status === 404 || res.status === 413) {
-          const errBody = await res.text().catch(() => '');
-          tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-          logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
-          if (!lastError) lastError = 'transient';
-          continue;
-        }
-        if (!res.ok) {
-          const errBody = await res.text().catch(() => '');
-          tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-          logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
-          if (!lastError) lastError = 'transient';
-          continue;
-        }
-
-        let data: unknown = await res.json();
-        if (isGemini || (data as Record<string, unknown>)?.candidates) {
-          data = normalizeGeminiResponse(data, model);
-        }
-
-        const d = data as { choices?: { message?: { content?: string | null; tool_calls?: unknown }; finish_reason?: string }[] };
-        const choice = d?.choices?.[0];
-        const contentStr = choice?.message?.content;
-        const hasContent = typeof contentStr === 'string' && contentStr.trim().length > 0;
-        const hasToolCalls = Array.isArray(choice?.message?.tool_calls) && choice.message.tool_calls.length > 0;
-
-        if (!hasContent && !hasToolCalls) {
-          tried.push(`${target.id}/${model} -> empty content or safety block (finish_reason: ${choice?.finish_reason || 'unknown'})`);
-          if (!lastError) lastError = 'transient';
-          continue;
-        }
-
-        recordRateLimitSuccess();
-        const obs = parseRateLimitHeaders(res, `${target.id}/${model}`);
-        return { ok: true, data, provider: target.id, model, observations: obs.length > 0 ? obs : undefined };
-      } finally {
-        cleanup();
-      }
-    } catch (err: unknown) {
-      tried.push(`${target.id}/${model} -> request failed`);
-      logError(label, effectiveUrl, 0, `Model: ${model}\n${err instanceof Error ? err.message : String(err)}`);
-      if (!lastError) lastError = 'transient';
-    }
-  }
-  return lastError ? { ok: false, reason: lastError, observations: lastErrorObservations ?? undefined } : null;
+function statusCodeOf(error: unknown): number | null {
+  const record = asRecord(error);
+  const statusCode = record.statusCode ?? record.status;
+  return typeof statusCode === 'number' ? statusCode : null;
 }
 
-async function tryProviderStream(
+function errorHeadersOf(error: unknown): Headers | null {
+  const raw = asRecord(error).responseHeaders;
+  if (raw instanceof Headers) return raw;
+  if (raw && typeof raw === 'object') {
+    const entries = Object.entries(raw as Record<string, unknown>)
+      .filter((entry): entry is [string, string] => typeof entry[1] === 'string');
+    return new Headers(entries);
+  }
+  return null;
+}
+
+function retryAfterMs(headers: Headers | null): number | null {
+  const value = headers?.get('retry-after');
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+function normalizedFinishReason(reason: unknown, hasToolCalls: boolean): string {
+  if (hasToolCalls) return 'tool_calls';
+  if (reason === 'length') return 'length';
+  if (reason === 'content-filter') return 'content_filter';
+  return 'stop';
+}
+
+function engineResponse(
+  text: string,
+  toolCalls: Array<{ id: string; name: string; input: unknown; providerOptions?: unknown }>,
+  finishReason: unknown,
+  model: string,
+  usage: unknown,
+  reasoning?: string,
+): unknown {
+  const message: Record<string, unknown> = { role: 'assistant', content: text || null };
+  /* Reasoning is written onto the message so that everything downstream — the
+     engine's step event, the trace, and the live log — can read it. Omitting it
+     here made reasoning invisible everywhere, because the engine, the trace and
+     the live log all read this object rather than the raw provider body. */
+  if (reasoning && reasoning.length > 0) message.reasoning = reasoning;
+  if (toolCalls.length) {
+    message.tool_calls = toolCalls.map((call) => ({
+      id: call.id,
+      type: 'function',
+      function: { name: call.name, arguments: JSON.stringify(call.input ?? {}) },
+      ...(call.providerOptions ? { providerOptions: call.providerOptions } : {}),
+    }));
+  }
+  const tokens = asRecord(usage);
+  return {
+    id: `athena-${Date.now()}`,
+    object: 'chat.completion',
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [{ index: 0, message, finish_reason: normalizedFinishReason(finishReason, toolCalls.length > 0) }],
+    usage: {
+      prompt_tokens: typeof tokens.inputTokens === 'number' ? tokens.inputTokens : 0,
+      completion_tokens: typeof tokens.outputTokens === 'number' ? tokens.outputTokens : 0,
+      total_tokens: toUsageTokens(usage),
+    },
+  };
+}
+
+function toolCallsFrom(content: unknown): Array<{ id: string; name: string; input: unknown; providerOptions?: unknown }> {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((partValue) => {
+    const part = asRecord(partValue);
+    if (part.type !== 'tool-call' || typeof part.toolCallId !== 'string' || typeof part.toolName !== 'string') return [];
+    return [{
+      id: part.toolCallId,
+      name: part.toolName,
+      input: part.input,
+      ...(part.providerOptions ? { providerOptions: part.providerOptions } : {}),
+    }];
+  });
+}
+
+async function callSelectedTarget(
   target: TargetReference,
-  opts: LLMOptions,
-  body: Record<string, unknown>,
+  options: LLMOptions,
+  streaming: boolean,
   label: string,
-  tried: string[],
-): Promise<ProviderSuccess & { fullContent?: string } | ProviderFailure | null> {
-  const model = target.model;
+): Promise<AttemptResult | null> {
+  const settings = loadSettings();
+  const provider = settings.providers[target.id];
+  if (!provider?.enabled) return null;
+  const resolution = resolveProvider(target.id, provider);
+  if (!resolution.ok) return null;
+  const scopeId = `${target.id}/${target.model}`;
+  let lastFailure: FailureReason = 'transient';
+  let lastDetail: string | undefined;
+  let lastObservations: CapacityObservation[] | undefined;
 
-  const store = loadSettings();
-  const provider = store.providers[target.id];
-  if (!provider || provider.keys.length === 0) {
-    tried.push(`${target.id}/${model} -> no keys`);
-    return null;
-  }
+  for (const { key: apiKey } of resolution.provider.apiKeys) {
+    let responseHeaders: Headers | null = null;
+    const trackedFetch: typeof fetch = async (input, init) => {
+      const response = await fetch(input, init);
+      responseHeaders = response.headers;
+      return response;
+    };
+    const created = createLanguageModel(target.id, target.model, provider, trackedFetch, apiKey);
+    if (!created.ok) return null;
+    const model = created.model;
+    const contextChars = options.messages.reduce((n: number, m) => {
+      const content = (m as { content?: unknown }).content;
+      return n + (typeof content === 'string' ? content.length : 0);
+    }, 0);
+    const timeoutMs = llmTotalTimeoutMs(contextChars, options.finalAnswer ? options.responseLength ?? null : null);
+    const streamingTimeout = streaming
+      ? createStreamingTimeout(options.signal, timeoutMs)
+      : null;
+    const signal = streamingTimeout ? streamingTimeout.signal : createTimeoutSignal(options.signal, timeoutMs);
+    const modelTools = toSdkTools(options.tools);
+    const providerOptions = modelProviderOptions(target, provider, resolution.provider.npm, options.reasoningEffort) as Parameters<typeof generateText>[0]['providerOptions'];
+    /* The leading system prompt travels via the SDK's `system` option, not as
+       a message in the array. Mid-array system messages trigger the SDK's
+       prompt-injection warning on every call, so the engine keeps exactly one
+       system message (the base prompt, always first) and everything dynamic
+       travels as user messages. */
+    const converted = toModelMessages(options.messages);
+    const leading = converted.length > 0 && (converted[0] as { role?: string }).role === 'system' ? converted[0] : null;
+    const rest = leading ? converted.slice(1) : converted;
+    const leadingText = leading ? (leading as { content?: unknown }).content : undefined;
+    const common = {
+      model,
+      ...(typeof leadingText === 'string' && leadingText.length > 0 ? { system: leadingText } : {}),
+      messages: rest,
+      temperature: options.temperature ?? 0.7,
+      ...(options.maxTokens === undefined ? {} : { maxOutputTokens: options.maxTokens }),
+      ...(modelTools ? { tools: modelTools, toolChoice: toSdkToolChoice(options.toolChoice) } : {}),
+      ...(providerOptions ? { providerOptions } : {}),
+      abortSignal: signal,
+      maxRetries: 0,
+    };
 
-  const isGemini = target.id === 'gemini';
-  const reqBody: Record<string, unknown> = isGemini
-    ? convertToGeminiBody(body, model, provider)
-    : { ...body, model, stream: true };
-
-  if (!isGemini) {
-    const supportsThinking = !provider.disabledThinkingModels || !provider.disabledThinkingModels.includes(model);
-    if (supportsThinking && provider.reasoningEffort) {
-      const allowedValues = target.id === 'groq' ? ['none', 'default'] : ['low', 'medium', 'high'];
-      if (allowedValues.includes(provider.reasoningEffort)) {
-        reqBody.reasoning_effort = provider.reasoningEffort;
-      }
-    }
-  }
-
-  const effectiveUrl = isGemini ? buildGeminiUrl(provider.url, model, true) : target.url;
-
-  let lastError: ProviderErrorKind | null = null;
-  let lastErrorObservations: CapacityObservation[] | null = null;
-
-  for (const apiKey of provider.keys) {
     try {
-      const { signal, cleanup } = makeRequestSignal(opts.tools ? 60000 : 30000, opts.signal);
-      try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        if (isGemini) {
-          headers['x-goog-api-key'] = apiKey;
-        } else {
-          headers['Authorization'] = `Bearer ${apiKey}`;
-        }
-
-        const res = await fetch(effectiveUrl, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(reqBody),
-          signal,
-        });
-
-        if (res.status === 429) {
-          const retryAfterMs = parseRetryAfterMs(res);
-          recordRateLimitHit(retryAfterMs);
-          tried.push(`${target.id}/${model} -> rate limited (key ${apiKey.slice(-6)})`);
-          logError(label, effectiveUrl, 429, `Rate limited for ${model}. Key ending in: ${apiKey.slice(-6)}`);
-          lastError = 'rate-limit';
-          lastErrorObservations = [{
-            scopeId: `${target.id}/${model}`,
-            source: 'retry-after',
-            observedAt: new Date().toISOString(),
-            retryAfterSeconds: retryAfterMs && retryAfterMs > 0 ? retryAfterMs / 1000 : null,
-          }];
-          continue;
-        }
-        if (res.status === 401) {
-          tried.push(`${target.id}/${model} -> unauthorized`);
-          if (lastError !== 'rate-limit') lastError = 'auth';
-          continue;
-        }
-        if (res.status === 400 || res.status === 404 || res.status === 413) {
-          const errBody = await res.text().catch(() => '');
-          tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-          logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
-          if (!lastError) lastError = 'transient';
-          continue;
-        }
-        if (!res.ok) {
-          const errBody = await res.text().catch(() => '');
-          tried.push(`${target.id}/${model} -> HTTP ${res.status}`);
-          logError(label, effectiveUrl, res.status, `Model: ${model}\n${errBody}`);
-          if (!lastError) lastError = 'transient';
-          continue;
-        }
-
-        let fullContent = '';
-        const stripper = new ThinkStripper(opts.onToken, { value: '' });
-
-        if (!res.body) {
-          console.log(`[LLM] [${label}] ${target.id}/${model}: response body is empty (no stream)`);
-          if (!lastError) lastError = 'transient';
-          continue;
-        }
-
-        // Accumulators for tool calls, finish reason, and reasoning content
-        const toolCallAccumulators = new Map<number, Record<string, unknown>>();
-        let reasoningContent = '';
-        let lastFinishReason: string | null = null;
-        let sseLinesSeen = 0;
-        let jsonLinesParsed = 0;
-        let jsonParseErrors = 0;
-        let contentChunksSeen = 0;
-        let toolCallChunksSeen = 0;
-        let nonSseBuffer = '';
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            if (trimmed === 'data: [DONE]') {
-              console.log(`[LLM] [${label}] ${target.id}/${model}: stream [DONE] received`);
-              continue;
+      if (streaming) {
+        const result = streamText(common);
+        let streamError: unknown;
+        try {
+          for await (const chunk of result.fullStream) {
+            /* Every text chunk restarts the idle timer: a flowing stream is
+               never cut for being long, only a stalled one is. */
+            if (chunk.type === 'text-delta') {
+              streamingTimeout?.chunk();
+              options.onToken?.(chunk.text);
             }
-            if (!trimmed.startsWith('data: ')) {
-              nonSseBuffer += trimmed;
-              console.log(`[LLM] [${label}] ${target.id}/${model}: non-SSE line (buffered): ${trimmed.slice(0, 200)}`);
-              continue;
-            }
-            sseLinesSeen++;
-            try {
-              const json = JSON.parse(trimmed.slice(6));
-              jsonLinesParsed++;
-
-              const choiceFinish = json.choices?.[0]?.finish_reason as string | undefined;
-              const candidateFinish = json.candidates?.[0]?.finishReason as string | undefined;
-              if (choiceFinish) lastFinishReason = choiceFinish;
-              if (candidateFinish) lastFinishReason = candidateFinish;
-
-              if (isGemini) {
-                const text = extractDeltaText(json);
-                if (text) {
-                  contentChunksSeen++;
-                  stripper.process(text); fullContent += text;
-                }
-                const candidates = json.candidates as Record<string, unknown>[] | undefined;
-                if (candidates?.length) {
-                  const parts = (candidates[0]?.content as Record<string, unknown> | undefined)?.parts as Record<string, unknown>[] | undefined;
-                  if (parts) {
-                    for (const part of parts) {
-                      const fc = part.functionCall as Record<string, unknown> | undefined;
-                      if (fc) {
-                        toolCallChunksSeen++;
-                        const tcIndex = toolCallAccumulators.size;
-                        const tc: Record<string, unknown> = {
-                          id: `call_${Date.now()}_${tcIndex}`,
-                          type: 'function',
-                          function: { name: fc.name as string, arguments: JSON.stringify(fc.args || {}) },
-                        };
-                        if (part.thoughtSignature) tc.thought_signature = part.thoughtSignature as string;
-                        toolCallAccumulators.set(tcIndex, tc);
-                      }
-                    }
-                  }
-                }
-              } else {
-                const delta = json.choices?.[0]?.delta;
-                if (delta?.content) {
-                  contentChunksSeen++;
-                  const cleaned = stripThinkingTags(delta.content);
-                  if (cleaned) { stripper.process(cleaned); fullContent += cleaned; }
-                }
-                const rc = delta?.reasoning_content ?? delta?.reasoning;
-                if (rc && typeof rc === 'string') {
-                  reasoningContent += rc;
-                }
-                if (delta?.tool_calls) {
-                  toolCallChunksSeen++;
-                  for (const tc of (delta.tool_calls as Record<string, unknown>[])) {
-                    const idx = tc.index as number;
-                    let acc = toolCallAccumulators.get(idx);
-                    if (!acc) {
-                      acc = { id: '', type: 'function', function: { name: '', arguments: '' } };
-                      toolCallAccumulators.set(idx, acc);
-                    }
-                    if (tc.id) acc.id = tc.id as string;
-                    const fn = acc.function as Record<string, unknown>;
-                    const tcFn = tc.function as Record<string, unknown> | undefined;
-                    if (tcFn?.name) fn.name = tcFn.name as string;
-                    if (tcFn?.arguments) fn.arguments = (fn.arguments as string) + (tcFn.arguments as string);
-                  }
-                }
-              }
-            } catch (err) {
-              jsonParseErrors++;
-              console.log(`[LLM] [${label}] ${target.id}/${model}: malformed JSON in SSE line: ${trimmed.slice(0, 200)} — ${err instanceof Error ? err.message : String(err)}`);
-            }
+            if (chunk.type === 'error') streamError = chunk.error;
           }
+        } finally {
+          streamingTimeout?.dispose();
         }
-        stripper.flush();
-
-        if (sseLinesSeen === 0 && nonSseBuffer.trim().length > 0) {
-          try {
-            const parsed = JSON.parse(nonSseBuffer.trim());
-            console.log(`[LLM] [${label}] ${target.id}/${model}: non-SSE fallback parse succeeded`);
-            if (isGemini) {
-              parseNonSseGeminiResponse(parsed, { value: fullContent }, toolCallAccumulators, opts.onToken);
-            } else {
-              parseNonSseOpenAiResponse(parsed, { value: fullContent }, toolCallAccumulators, opts.onToken);
-            }
-          } catch (err) {
-            console.log(`[LLM] [${label}] ${target.id}/${model}: non-SSE fallback parse failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }
-
-        console.log(`[LLM] [${label}] ${target.id}/${model}: stream summary — sseLines=${sseLinesSeen}, parsed=${jsonLinesParsed}, parseErrors=${jsonParseErrors}, contentChunks=${contentChunksSeen}, toolCallChunks=${toolCallChunksSeen}, finishReason=${lastFinishReason ?? '(none)'}, fullContentBytes=${fullContent.length}, toolCalls=${toolCallAccumulators.size}`);
-
-        const hasContent = fullContent.trim().length > 0;
-        const hasToolCalls = toolCallAccumulators.size > 0;
-        if (!hasContent && !hasToolCalls) {
-          tried.push(`${target.id}/${model} -> empty stream (finish_reason: ${lastFinishReason || 'unknown'})`);
-          console.log(`[LLM] [${label}] ${target.id}/${model}: empty stream, will try next key/provider`);
-          if (!lastError) lastError = 'transient';
-          continue;
-        }
-
-        recordRateLimitSuccess();
-
-        const accumulatedTools = Array.from(toolCallAccumulators.values());
-        const finishReason = lastFinishReason || 'stop';
-        const normalizedFinishReason = finishReason === 'STOP' ? 'stop' : (finishReason === 'TOOL_CALLS' ? 'tool_calls' : finishReason.toLowerCase());
-        const message: Record<string, unknown> = { role: 'assistant', content: fullContent || null };
-        if (reasoningContent) message.reasoning = reasoningContent;
-        if (accumulatedTools.length > 0) message.tool_calls = accumulatedTools;
-
-        const data = {
-          id: `stream-${model}-${Date.now()}`,
-          object: 'chat.completion',
-          created: Math.floor(Date.now() / 1000),
-          model,
-          choices: [{ index: 0, message, finish_reason: normalizedFinishReason }],
+        if (streamError) throw streamError;
+        const [text, content, finishReason, usage, reasoningText] = await Promise.all([
+          result.text,
+          result.content,
+          result.finishReason,
+          result.totalUsage,
+          result.reasoningText,
+        ]);
+        const toolCalls = toolCallsFrom(content);
+        return {
+          ok: true,
+          data: engineResponse(text, toolCalls, finishReason, target.model, usage, reasoningText),
+          fullContent: text,
+          usage: toTokenUsage(usage),
+          observations: responseHeadersToObservations(responseHeaders, scopeId),
         };
-
-        const obs = parseRateLimitHeaders(res, `${target.id}/${model}`);
-        return { ok: true, data, fullContent, provider: target.id, model, observations: obs.length > 0 ? obs : undefined };
-      } finally {
-        cleanup();
       }
-    } catch (err: unknown) {
-      tried.push(`${target.id}/${model} -> request failed`);
-      logError(label, effectiveUrl, 0, `Model: ${model}\n${err instanceof Error ? err.message : String(err)}`);
-      if (!lastError) lastError = 'transient';
+
+      const result = await generateText(common);
+      const toolCalls = toolCallsFrom(result.content);
+      return {
+        ok: true,
+        data: engineResponse(result.text, toolCalls, result.finishReason, target.model, result.totalUsage, result.reasoningText),
+        usage: toTokenUsage(result.totalUsage),
+        observations: responseHeadersToObservations(responseHeaders, scopeId),
+      };
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      const status = statusCodeOf(error);
+      const errorHeaders = errorHeadersOf(error) ?? responseHeaders;
+      if (status === 429) {
+        lastFailure = 'rate-limit';
+        /* The wait is recorded as an observation and handed to smart routing,
+           which is what decides when this route may be used again. */
+        const waitMs = retryAfterMs(errorHeaders);
+        lastObservations = [{
+          scopeId,
+          source: 'retry-after',
+          observedAt: new Date().toISOString(),
+          retryAfterSeconds: waitMs === null ? null : waitMs / 1000,
+        }];
+      } else if (status === 401 || status === 403) {
+        lastFailure = 'auth';
+      } else {
+        lastFailure = 'transient';
+      }
+      lastDetail = error instanceof Error ? error.message : String(error);
+      logError(label, target.url, status ?? 0, error instanceof Error ? error.message : String(error));
     }
   }
-  return lastError ? { ok: false, reason: lastError, observations: lastErrorObservations ?? undefined } : null;
+  return { ok: false, reason: lastFailure, observations: lastObservations, detail: lastDetail };
 }
 
 async function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < ms) {
     if (signal?.aborted) throw new Error('cancelled');
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(200, ms)));
   }
 }
 
-export async function callLLM(opts: LLMOptions): Promise<LLMResult> {
-  const label = opts.label || 'callLLM';
-  const body = buildLLMRequestBody(opts);
+async function runLLM(options: LLMOptions, streaming: boolean): Promise<LLMResult> {
+  const label = options.label || (streaming ? 'callLLMStream' : 'callLLM');
   const tried: string[] = [];
   const startTime = Date.now();
-  const MAX_LOOP_MS = 120000;
+  const maxDurationMs = 120_000;
+  /* A single route that is merely busy must not end the run. The same
+     `withRetry` that protects search and fetch wraps each attempt here, so a
+     429 from a busy provider is waited out instead of dropped. Previously the
+     loop below spun on `getMinRecoveryMs()` without ever issuing a second
+     request: a 429 at second two became a dead run at second 120, and the
+     message said targets were exhausted when the only target was asleep. */
+  const retryDelays = getConfig().research.retryDelaysMs;
+  /* Counts real requests, not loop turns, so the closing message can tell the
+     difference between "tried five times" and "spun for two minutes". */
+  let attempts = 0;
 
-  while (Date.now() - startTime < MAX_LOOP_MS) {
-    if (opts.signal?.aborted) throw new Error(`${label} cancelled`);
-
-    const selection = smartRouting.selectTarget(opts.role);
+  while (Date.now() - startTime < maxDurationMs) {
+    if (options.signal?.aborted) throw new Error(`${label} cancelled`);
+    const selection = smartRouting.selectTarget(options.role, {
+      toolCall: Boolean(options.tools?.length),
+      reasoning: Boolean(options.reasoningEffort && options.reasoningEffort !== 'none' && options.reasoningEffort !== 'minimal'),
+    });
     if (!selection) {
+      /* Every route is cooling off. Wait for the shortest recovery and try
+         again, bounded by the same deadline as the rest of the loop. Before
+         this, one target out of one that was merely busy ended the run. */
       const waitMs = smartRouting.getMinRecoveryMs();
-      if (waitMs && waitMs > 0) {
-        await sleepWithSignal(Math.min(waitMs, 30000), opts.signal);
+      const remaining = maxDurationMs - (Date.now() - startTime);
+      if (waitMs && waitMs > 0 && remaining > 0) {
+        await sleepWithSignal(Math.min(waitMs, remaining), options.signal);
         continue;
       }
-      throw new Error(`${label} — all targets are blocked or unavailable.\n${tried.map(r => `  • ${r}`).join('\n')}`);
+      throw new Error(`${label} - all targets are blocked or unavailable.\n${tried.map((item) => `  • ${item}`).join('\n')}`);
     }
 
-    if (opts.onModelSelected) {
-      opts.onModelSelected(selection.target.model, selection.target.id);
+    options.onModelSelected?.(selection.target.model, selection.target.id);
+    /* Recorded before the call so a run that dies mid-flight still shows which
+       route was taken and what was sent to it. */
+    if (options.traceId) {
+      traceEvent(options.traceId, 'llm.attempt', {
+        label,
+        role: options.role,
+        target: `${selection.target.id}/${selection.target.model}`,
+        stream: streaming,
+        temperature: options.temperature ?? 0.7,
+        reasoning_effort: options.reasoningEffort ?? null,
+        tools: (options.tools ?? []).map((t) => {
+          const fn = (t as { function?: { name?: string } }).function;
+          return fn?.name ?? 'unknown';
+        }),
+messages: summarizeMessages(options.messages),
+  /* The summary above counts the conversation but cannot be audited. A question
+     about where a wrong claim came from — which page the model read, what the
+     page actually said, whether the model contradicted it — needs the prompt as
+     sent, and the summary had no copy of it. The JSONL line grows with the
+     context, so a long run produces a large file; that is the trade for being
+     able to answer the question at all, and it is opt-in with the rest of the
+     trace. */
+  messages_full: options.messages,
+  }, options.traceRound);
+      traceLive(
+        options.traceId,
+        `ROUND ${options.traceRound ?? '?'} LLM INPUT (${selection.target.id}/${selection.target.model})`,
+        formatMessagesFull(options.messages),
+      );
     }
-
-    const result = await tryProvider(selection.target, opts, body, label, tried);
-    if (result && result.ok) {
+    /* `callSelectedTarget` reports a failure by returning `{ok:false}` rather
+       than throwing, because it already handled the provider error. `withRetry`
+       retries on a throw, so this adapter turns a retryable failure into one.
+       An auth failure is deliberately not thrown: a revoked or wrong key will
+       not fix itself, and retrying it five times just delays the real error. */
+    const callOnce = async (): Promise<AttemptResult | null> => {
+      attempts++;
+      const r = await callSelectedTarget(selection.target, options, streaming, label);
+      if (r === null || r.ok) return r;
+      if (r.reason === 'auth') return r;
+      const err = new Error(
+        `${selection.target.id}/${selection.target.model} -> ${r.reason}${r.detail ? `: ${r.detail}` : ''}`,
+      ) as Error & { retryable: true };
+      err.retryable = true;
+      throw err;
+    };
+    let retryAfter: number | undefined;
+    const attempt = await withRetry(label, retryDelaysForFinalAnswer(retryDelays, options.finalAnswer), callOnce, {
+      signal: options.signal,
+      retryAfterMs: () => retryAfter,
+      onRetry: (info) => {
+        if (options.traceId) {
+          traceEvent(options.traceId, 'llm.retry', {
+            label,
+            target: `${selection.target.id}/${selection.target.model}`,
+            attempt: info.attempt,
+            delay_ms: info.delayMs,
+            reason: info.error,
+          }, options.traceRound);
+        }
+      },
+    });
+    const result = attempt.ok ? (attempt.value ?? null) : null;
+    if (result?.ok) {
+      if (options.traceId) {
+        /* Same shape the engine reads: choices[0].message. Anything else
+           records empty fields while the run itself works fine. */
+        const dataRec = asRecord(result.data);
+        const choices = Array.isArray(dataRec.choices) ? dataRec.choices : [];
+        const choiceMsg = asRecord(choices[0]);
+        const choiceMessage = asRecord(choiceMsg.message ?? choiceMsg);
+        const choiceCalls = Array.isArray(choiceMessage.tool_calls)
+          ? choiceMessage.tool_calls.map((c) => {
+            const fn = asRecord(asRecord(c).function);
+            return { name: String(fn.name ?? 'unknown'), arguments: fn.arguments };
+          })
+          : [];
+        traceEvent(options.traceId, 'llm.response', {
+          label,
+          target: `${selection.target.id}/${selection.target.model}`,
+          text: typeof choiceMessage.content === 'string' ? choiceMessage.content : null,
+          reasoning: choiceMessage.reasoning ?? choiceMessage.reasoning_content ?? null,
+          tool_calls: choiceCalls,
+          finish_reason: choiceMsg.finish_reason ?? choiceMsg.finishReason ?? null,
+          usage: result.usage,
+        }, options.traceRound);
+        const calls = choiceCalls.length > 0
+          ? choiceCalls.map((c) => `[tool_call ${c.name}]\n${typeof c.arguments === 'string' ? c.arguments : JSON.stringify(c.arguments ?? {})}`).join('\n')
+          : '(no tool calls)';
+        const responseText = typeof choiceMessage.content === 'string' ? choiceMessage.content : null;
+        const responseReasoning = choiceMessage.reasoning ?? choiceMessage.reasoning_content;
+        traceLive(
+          options.traceId,
+          `ROUND ${options.traceRound ?? '?'} LLM OUTPUT (finish: ${String(choiceMsg.finish_reason ?? choiceMsg.finishReason ?? 'unknown')})`,
+          `--- TEXT ---\n${responseText ?? '(no text)'}\n\n--- REASONING ---\n${typeof responseReasoning === 'string' && responseReasoning ? responseReasoning : '(none)'}\n\n--- TOOL CALLS ---\n${calls}`,
+        );
+      }
       smartRouting.recordOutcome(selection.leaseId, 'success', {
         observations: result.observations,
         usage: result.usage,
         detail: `${selection.target.id}/${selection.target.model}`,
       });
       smartRouting.saveSnapshot();
-      return { data: result.data, model: result.model, provider: result.provider };
+      return {
+        data: result.data,
+        fullContent: result.fullContent,
+        model: selection.target.model,
+        provider: selection.target.id,
+        usage: result.usage,
+      };
     }
 
-    if (result === null) {
-      smartRouting.recordOutcome(selection.leaseId, 'transient-failure', { detail: 'Model skipped (no keys or unsupported)' });
+    if (!attempt.ok) {
+      /* withRetry exhausted its attempts and the error carries the real
+         failure. Reporting it as "no enabled keys" sent the reader looking for
+         a missing key while the provider was timing out (measured
+         `j-mRe99qbCJUfv`). */
+      const reason = attempt.error ?? `${selection.target.id}/${selection.target.model} failed after retries`;
+      tried.push(reason);
+      smartRouting.recordOutcome(selection.leaseId, 'transient-failure', { detail: reason });
+    } else if (result === null) {
+      tried.push(`${selection.target.id}/${selection.target.model} -> no enabled keys`);
+      smartRouting.recordOutcome(selection.leaseId, 'transient-failure', { detail: 'Model skipped (no enabled key)' });
     } else {
-      const kind = result.reason === 'auth' ? 'auth-failure' : result.reason === 'transient' ? 'transient-failure' : result.reason;
+      const kind = result.reason === 'auth' ? 'auth-failure' : result.reason === 'rate-limit' ? 'rate-limit' : 'transient-failure';
+      tried.push(`${selection.target.id}/${selection.target.model} -> ${result.reason}${result.detail ? `: ${result.detail}` : ''}`);
       smartRouting.recordOutcome(selection.leaseId, kind, {
         observations: result.observations,
         detail: `${selection.target.id}/${selection.target.model} -> ${result.reason}`,
       });
     }
+    /* Why a route was dropped is the single most useful line when a run ends
+       badly, so failures are recorded as loudly as successes. */
+    if (options.traceId) {
+      traceEvent(options.traceId, 'llm.error', {
+        label,
+        target: `${selection.target.id}/${selection.target.model}`,
+        reason: !attempt.ok
+          ? (attempt.error ?? 'failed after retries')
+          : result === null ? 'no enabled keys' : result.reason,
+        tried_so_far: tried,
+        observations: result && 'observations' in result ? result.observations : [],
+      }, options.traceRound);
+    }
     smartRouting.saveSnapshot();
   }
 
-  throw new Error(`${label} — all targets exhausted or timed out.\n${tried.map(r => `  • ${r}`).join('\n')}`);
+  /* "Exhausted" is only true when there was nothing left to try. A single route
+     that stayed busy is a timeout, and saying otherwise sent the reader looking
+     for a fallback model that does not exist. */
+  const distinctRoutes = new Set(tried.map((item) => item.split(' -> ')[0]));
+  const stillRoutable = distinctRoutes.size > 0 && distinctRoutes.size < configuredRouteCount();
+  const summary = stillRoutable
+    ? `${label} — the only configured route stayed unavailable for ${Math.round((Date.now() - startTime) / 1000)}s after ${attempts} attempts.`
+    : `${label} — all targets exhausted or timed out after ${attempts} attempts.`;
+  const exhausted = new Error(`${summary}\n${tried.map((item) => `  • ${item}`).join('\n')}`);
+  if (options.traceId) {
+    traceEvent(options.traceId, 'llm.error', {
+      label,
+      reason: stillRoutable ? 'only route unavailable' : 'all targets exhausted',
+      attempts,
+      elapsed_ms: Date.now() - startTime,
+      tried,
+    }, options.traceRound);
+  }
+  throw exhausted;
 }
 
-export async function callLLMStream(opts: LLMOptions): Promise<LLMResult> {
-  const label = opts.label || 'callLLMStream';
-  const body = buildLLMRequestBody(opts);
-  const tried: string[] = [];
-  const startTime = Date.now();
-  const MAX_LOOP_MS = 120000;
-
-  while (Date.now() - startTime < MAX_LOOP_MS) {
-    if (opts.signal?.aborted) throw new Error(`${label} cancelled`);
-
-    const selection = smartRouting.selectTarget(opts.role);
-    if (!selection) {
-      const waitMs = smartRouting.getMinRecoveryMs();
-      if (waitMs && waitMs > 0) {
-        await sleepWithSignal(Math.min(waitMs, 30000), opts.signal);
-        continue;
-      }
-      throw new Error(`${label} — all targets are blocked or unavailable.\n${tried.map(r => `  • ${r}`).join('\n')}`);
+/**
+ * How many routes are configured, used only to word the failure correctly.
+ * A run with one provider and one model is the common case here, and it is the
+ * case where "all targets exhausted" is the wrong thing to say.
+ */
+function configuredRouteCount(): number {
+  try {
+    const providers = loadSettings().providers;
+    let count = 0;
+    for (const provider of Object.values(providers)) {
+      if (provider.enabled === false) continue;
+      count += provider.models?.length ?? 0;
     }
-
-    if (opts.onModelSelected) {
-      opts.onModelSelected(selection.target.model, selection.target.id);
-    }
-
-    const result = await tryProviderStream(selection.target, opts, body, label, tried);
-    if (result && result.ok) {
-      smartRouting.recordOutcome(selection.leaseId, 'success', {
-        observations: result.observations,
-        usage: result.usage,
-        detail: `${selection.target.id}/${selection.target.model}`,
-      });
-      smartRouting.saveSnapshot();
-      return { data: result.data, fullContent: result.fullContent, model: result.model, provider: result.provider };
-    }
-
-    if (result === null) {
-      smartRouting.recordOutcome(selection.leaseId, 'transient-failure', { detail: 'Model skipped (no keys or unsupported)' });
-    } else {
-      const kind = result.reason === 'auth' ? 'auth-failure' : result.reason === 'transient' ? 'transient-failure' : result.reason;
-      smartRouting.recordOutcome(selection.leaseId, kind, {
-        observations: result.observations,
-        detail: `${selection.target.id}/${selection.target.model} -> ${result.reason}`,
-      });
-    }
-    smartRouting.saveSnapshot();
+    return count;
+  } catch {
+    return 0;
   }
+}
 
-  throw new Error(`${label} — all targets exhausted or timed out.\n${tried.map(r => `  • ${r}`).join('\n')}`);
+export async function callLLM(options: LLMOptions): Promise<LLMResult> {
+  return runLLM(options, false);
+}
+
+export async function callLLMStream(options: LLMOptions): Promise<LLMResult> {
+  return runLLM(options, true);
+}
+
+export function stripThinkingTags(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<think>[\s\S]*$/gi, '')
+    .replace(/<\/?think>/gi, '')
+    .trim();
+}
+
+/**
+ * Reasoning that arrived embedded in `<think>` blocks rather than in a
+ * dedicated field. Kept verbatim for the conversation: stripping it for
+ * display must never delete the deliberation a thinking model works from.
+ */
+export function extractThinkBlockText(text: string): string | null {
+  const blocks = [...text.matchAll(/<think>([\s\S]*?)(?:<\/think>|$)/gi)];
+  const kept = blocks.map((block) => block[1].trim()).filter((part) => part.length > 0);
+  return kept.length > 0 ? kept.join('\n\n') : null;
 }

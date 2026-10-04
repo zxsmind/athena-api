@@ -1,22 +1,24 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from 'fs';
-import { dirname, resolve } from 'path';
-import { fileURLToPath } from 'url';
-import type { DeepDepth, ResolvedResearchPreset } from './depth-presets.js';
+import { resolve } from 'path';
+import type { BudgetState, ReasoningEffort, ResearchPreset, ResearchVerbosity } from './modes.js';
 import type { SourceWithIndex } from './types.js';
+import { getDataPath } from '../storage.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const checkpointDir = resolve(__dirname, '..', '..', 'data', 'research-checkpoints');
+const checkpointDir = getDataPath('research-checkpoints');
 
 export interface ResearchCheckpoint {
   jobId: string;
   query: string;
-  depth: DeepDepth;
-  preset: ResolvedResearchPreset;
-  notebookId: string;
-  usedCredits: number;
-  remainingCredits: number;
+  /** Carries the mode inside it, so a resume never needs a second field. */
+  preset: ResearchPreset;
+  budget: BudgetState;
+  reasoningEffort?: ReasoningEffort;
+  verbosity?: ResearchVerbosity;
+  researchApi?: boolean;
   round: number;
   sourceMap: SourceWithIndex[];
+  /** The model's explicit sandbox `state` (D4), or null when it never ran code. */
+  sandboxState?: string | null;
   lastUpdatedAt: string;
 }
 
@@ -37,7 +39,11 @@ export function loadResearchCheckpoint(jobId: string): ResearchCheckpoint | null
   const path = checkpointPath(jobId);
   if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, 'utf-8')) as ResearchCheckpoint;
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as ResearchCheckpoint;
+    /* A checkpoint written before usage was tracked per model resumes with an
+       empty ledger. Its token counts stay, but nothing new is claimed as
+       reported, so a resumed job is never billed for unreported tokens. */
+    return { ...parsed, budget: { ...parsed.budget, tokenLedger: parsed.budget.tokenLedger ?? {} } };
   } catch {
     return null;
   }

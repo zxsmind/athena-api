@@ -1,29 +1,47 @@
 {
-  "name": "athena-server",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "prebuild": "cd .. && npm run build --prefix smart-routing-core",
-    "start": "node dist/index.js",
-    "test": "vitest run",
-    "test:watch": "vitest"
-  },
-  "dependencies": {
-    "@mindbox/smart-routing-core": "file:../smart-routing-core",
-    "cors": "^2.8.5",
-    "dotenv": "^16.6.1",
-    "express": "^5.1.0",
-    "pdf-parse": "^2.4.5"
-  },
-  "devDependencies": {
-    "@types/cors": "^2.8.17",
-    "@types/express": "^5.0.3",
-    "@types/node": "^24.12.0",
-    "tsx": "^4.19.4",
-    "typescript": "~5.9.3",
-    "vitest": "^4.1.9"
-  }
+    "name": "athena-server",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "dev": "tsx watch --exclude \"./smart-routing-core/dist/**\" src/index.ts",
+        "build": "tsc",
+        "prebuild": "npm run build --prefix smart-routing-core && node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+        "start": "node dist/index.js",
+        "test": "vitest run",
+        "test:watch": "vitest",
+        "cli": "tsx src/cli.ts"
+    },
+    "dependencies": {
+        "@ai-sdk/anthropic": "^3.0.125",
+        "@ai-sdk/google": "^3.0.129",
+        "@ai-sdk/openai": "^3.0.121",
+        "@ai-sdk/openai-compatible": "^2.0.80",
+        "@inquirer/prompts": "^8.7.2",
+        "@mindbox/smart-routing-core": "file:./smart-routing-core",
+        "@mozilla/readability": "^0.6.0",
+        "@openrouter/ai-sdk-provider": "^2.10.0",
+        "ai": "^6.0.296",
+        "cors": "^2.8.5",
+        "dotenv": "^16.6.1",
+        "express": "^5.1.0",
+        "js-yaml": "^5.4.2",
+        "linkedom": "^0.18.13",
+        "ora": "^9.4.1",
+        "pdf-parse": "^2.4.5",
+        "picocolors": "^1.1.1",
+        "pyodide": "^314.0.7",
+        "zod": "^4.6.5"
+    },
+    "devDependencies": {
+        "@types/cors": "^2.8.17",
+        "@types/express": "^5.0.3",
+        "@types/node": "^24.12.0",
+        "tsx": "^4.19.4",
+        "typescript": "~5.9.3",
+        "vitest": "^4.1.9"
+    },
+    "bin": {
+        "athena": "./dist/cli.js"
+    }
 }
