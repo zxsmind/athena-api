@@ -39,7 +39,8 @@ describe('SEARCH_BACKEND_CHOICES', () => {
     expect(new Set(ids).size).toBe(ids.length);
     expect(ids).toContain('serper');
     expect(ids).toContain('brightdata');
-    expect(ids.length).toBe(14);
+    expect(ids).toContain('freeserp');
+    expect(ids.length).toBe(15);
   });
 
   it('marks only brightdata as needing a zone', () => {

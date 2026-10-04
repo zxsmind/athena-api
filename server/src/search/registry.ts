@@ -13,6 +13,7 @@ import { brightdataProvider } from './brightdata.js';
 import { serplyProvider } from './serply.js';
 import { valyuProvider } from './valyu.js';
 import { jinaProvider } from './jina.js';
+import { freeserpProvider } from './freeserp.js';
 import { applyDepth } from './filter.js';
 import type { SearchOutcome, SearchProvider, WebSearchOptions } from './types.js';
 
@@ -44,6 +45,9 @@ const SEARCH_PROVIDERS: SearchProvider[] = [
   serplyProvider,
   valyuProvider,
   jinaProvider,
+  /* Keyless last: a backend that needs no key must never shadow a keyed one
+     the operator paid for. Explicit `searchProviderOrder` still wins. */
+  freeserpProvider,
 ];
 
 /** Try order: the configured `searchProviderOrder` first, then table order. */

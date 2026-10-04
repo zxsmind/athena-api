@@ -16,7 +16,7 @@ import { getDataPath } from '../storage.js';
 import * as ui from './ui.js';
 
 /** The search backends the setup wizard offers, in try order. */
-export const SEARCH_BACKEND_CHOICES: Array<{ id: string; label: string; needsZone: boolean }> = [
+export const SEARCH_BACKEND_CHOICES: Array<{ id: string; label: string; needsZone: boolean; keyless?: boolean }> = [
   { id: 'serper', label: 'Serper (Google SERP)', needsZone: false },
   { id: 'youcom', label: 'You.com web search', needsZone: false },
   { id: 'serpapi', label: 'SerpApi (Google engine)', needsZone: false },
@@ -31,6 +31,7 @@ export const SEARCH_BACKEND_CHOICES: Array<{ id: string; label: string; needsZon
   { id: 'serply', label: 'Serply Google search', needsZone: false },
   { id: 'valyu', label: 'Valyu web search', needsZone: false },
   { id: 'jina', label: 'Jina Reader search', needsZone: false },
+  { id: 'freeserp', label: 'FreeSerp search (keyless, no key needed)', needsZone: false, keyless: true },
 ];
 
 /**
@@ -51,7 +52,9 @@ export function summarizeProvider(id: string, state: ProviderState): string {
 
 /** One-line summary of a search backend entry. */
 export function summarizeSearch(id: string, state: SearchProviderState): string {
-  const keys = state.keys.length === 1 ? '1 key' : `${state.keys.length} keys`;
+  const keys = state.keyless === true
+    ? 'keyless'
+    : state.keys.length === 1 ? '1 key' : `${state.keys.length} keys`;
   const zone = state.zone ? `, zone ${state.zone}` : '';
   return `${id} — ${keys}${zone}`;
 }
@@ -276,7 +279,8 @@ async function askSearchBackendChoice(settings: SettingsStore, canGoBack: boolea
   const choices: Array<{ value: string; name: string; checked?: boolean }> = SEARCH_BACKEND_CHOICES.map((backend) => ({
     value: backend.id,
     name: backend.label,
-    checked: (settings.searchProviders[backend.id]?.keys.length ?? 0) > 0,
+    checked: (settings.searchProviders[backend.id]?.keys.length ?? 0) > 0 ||
+      settings.searchProviders[backend.id]?.keyless === true,
   }));
   if (canGoBack) choices.push({ value: BACK_CHOICE, name: BACK_LABEL });
   const selected = await checkbox({
@@ -295,8 +299,10 @@ async function configureSearch(settings: SettingsStore, selected: string[]): Pro
   for (const id of selected) {
     const backend = SEARCH_BACKEND_CHOICES.find((item) => item.id === id);
     const existing = settings.searchProviders[id];
-    const keys = await askKeys(existing?.keys ?? [], `API key for ${id}`);
-    const entry: SearchProviderState = { keys };
+    /* Keyless backends need no key prompt: selecting them is the opt-in. */
+    const entry: SearchProviderState = backend?.keyless === true
+      ? { keys: [], keyless: true }
+      : { keys: await askKeys(existing?.keys ?? [], `API key for ${id}`) };
     const url = await input({ message: `${id}: endpoint override (empty = default)`, default: existing?.url ?? '' });
     if (url.trim()) entry.url = url.trim();
     if (backend?.needsZone) {

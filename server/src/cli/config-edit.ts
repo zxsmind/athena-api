@@ -30,10 +30,10 @@ export function readyProviderIds(settings: SettingsStore): string[] {
     .map(([id]) => id);
 }
 
-/** Ids of search backends that hold at least one key. */
+/** Ids of search backends that hold at least one key or are keyless. */
 export function readySearchIds(settings: SettingsStore): string[] {
   return Object.entries(settings.searchProviders)
-    .filter(([, state]) => state.keys.length > 0)
+    .filter(([, state]) => state.keys.length > 0 || state.keyless === true)
     .map(([id]) => id);
 }
 
@@ -74,7 +74,7 @@ export function summarizeSearch(settings: SettingsStore): SearchSummary[] {
     keyCount: state.keys.length,
     zone: state.zone ?? '',
     url: state.url ?? '',
-    ready: state.keys.length > 0,
+    ready: state.keys.length > 0 || state.keyless === true,
   }));
 }
 
@@ -164,6 +164,9 @@ export function upsertSearch(settings: SettingsStore, id: string, patch: Partial
     keys: existing?.keys ?? [],
     ...(existing?.url ? { url: existing.url } : {}),
     ...(existing?.zone ? { zone: existing.zone } : {}),
+    /* Same rule as LLM-side anonymous: editing anything else must not
+       silently un-keyless a keyless backend. */
+    ...(existing?.keyless === true ? { keyless: true } : {}),
     ...patch,
   };
   settings.searchProviders[id] = next;
@@ -216,8 +219,8 @@ export function readiness(settings: SettingsStore): ReadinessReport {
   }
   const searches = readySearchIds(settings);
   if (searches.length === 0) {
-    problems.push('No search backend has an API key.');
-    hints.push('Search and research answer 503 until at least one backend has a key.');
+    problems.push('No search backend has an API key or keyless access.');
+    hints.push('Search and research answer 503 until at least one backend has a key or is keyless.');
   }
   return { ready: problems.length === 0, problems, hints };
 }

@@ -119,6 +119,16 @@ describe('search backend editing', () => {
     expect(settings.searchProviders.serper.keys).toEqual(['b']);
   });
 
+  it('treats a keyless backend as ready and keeps the flag on edit', () => {
+    const settings = store();
+    settings.searchProviders = {};
+    upsertSearch(settings, 'freeserp', { keys: [], keyless: true });
+    expect(readySearchIds(settings)).toEqual(['freeserp']);
+    upsertSearch(settings, 'freeserp', { url: 'https://example.com/api.php' });
+    expect(settings.searchProviders.freeserp.keyless).toBe(true);
+    expect(readySearchIds(settings)).toEqual(['freeserp']);
+  });
+
   it('removes a backend and drops it from the order', () => {
     const settings = store();
     settings.searchProviders = {};

@@ -78,6 +78,11 @@ export interface SearchProviderState {
   keys: string[];
   url?: string;
   zone?: string;
+  /**
+   * True for backends that serve without any key (FreeSerp). Mirrors
+   * `ProviderState.anonymous` on the LLM side: explicit opt-in, never default.
+   */
+  keyless?: boolean;
 }
 
 export interface ModelRoute {
@@ -298,6 +303,7 @@ function normalizeSearchProviderState(value: unknown): SearchProviderState {
   };
   if (typeof v.url === 'string' && v.url.length > 0) out.url = v.url;
   if (typeof v.zone === 'string' && v.zone.length > 0) out.zone = v.zone;
+  if (v.keyless === true) out.keyless = true;
   return out;
 }
 

@@ -21,7 +21,7 @@ export function auditConfiguration(settings: SettingsStore): ConfigAudit {
     .filter(([, state]) => state.enabled && (state.keys.length > 0 || state.anonymous === true))
     .map(([id]) => id);
   const searches = Object.entries(settings.searchProviders)
-    .filter(([, state]) => state.keys.length > 0)
+    .filter(([, state]) => state.keys.length > 0 || state.keyless === true)
     .map(([id]) => id);
 
   const blockers: string[] = [];

@@ -79,4 +79,14 @@ describe('auditConfiguration', () => {
     settings.searchProviders = { serper: { keys: [] } };
     expect(auditConfiguration(settings as unknown as SettingsStore).warnings).toHaveLength(1);
   });
+
+  it('treats a keyless search backend as configured', () => {
+    const settings = withProvider() as unknown as {
+      searchProviders: Record<string, { keys: string[]; keyless?: boolean }>;
+    };
+    settings.searchProviders = { freeserp: { keys: [], keyless: true } };
+    const audit = auditConfiguration(settings as unknown as SettingsStore);
+    expect(audit.warnings).toEqual([]);
+    expect(audit.searches).toEqual(['freeserp']);
+  });
 });

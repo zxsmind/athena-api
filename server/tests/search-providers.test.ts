@@ -26,7 +26,7 @@ function mockFetchJson(payload: unknown, ok = true, status = 200) {
   });
 }
 
-function setSearchKeys(entries: Record<string, { keys: string[]; url?: string; zone?: string }>): void {
+function setSearchKeys(entries: Record<string, { keys: string[]; url?: string; zone?: string; keyless?: boolean }>): void {
   resetSettingsCache();
   resetSearchProviders();
   const settings = loadSettings();
@@ -393,5 +393,60 @@ describe('registry', () => {
 
     const outcome = await searchResults('q', 'search', undefined, 5, {});
     expect(outcome.provider).toBe('tavily');
+  });
+});
+
+describe('freeserp', () => {
+  const payload = {
+    ok: true,
+    query: 'q echoed',
+    results: [
+      { title: 'T', url: 'https://example.com/a', snippet: 'S', published_at: '2026-01-01' },
+      { title: 'No date', url: 'https://example.com/b', snippet: null, published_at: null },
+    ],
+  };
+
+  it('sends no key and maps web results', async () => {
+    setSearchKeys({ freeserp: { keys: [], keyless: true } });
+    vi.stubGlobal('fetch', mockFetchJson(payload));
+
+    const outcome = await searchResults('hello', 'search', undefined, 5, {});
+    expect(lastRequest?.url).toContain('https://freeserp.ai/api.php');
+    expect(lastRequest?.url).toContain('index=web');
+    expect(authHeader(lastRequest!.init)['X-API-KEY']).toBeUndefined();
+    expect(outcome.results).toMatchObject([
+      { id: 1, title: 'T', url: 'https://example.com/a', snippet: 'S', date: '2026-01-01' },
+      { id: 2, title: 'No date', url: 'https://example.com/b', snippet: null, date: null },
+    ]);
+    expect(outcome.queryText).toBe('q echoed');
+    expect(outcome.provider).toBe('freeserp');
+  });
+
+  it('stays unconfigured without the keyless opt-in', async () => {
+    setSearchKeys({ freeserp: { keys: [] } });
+    expect(isSearchProviderConfigured()).toBe(false);
+    await expect(searchResults('q', 'search', undefined, 5, {})).rejects.toBeInstanceOf(
+      SearchProviderNotConfiguredError,
+    );
+  });
+
+  it('serves as keyless last resort behind a failing keyed backend', async () => {
+    setSearchKeys({ serper: { keys: ['bad'] }, freeserp: { keys: [], keyless: true } });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        lastRequest = { url: String(url), init: init ?? {} };
+        if (String(url).includes('serper')) {
+          return { ok: false, status: 500, statusText: 'Error', headers: new Headers(), json: async () => ({}), text: async () => '' } as unknown as Response;
+        }
+        return {
+          ok: true, status: 200, statusText: 'OK', headers: new Headers(),
+          json: async () => payload, text: async () => '',
+        } as unknown as Response;
+      }),
+    );
+
+    const outcome = await searchResults('q', 'search', undefined, 5, {});
+    expect(outcome.provider).toBe('freeserp');
   });
 });
