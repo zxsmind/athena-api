@@ -9,8 +9,9 @@ import {
   loadRecentResearchJobs,
   loadResearchJobEvents,
   pruneResearchJobEvents,
-  saveResearchJobWithEvent,
+  purgePersistedResearchJob,
   saveResearchJobSnapshot,
+  saveResearchJobWithEvent,
 } from './research-job-store.js';
 
 export type ResearchJobStatus = 'queued' | 'planning' | 'searching' | 'reviewing' | 'synthesizing' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused' | 'declined';
@@ -400,25 +401,25 @@ export function cancelStalePausedJobs(ttlMs: number, nowMs: number = Date.now())
   return cancelled;
 }
 
-let pausedSweepTimer: ReturnType<typeof setInterval> | null = null;
+const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled', 'declined']);
 
-/** Hourly sweep for stale paused jobs; runs in production, stopped in tests. */
-export function startPausedJobSweeper(ttlMs: number, intervalMs = 3_600_000): void {
-  stopPausedJobSweeper();
-  pausedSweepTimer = setInterval(() => {
-    try {
-      const cancelled = cancelStalePausedJobs(ttlMs);
-      for (const id of cancelled) console.log(`[paused-sweep] cancelled stale paused job ${id}`);
-    } catch (error) {
-      console.error('[paused-sweep] failed:', error instanceof Error ? error.message : String(error));
-    }
-  }, intervalMs);
-  if (typeof pausedSweepTimer.unref === 'function') pausedSweepTimer.unref();
-}
-
-export function stopPausedJobSweeper(): void {
-  if (pausedSweepTimer) clearInterval(pausedSweepTimer);
-  pausedSweepTimer = null;
+/**
+ * Drops terminal jobs older than the retention window, from memory and from
+ * SQLite (rows and events). Running and paused jobs are never touched no
+ * matter their age; the paused TTL owns those. Returns the purged ids.
+ */
+export function purgeOldJobs(retentionMs: number, nowMs: number = Date.now()): string[] {
+  const purged: string[] = [];
+  for (const job of jobs.values()) {
+    if (!TERMINAL_JOB_STATUSES.has(job.status)) continue;
+    const updatedAt = Date.parse(job.updatedAt);
+    if (!Number.isFinite(updatedAt) || nowMs - updatedAt <= retentionMs) continue;
+    jobs.delete(job.id);
+    listeners.delete(job.id);
+    purgePersistedResearchJob(job.id);
+    purged.push(job.id);
+  }
+  return purged;
 }
 
 /**

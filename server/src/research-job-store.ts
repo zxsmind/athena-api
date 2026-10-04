@@ -93,3 +93,9 @@ export function loadResearchJobEvents(jobId: string, limit: number): string[] {
 export function deletePersistedResearchJob(id: string): void {
   database.prepare('DELETE FROM research_jobs WHERE id = ?').run(id);
 }
+
+/** Removes a job row and every event row with it (no FK cascade is enforced). */
+export function purgePersistedResearchJob(id: string): void {
+  deletePersistedResearchJob(id);
+  database.prepare('DELETE FROM research_job_events WHERE job_id = ?').run(id);
+}

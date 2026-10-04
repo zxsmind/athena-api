@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, readdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { getDataPath } from './storage.js';
 import { logger } from './logger.js';
@@ -218,4 +218,42 @@ export function deleteTrace(jobId: string): boolean {
 
 export function traceFilePath(jobId: string): string {
   return tracePath(jobId);
+}
+
+/**
+ * Deletes trace files older than `maxAgeMs`, by file mtime. Jobs still in
+ * `spareIds` keep their files even when stale: a paused job writes nothing
+ * while it waits, and deleting its trace would blind `athena trace`.
+ * Returns the pruned job ids.
+ */
+export function pruneOldTraces(maxAgeMs: number, spareIds: Set<string> = new Set(), nowMs: number = Date.now()): string[] {
+  if (maxAgeMs <= 0 || !existsSync(tracesDir())) return [];
+  const ids = new Set<string>();
+  for (const name of readdirSync(tracesDir())) {
+    if (name.endsWith('.jsonl')) ids.add(name.replace(/\.jsonl$/, ''));
+    else if (name.endsWith('.live.log')) ids.add(name.replace(/\.live\.log$/, ''));
+  }
+  const pruned: string[] = [];
+  for (const jobId of ids) {
+    if (spareIds.has(jobId)) continue;
+    /* Newest write of either file: a job is stale only when both went quiet. */
+    let mtime = Number.NaN;
+    for (const file of [tracePath(jobId), liveLogPath(jobId)]) {
+      try {
+        const t = statSync(file).mtimeMs;
+        mtime = Number.isFinite(mtime) ? Math.max(mtime, t) : t;
+      } catch {
+        /* A file may vanish between listing and stat; the other decides. */
+      }
+    }
+    if (!Number.isFinite(mtime) || nowMs - mtime <= maxAgeMs) continue;
+    deleteTrace(jobId);
+    try {
+      /* deleteTrace only removes the live log alongside a jsonl; a lone live
+         log needs its own call. */
+      rmSync(liveLogPath(jobId), { force: true });
+    } catch { /* ignore */ }
+    pruned.push(jobId);
+  }
+  return pruned;
 }

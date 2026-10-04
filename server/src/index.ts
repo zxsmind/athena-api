@@ -12,7 +12,7 @@ import { DATA_DIR, getDataPath, resolvedDataDir } from './storage.js';
 import { configureLogger, logger } from './logger.js';
 import { assertConfigured, type ConfigAudit } from './startup-guard.js';
 import { catalogIntervalMsFromHours, setCatalogRefreshIntervalMs, startCatalogRefresh } from './models-dev.js';
-import { cancelStalePausedJobs, startPausedJobSweeper } from './research-jobs.js';
+import { retentionWindows, startRetentionSweeper, sweepRetention } from './application/retention.js';
 import { enableTrace } from './trace.js';
 import { closeAllSandboxes } from './sandbox/manager.js';
 
@@ -58,10 +58,11 @@ app.disable('x-powered-by');
 app.use(cors());
 app.use(express.json({ limit: getConfig().server.jsonBodyLimit }));
 
-/* Paused jobs hold no slot and do no work, but their checkpoints pile up.
-   One sweep at boot plus an hourly pass cancels whatever aged past the TTL. */
-cancelStalePausedJobs(getConfig().research.pausedTtlMinutes * 60_000);
-startPausedJobSweeper(getConfig().research.pausedTtlMinutes * 60_000);
+/* Data retention from config.yaml: one pass at boot, then hourly. Nothing
+   running is ever touched; logs rotate under their own limits. */
+const retention = retentionWindows();
+sweepRetention(retention.pausedTtlMs, retention.retentionMs);
+startRetentionSweeper(retention.pausedTtlMs, retention.retentionMs);
 
 const apiStore = new ApiPlatformStore();
 const meter = new Meter(apiStore);

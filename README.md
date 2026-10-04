@@ -80,6 +80,12 @@ is used; otherwise the platform convention applies:
 
 A read-only checkout, a container, and a notebook runtime all work unchanged.
 
+Growth is capped from `config.yaml`: an hourly sweep cancels paused jobs past
+`research.pausedTtlMinutes` (default 240) and purges terminal jobs, traces,
+and checkpoints past `storage.retentionMinutes` (default 1440). Running jobs
+are never touched. The log file rotates under `logging.maxFileBytes` ×
+`logging.keepFiles`.
+
 ## Docker
 
 ```sh

@@ -45,6 +45,19 @@ describe('checkpoint', () => {
     expect(listResearchCheckpoints()[0]?.jobId).toBe('job-new');
   });
 
+  it('spares checkpoints of live jobs', async () => {
+    const { saveResearchCheckpoint, listResearchCheckpoints, cleanupStaleCheckpoints } = await import('../src/engine/checkpoint.js');
+    const preset = resolveResearchPreset('deep');
+    const budget = { usedSearchCalls: 0, usedFetchCalls: 0, usedTokens: 0, startedAt: Date.now(), usedSteps: 0, usedTurns: 0, exhaustedBy: null };
+    const old = new Date(Date.now() - 86_400_000).toISOString();
+
+    saveResearchCheckpoint({ jobId: 'job-live', query: 'q', preset, budget, round: 1, sourceMap: [], lastUpdatedAt: old });
+    saveResearchCheckpoint({ jobId: 'job-gone', query: 'q', preset, budget, round: 1, sourceMap: [], lastUpdatedAt: old });
+
+    expect(cleanupStaleCheckpoints(60 * 60 * 1000, new Set(['job-live']))).toBe(1);
+    expect(listResearchCheckpoints().map((cp) => cp.jobId)).toEqual(['job-live']);
+  });
+
   it('restores the exact budget counters that were saved', async () => {
     const { saveResearchCheckpoint, loadResearchCheckpoint } = await import('../src/engine/checkpoint.js');
     const preset = resolveResearchPreset('deep');

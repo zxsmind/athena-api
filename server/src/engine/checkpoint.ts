@@ -68,11 +68,14 @@ export function listResearchCheckpoints(): ResearchCheckpoint[] {
   return checkpoints.sort((a, b) => b.lastUpdatedAt.localeCompare(a.lastUpdatedAt));
 }
 
-export function cleanupStaleCheckpoints(maxAgeMs: number): number {
+export function cleanupStaleCheckpoints(maxAgeMs: number, spareIds: Set<string> = new Set()): number {
   if (maxAgeMs <= 0) return 0;
   const now = Date.now();
   let removed = 0;
   for (const cp of listResearchCheckpoints()) {
+    /* A live paused job writes no checkpoint while it waits; deleting it
+       would make resume fail. Retention must stay above the paused TTL. */
+    if (spareIds.has(cp.jobId)) continue;
     const age = now - new Date(cp.lastUpdatedAt).getTime();
     if (Number.isFinite(age) && age > maxAgeMs) {
       deleteResearchCheckpoint(cp.jobId);
