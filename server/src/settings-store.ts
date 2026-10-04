@@ -36,6 +36,12 @@ export interface ProviderState {
   name?: string;
   npm?: string;
   env?: string[];
+  /**
+   * Minimum reasoning the endpoint tolerates. The mode's effort can only go
+   * up from here, never down: an endpoint that rejects disabled reasoning
+   * (Kilo: "reasoning is mandatory") declares its floor here instead of
+   * failing every low-effort round.
+   */
   reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
   includeThoughts?: boolean;
   disabledThinkingModels?: string[];

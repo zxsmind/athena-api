@@ -19,6 +19,25 @@ export interface TargetReference {
 
 export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
+const EFFORT_RANK: Record<ReasoningEffort, number> = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5 };
+/* Wire-safe landing for each rank: `minimal`/`high` exist in settings but
+   never travel the wire, so a floor on either rounds up to `low`/`xhigh`. */
+const RANK_TO_WIRE: ReasoningEffort[] = ['none', 'low', 'low', 'medium', 'xhigh', 'xhigh'];
+
+/**
+ * The provider's `reasoningEffort` is a floor, not a fallback: the round's
+ * effort can only go up from here. Without a floor the round passes through
+ * untouched, so providers that never set one behave exactly as before.
+ */
+export function applyReasoningFloor(
+  round: ReasoningEffort | undefined,
+  floor: ReasoningEffort | undefined,
+): ReasoningEffort | undefined {
+  if (!floor) return round;
+  if (!round) return RANK_TO_WIRE[EFFORT_RANK[floor]];
+  return RANK_TO_WIRE[Math.max(EFFORT_RANK[round], EFFORT_RANK[floor])];
+}
+
 export interface LLMOptions {
   messages: unknown[];
   temperature?: number;
@@ -313,7 +332,7 @@ function toSdkToolChoice(choice: LLMOptions['toolChoice']): ToolChoice<ToolSet> 
 }
 
 function googleOptions(target: TargetReference, provider: ReturnType<typeof loadSettings>['providers'][string], effort?: ReasoningEffort): Record<string, unknown> | undefined {
-  const resolvedEffort = effort ?? provider.reasoningEffort;
+  const resolvedEffort = applyReasoningFloor(effort, provider.reasoningEffort);
   if (!resolvedEffort || provider.disabledThinkingModels?.includes(target.model)) return undefined;
   const modelId = target.model.toLowerCase();
   const includeThoughts = provider.includeThoughts ?? false;
@@ -347,7 +366,7 @@ export function modelProviderOptions(
      a package does not understand is ignored by that package. */
   if (usesGoogleOptions(npm)) return googleOptions(target, provider, effort);
 
-  const resolvedEffort = effort ?? provider.reasoningEffort;
+  const resolvedEffort = applyReasoningFloor(effort, provider.reasoningEffort);
   if (!resolvedEffort || provider.disabledThinkingModels?.includes(target.model)) return undefined;
   /* Generic packages read their own namespace, not the provider id: a custom
      endpoint on the openai-compatible package never saw `sovinfra`, so the
