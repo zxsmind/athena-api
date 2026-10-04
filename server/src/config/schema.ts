@@ -56,10 +56,10 @@ export const researchLimitsSchema = z.object({
   snippetPreviewChars: positiveInt,
 });
 
-/**
- * Lossless offload (Tier 1) plus the summarization tier behind its own flag.
- * See docs/COMPACTION.md. All values provisional until tuned on real traces.
- */
+  /**
+   * Lossless offload (Tier 1) plus the summarization tier behind its own flag.
+   * All values provisional until tuned on real traces.
+   */
 export const compactionConfigSchema = z.object({
   /** Master switch. Off means no offload pass, no emergency retry. */
   enabled: z.boolean(),

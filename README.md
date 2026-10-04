@@ -65,7 +65,7 @@ falling back to a default, and the four research modes are a fixed key set for
 the same reason. `athena about` prints the exact paths.
 
 `config.yaml` is the file to edit to change a research mode's ceilings, its
-reasoning effort, or its quality bar. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+reasoning effort, or its quality bar.
 
 ## Data directory
 
@@ -130,8 +130,7 @@ while the job runs: progress notes, and with `detailed` the raw reasoning
 behind them. Neither changes what the model researches.
 
 A long run compacts: the agent writes durable notes, raw payloads leave the
-context, and the model reads its own notes back on demand. See
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#context-is-the-agents-to-manage).
+context, and the model reads its own notes back on demand.
 
 ## Technology
 
@@ -147,5 +146,4 @@ Unfinished jobs with a checkpoint return `paused` after a restart and need an
 explicit resume. Jobs without one become `failed`. Checkpoints are
 files in the data directory. Use `/v1` for external clients.
 
-Current gaps are listed at the end of [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#known-gaps).
-The important one: long runs have no context management yet.
+Known gap: long runs have no context management yet.

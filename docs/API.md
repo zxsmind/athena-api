@@ -505,7 +505,7 @@ tokens, and they do not count against the job's budget.
 
 ## Billing
 
-Credit plans are described in [BILLING-PLAN.md](BILLING-PLAN.md). In short:
+Credit plans, in short:
 
 | Plan | Research jobs | Tokens |
 |---|---|---|
@@ -514,14 +514,6 @@ Credit plans are described in [BILLING-PLAN.md](BILLING-PLAN.md). In short:
 | `enterprise` | Unset ceilings | negotiated |
 
 A job reserves a concurrency slot when it is created and releases it when it
-finishes, fails, or is cancelled. Exceeding a plan limit returns `429` with the
-limit named in `details`. Cache-read tokens are billed at a fraction of a fresh
-input token and are not charged against the research ceiling.
-
----
-
-## See also
-
-- [ARCHITECTURE.md](ARCHITECTURE.md) — how the system fits together
-- [PROMPTS.md](PROMPTS.md) — the exact prompt the agent receives
-- [BILLING-PLAN.md](BILLING-PLAN.md) — plans, credits, metering
+finishes, fails, is cancelled, or is declined. Exceeding a plan limit returns
+`429` with the limit named in `details`. Cache-read tokens are billed at a
+fraction of a fresh input token and are not charged against the research ceiling.

@@ -1070,7 +1070,7 @@ async function toolCallingRound(
 
 /**
  * Public entry point and engine selector. `sandbox.enabled` runs the code
- * engine ([CODE-EXECUTION-PLAN.md](../../docs/CODE-EXECUTION-PLAN.md)); the
+ * engine (code-engine.ts); the
  * classic loop runs otherwise. They are two engines on a shared spine, not one
  * loop with a switch: the classic path's tools, prompt, ledger and wrap-up
  * counters are code-free, and the code path's prompt never names a classic

@@ -16,7 +16,7 @@ A research request runs an agentic loop: the model calls `web_search` and
 with inline `[N]` citations tied to that job's source registry. Search and
 Contents are deterministic and need no model.
 
-Start with [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Start with [README.md](README.md), then [docs/API.md](docs/API.md).
 
 ## Non-negotiable rules
 
@@ -172,8 +172,7 @@ separate Pyodide process with `fetch` removed and a scrubbed environment; a
 timeout kills it and the next program replays the last exported `state` (D4).
 The classic loop never sees `run_code`, and the code prompt never names a
 classic tool. Measured: offered beside the classic tools, `run_code` was called
-zero times in two live runs. Off by default; the measured numbers and the
-remaining phases live in [docs/CODE-EXECUTION-PLAN.md](docs/CODE-EXECUTION-PLAN.md).
+zero times in two live runs. Off by default.
 
 **Do not assert what you cannot check.** The old compaction note used to say
 "Evidence preserved" while the engine could not verify that the note the model
@@ -193,8 +192,6 @@ better when it does not have to guess.
 | Prompt evaluation | The prompt is regression-tested for wording, not answer quality. No golden set, no scoring. |
 | Parallel tool execution | `maxWorkers` / `maxParallel` were removed rather than reserved. Nothing read them. |
 | Backwards compatibility | Removed on purpose. Do not reintroduce it. |
-
-`docs/ARCHITECTURE.md` has the current list under **Known gaps**.
 
 ## Testing
 
@@ -250,7 +247,7 @@ and delete them when done.
 - [ ] `npx tsc --noEmit`, `npm test`, `npm run build`, `npm run lint` all pass
 - [ ] No new Turkish text anywhere
 - [ ] No new field that is written but never read
-- [ ] Contract changes are reflected in `docs/API.md` and `docs/PROMPTS.md`
+- [ ] Contract changes are reflected in `docs/API.md`
 - [ ] **This file is updated if the architecture changed**
 - [ ] The change is shown to the user before committing
 
@@ -265,8 +262,5 @@ tense, matching the existing style.
 
 | File | Covers |
 |---|---|
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the system fits together, and its known gaps |
 | [docs/API.md](docs/API.md) | The public HTTP contract |
-| [docs/PROMPTS.md](docs/PROMPTS.md) | Exact prompt text and tool schemas |
-| [docs/BILLING-PLAN.md](docs/BILLING-PLAN.md) | Plans, credits, and metering |
 | [README.md](README.md) | Install, run, configure |
