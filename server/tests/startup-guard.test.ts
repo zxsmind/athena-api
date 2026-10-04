@@ -39,6 +39,13 @@ describe('auditConfiguration', () => {
     expect(audit.blockers).toEqual([]);
   });
 
+  it('treats an anonymous provider with no key as ready', () => {
+    const audit = auditConfiguration(withProvider({ keys: [], anonymous: true }));
+    expect(audit.ready).toBe(true);
+    expect(audit.providers).toEqual(['anthropic']);
+    expect(audit.blockers).toEqual([]);
+  });
+
   it('counts every usable provider, not just the first', () => {
     const settings = withProvider() as unknown as {
       providers: Record<string, { enabled: boolean; keys: string[]; models: string[] }>;

@@ -91,7 +91,10 @@ export function resolveProvider(providerId: string, state?: ProviderState): Prov
     const fromEnv = firstNonEmptyEnv(state?.env ?? catalog?.env);
     if (fromEnv) apiKeys.push(fromEnv);
   }
-  if (apiKeys.length === 0) {
+  /* Anonymous endpoints serve keyless callers: an empty key omits the
+     Authorization header downstream, so resolution succeeds with no keys.
+     An explicit key always wins over anonymous. */
+  if (apiKeys.length === 0 && !state?.anonymous) {
     return {
       ok: false,
       error: {

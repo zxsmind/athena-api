@@ -73,6 +73,14 @@ describe('provider editing', () => {
     expect(settings.providers.openai.models).toEqual(['a', 'b']);
   });
 
+  it('keeps anonymous set when a patch touches something else', () => {
+    const settings = store();
+    upsertProvider(settings, 'kilo', { keys: [], anonymous: true });
+    upsertProvider(settings, 'kilo', { models: ['stealth/space-bunny-alpha'] });
+    expect(settings.providers.kilo.anonymous).toBe(true);
+    expect(settings.providers.kilo.models).toEqual(['stealth/space-bunny-alpha']);
+  });
+
   it('removes a provider and drops it from the order', () => {
     const settings = store();
     upsertProvider(settings, 'groq', { keys: ['k'] });

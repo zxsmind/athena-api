@@ -25,6 +25,12 @@ export const SETTINGS_VERSION = 2;
 export interface ProviderState {
   enabled: boolean;
   keys: string[];
+  /**
+   * Keyless access: the endpoint serves anonymous callers (rate-limited),
+   * so no Authorization header is sent. For providers whose free tier needs
+   * no account. Never combined with keys: a present key always wins.
+   */
+  anonymous?: boolean;
   models: string[];
   url?: string;
   name?: string;
@@ -221,6 +227,7 @@ function normalizeProviderState(id: string, value: Partial<ProviderState> | unde
   return {
     enabled: value?.enabled ?? def.enabled ?? false,
     keys: Array.isArray(value?.keys) ? value!.keys.filter((k): k is string => typeof k === 'string') : [...(def.keys ?? [])],
+    ...(typeof value?.anonymous === 'boolean' ? { anonymous: value.anonymous } : {}),
     models: Array.isArray(value?.models) ? value!.models.filter((m): m is string => typeof m === 'string') : [...(def.models ?? [])],
     ...(url ? { url } : {}),
     ...(typeof value?.name === 'string' ? { name: value.name } : def.name ? { name: def.name } : {}),

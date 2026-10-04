@@ -124,6 +124,22 @@ describe('resolveProvider', () => {
     expect(r.error.reason).toMatch(/no API key/);
   });
 
+  it('resolves a keyless provider flagged anonymous', () => {
+    /* Anonymous endpoints serve key callers: the SDK omits the Authorization
+       header on an empty key, so resolution succeeds with no keys. */
+    const r = resolveProvider('groq', state({ anonymous: true }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.provider.apiKeys).toEqual([]);
+  });
+
+  it('prefers an explicit key over anonymous', () => {
+    const r = resolveProvider('groq', state({ keys: ['k'], anonymous: true }));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.provider.apiKeys).toEqual([{ key: 'k', source: 'settings' }]);
+  });
+
   it('reports an uninstalled runtime package by name', () => {
     const r = resolveProvider('exotic', state({ keys: ['k'] }));
     expect(r.ok).toBe(false);

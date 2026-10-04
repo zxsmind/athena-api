@@ -99,6 +99,9 @@ export function upsertProvider(settings: SettingsStore, id: string, patch: Parti
     /* Carried forward so a patch that does not mention prices, such as adding a
        key, cannot drop the prices that were already set. */
     ...(existing?.modelPrices ? { modelPrices: { ...existing.modelPrices } } : {}),
+    /* Same for anonymous access: editing anything else must not silently
+       re-key a keyless provider. */
+    ...(typeof existing?.anonymous === 'boolean' ? { anonymous: existing.anonymous } : {}),
     ...patch,
   };
   settings.providers[id] = next;
