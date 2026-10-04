@@ -42,7 +42,6 @@ import {
   type ResearchPreset,
   type ResponseLength,
 } from './engine/modes.js';
-import { buildReportForRun } from './engine/report-run.js';
 import type { DeepResearchState } from './engine/context-blocks.js';
 import {
   REPORT_PROGRESS_RESULT,
@@ -1397,12 +1396,11 @@ async function runAgenticResearchStream(
       verbosity: options.verbosity,
     };
 
-    /* The v1 API returns the structured evidence report; legacy chat callers keep the prose answer. */
+    /* The v1 API serves answer + indexed sources only (see publicJob); the
+       structured evidence report is nobody's contract, so no extraction pass
+       is spent building one. Legacy chat callers keep the prose answer. */
     if (options.researchApi) {
-      const reportStep: AgentStep = { type: 'report', note: 'Building the evidence report…' };
-      steps.push(reportStep);
-      onEvent({ type: 'step', data: reportStep });
-      onEvent({ type: 'done', response: { ...responseBase, report: await buildReportForRun(query, answer, finalSources, options, preset, reasoningEffort, options.signal) } as SearchResponse });
+      onEvent({ type: 'done', response: responseBase as SearchResponse });
       return;
     }
 

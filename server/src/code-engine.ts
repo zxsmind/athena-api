@@ -21,7 +21,6 @@ import { createSandboxHandlers } from './engine/sandbox-handlers.js';
 import { exportSandboxState, hydrateSandbox, runInSandbox } from './sandbox/manager.js';
 import { deleteResearchCheckpoint, loadResearchCheckpoint, saveResearchCheckpoint } from './engine/checkpoint.js';
 
-import { buildReportForRun } from './engine/report-run.js';
 import { sanitizeHistory, temperatureForRound } from './engine/history.js';
 import { sanitizeResearchAnswer, toPublicSource } from './engine/sources.js';
 import { traceEvent } from './trace.js';
@@ -483,10 +482,7 @@ export async function runCodeResearchStream(
     };
 
     if (options.researchApi) {
-      const reportStep: AgentStep = { type: 'report', note: 'Building the evidence report…' };
-      steps.push(reportStep);
-      onEvent({ type: 'step', data: reportStep });
-      onEvent({ type: 'done', response: { ...responseBase, report: await buildReportForRun(query, sanitizedAnswer, finalSources, options, preset, reasoningEffort, options.signal) } as SearchResponse });
+      onEvent({ type: 'done', response: responseBase as SearchResponse });
       return;
     }
 

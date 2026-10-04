@@ -430,65 +430,23 @@ shown as `summary`.
 
 ## Research result contract
 
-The `result` object on a completed job.
+The `result` object on a completed job: the prose answer plus indexed source
+links, nothing else. Intermediate searches, fetched pages, and step logs stay
+on the server (traces remain inspectable there via `athena trace`).
 
 ```json
 {
-  "query": "Which countries have digital nomad visas in 2026…",
   "answer": "As of late 2026 at least 37–59 countries and territories operate…",
   "sources": [
-    {
-      "source_index": 1,
-      "title": "Digital Nomad Visa",
-      "url": "https://www.e-resident.gov.ee/nomadvisa",
-      "domain": "e-resident.gov.ee",
-      "snippet": "…",
-      "date": null
-    }
-  ],
-  "steps": [
-    { "type": "search", "query": "digital nomad visa 2026 list", "result_count": 8 },
-    { "type": "webpage", "query": "https://…", "result_count": 1, "duration_ms": 812 }
-  ],
-  "results_count": 122,
-  "elapsed_ms": 167204,
-  "mode": "deep",
-  "reasoning_effort": "medium",
-  "verbosity": "detailed",
-  "research_budget": { "used_steps": 21, "exhausted_by": null },
-  "report": {
-    "format": "athena.research.v1",
-    "question": "Which countries have digital nomad visas in 2026…",
-    "mode": "deep",
-    "reasoning_effort": "medium",
-    "sections": [
-      {
-        "id": "income-requirements",
-        "title": "Income Requirements by Country",
-        "findings": [
-          {
-            "id": "f1",
-            "text": "Spain requires 200% of SMI, about €2,849 per month for 2026.",
-            "citations": ["s12", "s89"]
-          }
-        ]
-      }
-    ],
-    "sources": [
-      { "id": "s12", "url": "https://…", "title": "…", "domain": "…", "source_index": 12 }
-    ],
-    "gaps": [
-      { "description": "No official income figure for Kenya", "attempted": ["immigration.go.ke"] }
-    ],
-    "summary": { "findings": 41, "citedFindings": 39, "sources": 122, "gaps": 2 }
-  }
+    { "index": 1, "title": "Digital Nomad Visa", "url": "https://www.e-resident.gov.ee/nomadvisa" }
+  ]
 }
 ```
 
-`answer` is prose with inline `[N]` citations, where `N` is a `source_index` in
-`sources`. `report` is the structured form of the same content: findings carry
-citation ids, and `gaps` names what could not be resolved. A claim you cannot
-verify appears in `gaps`, not in `answer` as a fact.
+`answer` is prose with inline `[N]` citations, where `N` is an `index` in
+`sources`. While the job runs, `progress` carries the round and the budget
+counters (`used_search_calls`, `used_fetch_calls`, …) so a poller can watch
+the ceilings without downloading any page text.
 
 ---
 

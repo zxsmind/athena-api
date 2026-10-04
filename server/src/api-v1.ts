@@ -97,7 +97,40 @@ function routeTemplate(path: string): string {
   return `/v1${path === '/' ? '' : path}`;
 }
 
-function publicJob(job: ResearchJobRecord) {
+/** One indexed source link. The endpoint serves this and nothing else per source. */
+export interface PublicSourceLink {
+  index: number;
+  title: string | null;
+  url: string;
+}
+
+export function publicSources(sources: unknown): PublicSourceLink[] {
+  if (!Array.isArray(sources)) return [];
+  return sources.map((source: Record<string, unknown>, i: number) => ({
+    index: typeof source.source_index === 'number' ? source.source_index : i + 1,
+    title: typeof source.title === 'string' ? source.title : null,
+    url: typeof source.url === 'string' ? source.url : '',
+  }));
+}
+
+/** Job progress without the source map: counters travel, page text does not. */
+export function publicProgress(runtime: ResearchJobRecord['runtime']): unknown {
+  if (!runtime || typeof runtime !== 'object') return runtime;
+  const state = runtime as { round?: unknown; mode?: unknown; budget?: unknown };
+  return { round: state.round, mode: state.mode, budget: state.budget };
+}
+
+/** A finished job's payload: the prose answer plus indexed source links. */
+export function publicResult(result: ResearchJobRecord['result']): unknown {
+  if (!result || typeof result !== 'object') return result;
+  const record = result as unknown as Record<string, unknown>;
+  return {
+    answer: typeof record.answer === 'string' ? record.answer : '',
+    sources: publicSources(record.sources),
+  };
+}
+
+export function publicJob(job: ResearchJobRecord) {
   return {
     job_id: job.id,
     query: job.query,
@@ -109,8 +142,8 @@ function publicJob(job: ResearchJobRecord) {
     updated_at: job.updatedAt,
     started_at: job.startedAt,
     finished_at: job.finishedAt,
-    progress: job.runtime,
-    result: job.result,
+    progress: publicProgress(job.runtime),
+    result: publicResult(job.result),
     error: job.error,
   };
 }

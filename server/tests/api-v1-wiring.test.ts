@@ -4,6 +4,8 @@ import { ApiPlatformStore } from '../src/api-platform-store.js';
 import { Meter } from '../src/application/meter.js';
 import { createApiV1Router } from '../src/api-v1.js';
 import { getAdminKey, resetAdminKeyCache } from '../src/admin-auth.js';
+import { publicJob, publicProgress, publicResult, publicSources } from '../src/api-v1.js';
+import type { ResearchJobRecord } from '../src/research-jobs.js';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 
@@ -217,5 +219,57 @@ describe('management route admin key', () => {
     } finally {
       await h.close();
     }
+  });
+});
+
+describe('public job payload', () => {
+  const job = (over: Partial<ResearchJobRecord> = {}): ResearchJobRecord =>
+    ({
+      id: 'j-test',
+      query: 'q',
+      mode: 'instant',
+      status: 'completed',
+      createdAt: 't',
+      updatedAt: 't',
+      cancelled: false,
+      events: [],
+      ...over,
+    }) as ResearchJobRecord;
+
+  it('serves only the answer plus indexed source links', () => {
+    const out = publicJob(job({
+      result: {
+        query: 'q',
+        answer: 'Paris.',
+        sources: [
+          { source_index: 2, title: 'T', url: 'https://example.com', domain: 'example.com', snippet: 'S'.repeat(500) },
+        ],
+        steps: [{ type: 'search', query: 'q', context: 'C'.repeat(500) }],
+        results_count: 1,
+        elapsed_ms: 5,
+      } as unknown as ResearchJobRecord['result'],
+    })) as { result: { answer: string; sources: unknown[] } };
+
+    expect(out.result.answer).toBe('Paris.');
+    expect(out.result.sources).toEqual([{ index: 2, title: 'T', url: 'https://example.com' }]);
+    expect(JSON.stringify(out)).not.toContain('S'.repeat(500));
+    expect(JSON.stringify(out)).not.toContain('C'.repeat(500));
+  });
+
+  it('drops the source map from progress but keeps the counters', () => {
+    const progress = publicProgress({
+      round: 3,
+      mode: 'instant',
+      budget: { used_search_calls: 4 },
+      budgetState: { usedSearchCalls: 4 },
+      sourceMap: [{ source_index: 1, title: 'T', url: 'u', domain: 'd', snippet: 'S' }],
+    } as unknown as ResearchJobRecord['runtime']);
+    expect(progress).toEqual({ round: 3, mode: 'instant', budget: { used_search_calls: 4 } });
+  });
+
+  it('indexes sources that carry no index and skips non-sources', () => {
+    expect(publicSources([{ title: 'T', url: 'u' }])).toEqual([{ index: 1, title: 'T', url: 'u' }]);
+    expect(publicSources(undefined)).toEqual([]);
+    expect(publicResult(undefined)).toBeUndefined();
   });
 });
