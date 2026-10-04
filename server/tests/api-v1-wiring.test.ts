@@ -256,15 +256,34 @@ describe('public job payload', () => {
     expect(JSON.stringify(out)).not.toContain('C'.repeat(500));
   });
 
-  it('drops the source map from progress but keeps the counters', () => {
+  it('normalizes live camelCase counters to snake_case and drops internals', () => {
     const progress = publicProgress({
       round: 3,
       mode: 'instant',
-      budget: { used_search_calls: 4 },
-      budgetState: { usedSearchCalls: 4 },
+      budget: {
+        usedSearchCalls: 4,
+        usedFetchCalls: 5,
+        usedCpuMs: 10082.92,
+        usedTokens: 100,
+        usedTotalTokens: 200,
+        startedAt: 1791105705163,
+        usedSteps: 8,
+        usedTurns: 7,
+        exhaustedBy: null,
+        tokenLedger: { kilo: {} },
+      },
       sourceMap: [{ source_index: 1, title: 'T', url: 'u', domain: 'd', snippet: 'S' }],
-    } as unknown as ResearchJobRecord['runtime']);
-    expect(progress).toEqual({ round: 3, mode: 'instant', budget: { used_search_calls: 4 } });
+    } as unknown as ResearchJobRecord['runtime']) as Record<string, unknown>;
+    expect(progress).toEqual({
+      round: 3,
+      used_search_calls: 4,
+      used_fetch_calls: 5,
+      used_turns: 7,
+      used_tokens: 100,
+      used_cpu_seconds: 10083,
+    });
+    expect(JSON.stringify(progress)).not.toContain('tokenLedger');
+    expect(JSON.stringify(progress)).not.toContain('startedAt');
   });
 
   it('indexes sources that carry no index and skips non-sources', () => {

@@ -113,11 +113,38 @@ export function publicSources(sources: unknown): PublicSourceLink[] {
   }));
 }
 
-/** Job progress without the source map: counters travel, page text does not. */
+/** Job progress as flat snake_case counters. The persisted runtime holds the
+ * engine's live camelCase counters (needed to resume a job); the display
+ * snapshot only travels on the event stream. This reads both shapes and emits
+ * one: ledgers, epochs, and nulls never leave the process. */
 export function publicProgress(runtime: ResearchJobRecord['runtime']): unknown {
   if (!runtime || typeof runtime !== 'object') return runtime;
-  const state = runtime as { round?: unknown; mode?: unknown; budget?: unknown };
-  return { round: state.round, mode: state.mode, budget: state.budget };
+  const state = runtime as unknown as { round?: unknown; budget?: Record<string, unknown> };
+  const budget = state.budget ?? {};
+  const num = (value: unknown): number | null =>
+    typeof value === 'number' && Number.isFinite(value) ? value : null;
+  const pick = (...keys: string[]): number | null => {
+    for (const key of keys) {
+      const value = num(budget[key]);
+      if (value !== null) return value;
+    }
+    return null;
+  };
+  const out: Record<string, number> = {};
+  const put = (key: string, value: number | null): void => {
+    if (value !== null) out[key] = key === 'used_cpu_seconds' ? Math.round(value) : value;
+  };
+  put('round', num(state.round));
+  put('used_search_calls', pick('used_search_calls', 'usedSearchCalls'));
+  put('search_calls_limit', pick('search_calls_limit'));
+  put('used_fetch_calls', pick('used_fetch_calls', 'usedFetchCalls'));
+  put('fetch_calls_limit', pick('fetch_calls_limit'));
+  put('used_turns', pick('usedTurns'));
+  put('used_tokens', pick('used_tokens', 'usedTokens'));
+  put('token_limit', pick('token_limit'));
+  put('used_cpu_seconds', pick('usedCpuMs'));
+  put('elapsed_ms', pick('elapsed_ms'));
+  return out;
 }
 
 /** A finished job's payload: the prose answer plus indexed source links. */
@@ -135,8 +162,6 @@ export function publicJob(job: ResearchJobRecord) {
     job_id: job.id,
     query: job.query,
     mode: job.mode,
-      reasoning_effort: job.reasoningEffort,
-    verbosity: job.verbosity ?? 'summary',
     status: job.status,
     created_at: job.createdAt,
     updated_at: job.updatedAt,
