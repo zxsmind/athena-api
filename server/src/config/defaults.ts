@@ -65,6 +65,7 @@ export const defaultConfig: AppConfig = {
     historyMessageLimit: 12,
     snippetPreviewChars: 400,
     stallTimeoutMs: 1_200_000,
+    pausedTtlMinutes: 240,
   },
   compaction: {
     enabled: false,

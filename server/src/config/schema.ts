@@ -55,6 +55,12 @@ export const researchLimitsSchema = z.object({
   /** Snippet preview length inside the ledger. */
   snippetPreviewChars: positiveInt,
   /**
+   * Minutes a paused job waits for resume before it is cancelled. A pause
+   * holds a checkpoint and evidence but does no work; without a ceiling the
+   * paused list only grows.
+   */
+  pausedTtlMinutes: positiveInt,
+  /**
    * Silence after which a running job is declared stalled and failed. Must
    * clear the longest legitimate quiet spell: a single model call can take
    * up to fifteen minutes (exhaustive final answer), so anything below that

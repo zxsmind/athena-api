@@ -571,8 +571,20 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
       sendError(res, 404, 'NOT_FOUND', 'Research job was not found.');
       return;
     }
+    /* Pause returned the slot, so resume takes one again. Without this a
+       resumed job would run past the key's concurrency ceiling. */
+    const resumeKeyId = (res.locals.apiKeyId as string | null) ?? null;
+    const resumePlan = (res.locals.keyPlan as KeyPlan | null) ?? null;
+    if (!usage.acquireJobSlot(resumeKeyId, resumePlan)) {
+      sendError(res, 429, 'CONCURRENCY_LIMIT', 'Too many research jobs are already running for this key.', {
+        max_concurrent_jobs: usage.jobSlotLimit(resumePlan),
+        active_jobs: usage.activeJobCount(resumeKeyId),
+      });
+      return;
+    }
     const job = resumeResearchJob(req.params.id);
     if (!job) {
+      usage.releaseJobSlot(resumeKeyId);
       sendError(res, 400, 'JOB_NOT_RESUMABLE', 'Research job cannot be resumed in its current state.');
       return;
     }

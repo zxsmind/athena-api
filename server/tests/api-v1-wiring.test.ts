@@ -7,6 +7,8 @@ import { getAdminKey, resetAdminKeyCache } from '../src/admin-auth.js';
 import { publicJob, publicProgress, publicResult, publicSources } from '../src/api-v1.js';
 import type { ResearchJobRecord } from '../src/research-jobs.js';
 import { appendResearchJobEvent, createResearchJob } from '../src/research-jobs.js';
+import { pauseResearchJob, markResearchJobRunning } from '../src/research-jobs.js';
+import { planFor } from '../src/application/meter.js';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 
@@ -307,5 +309,37 @@ describe('public job payload', () => {
     const out = publicJob(job({})) as Record<string, unknown>;
     expect('note' in out).toBe(true);
     expect(out.note).toBeUndefined();
+  });
+});
+
+describe('resume concurrency', () => {
+  it('refuses resume when the key has no free slot, then resumes after release', async () => {
+    const h = await startHarness('free');
+    try {
+      /* A paused job holds no slot since pause returns it; fill the key. */
+      const paused = createResearchJob({ query: 'q', mode: 'instant', researchApi: true });
+      markResearchJobRunning(paused.id);
+      pauseResearchJob(paused.id);
+      const limit = planFor('free').maxConcurrentJobs;
+      for (let i = 0; i < limit; i += 1) {
+        expect(h.store.jobSlotAcquire(h.keyId, limit)).toBe(true);
+      }
+      const full = await fetch(`${h.url}/jobs/${paused.id}/resume`, {
+        method: 'POST',
+        headers: auth(h.secret),
+      });
+      expect(full.status).toBe(429);
+      const body = await full.json() as { error: { code: string } };
+      expect(body.error.code).toBe('CONCURRENCY_LIMIT');
+
+      for (let i = 0; i < limit; i += 1) h.store.jobSlotRelease(h.keyId);
+      const resumed = await fetch(`${h.url}/jobs/${paused.id}/resume`, {
+        method: 'POST',
+        headers: auth(h.secret),
+      });
+      expect(resumed.status).toBe(200);
+    } finally {
+      await h.close();
+    }
   });
 });

@@ -12,6 +12,7 @@ import { DATA_DIR, getDataPath, resolvedDataDir } from './storage.js';
 import { configureLogger, logger } from './logger.js';
 import { assertConfigured, type ConfigAudit } from './startup-guard.js';
 import { catalogIntervalMsFromHours, setCatalogRefreshIntervalMs, startCatalogRefresh } from './models-dev.js';
+import { cancelStalePausedJobs, startPausedJobSweeper } from './research-jobs.js';
 import { enableTrace } from './trace.js';
 import { closeAllSandboxes } from './sandbox/manager.js';
 
@@ -56,6 +57,11 @@ const app = express();
 app.disable('x-powered-by');
 app.use(cors());
 app.use(express.json({ limit: getConfig().server.jsonBodyLimit }));
+
+/* Paused jobs hold no slot and do no work, but their checkpoints pile up.
+   One sweep at boot plus an hourly pass cancels whatever aged past the TTL. */
+cancelStalePausedJobs(getConfig().research.pausedTtlMinutes * 60_000);
+startPausedJobSweeper(getConfig().research.pausedTtlMinutes * 60_000);
 
 const apiStore = new ApiPlatformStore();
 const meter = new Meter(apiStore);

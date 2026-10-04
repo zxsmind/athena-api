@@ -325,13 +325,17 @@ Stops a running job and releases its concurrency slot. Returns the job snapshot.
 
 ### `POST /jobs/:id/pause`
 
-Pauses a running job. The current state is written to a checkpoint first, so the
-run can be continued. Returns `400 JOB_NOT_PAUSABLE` if the job is not running.
+Pauses a running job and returns its concurrency slot. The current state is
+written to a checkpoint first, so the run can be continued. A paused job does
+no work but keeps its checkpoint; past `research.pausedTtlMinutes` (default
+240, `ATHENA_PAUSED_TTL_MINUTES`) it is cancelled automatically. Returns
+`400 JOB_NOT_PAUSABLE` if the job is not running.
 
 ### `POST /jobs/:id/resume`
 
 Continues a paused job from its checkpoint, including its plan, source
-registry, and remaining budget. Returns `400 JOB_NOT_RESUMABLE` if the job is not
+registry, and remaining budget. Takes a concurrency slot again, so a full key
+gets `429 CONCURRENCY_LIMIT`. Returns `400 JOB_NOT_RESUMABLE` if the job is not
 paused.
 
 A job the model declines as a non-question ends as `declined` with the reason

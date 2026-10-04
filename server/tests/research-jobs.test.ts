@@ -8,6 +8,7 @@ import {
   markResearchJobDone,
   markResearchJobFailed,
   cancelResearchJob,
+  cancelStalePausedJobs,
   pauseResearchJob,
   resumeResearchJob,
   setResearchJobStatus,
@@ -164,5 +165,44 @@ describe('job ids', () => {
   it('creates jobs under the new id shape', () => {
     const job = createResearchJob({ query: 'q', researchApi: true });
     expect(job.id).toMatch(/^j-[A-Za-z0-9]{12}$/);
+  });
+});
+
+describe('paused job expiry', () => {
+  function pausedJob(): string {
+    const job = createResearchJob({ query: 'q', mode: 'deep' });
+    markResearchJobRunning(job.id);
+    pauseResearchJob(job.id);
+    return job.id;
+  }
+
+  it('stamps pause time and clears it on resume', () => {
+    const id = pausedJob();
+    expect(getResearchJob(id)?.pausedAt).toBeDefined();
+    resumeResearchJob(id);
+    expect(getResearchJob(id)?.pausedAt).toBeUndefined();
+    expect(getResearchJob(id)?.status).toBe('queued');
+  });
+
+  it('cancels a paused job older than the TTL and keeps a fresh one', () => {
+    const oldId = pausedJob();
+    const old = getResearchJob(oldId)!;
+    old.pausedAt = new Date(Date.now() - 5 * 3_600_000).toISOString();
+    const freshId = pausedJob();
+
+    const cancelled = cancelStalePausedJobs(4 * 3_600_000, Date.now());
+
+    expect(cancelled).toEqual([oldId]);
+    expect(getResearchJob(oldId)?.status).toBe('cancelled');
+    expect(getResearchJob(freshId)?.status).toBe('paused');
+  });
+
+  it('expires a paused job with no stamp by its last update', () => {
+    const id = pausedJob();
+    const job = getResearchJob(id)!;
+    delete job.pausedAt;
+    job.updatedAt = new Date(Date.now() - 5 * 3_600_000).toISOString();
+
+    expect(cancelStalePausedJobs(4 * 3_600_000, Date.now())).toEqual([id]);
   });
 });

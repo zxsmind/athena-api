@@ -227,9 +227,10 @@ export async function runResearchJob(jobId: string, meter?: Meter): Promise<void
   try {
     billJob(jobId, meter);
   } finally {
-    /* The job is terminal (or paused), so its concurrency slot is returned.
-       Done in a finally block so a billing failure cannot leak the slot. */
-    if (getResearchJob(jobId)?.status !== 'paused') meter?.releaseJobSlot(getResearchJob(jobId)?.apiKeyId ?? null);
+    /* A paused job does no work, so it holds no slot: resume re-acquires one
+       and fails honestly when the key is full. Holding a slot through a
+       pause let one forgotten job halve a free plan's capacity. */
+    meter?.releaseJobSlot(getResearchJob(jobId)?.apiKeyId ?? null);
   }
 }
 

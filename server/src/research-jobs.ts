@@ -70,6 +70,8 @@ export interface ResearchJobRecord {
   finishedAt?: string;
   error?: string;
   cancelled: boolean;
+  /** When the job was paused. A paused job that ages past the TTL is cancelled. */
+  pausedAt?: string;
   steps?: AgentStep[];
   /** Latest status note the model published; also served on the job snapshot. */
   note?: { headline: string; body: string; round?: number };
@@ -308,6 +310,7 @@ export function pauseResearchJob(id: string): ResearchJobRecord | undefined {
   }
 
   job.status = 'paused';
+  job.pausedAt = nowIso();
   job.updatedAt = nowIso();
 
   if (job.preset && job.runtime?.budget) {
@@ -336,6 +339,7 @@ export function resumeResearchJob(id: string): ResearchJobRecord | undefined {
   job.cancelled = false;
   job.error = undefined;
   job.finishedAt = undefined;
+  job.pausedAt = undefined;
   pushEvent(job, { type: 'status', status: 'queued', detail: 'Resuming from checkpoint', timestamp: nowIso() });
   notify(id);
   return job;
@@ -357,6 +361,9 @@ export function registerRecoveredJob(checkpoint: ResearchCheckpoint): ResearchJo
     createdAt: checkpoint.lastUpdatedAt,
     updatedAt: nowIso(),
     cancelled: false,
+    /* The clock restarts here: killing a recovered job for time that passed
+       while the server was down would punish the operator for restarting. */
+    pausedAt: nowIso(),
     steps: [],
     events: [],
     lastEventSeq: 0,
@@ -370,6 +377,48 @@ export function registerRecoveredJob(checkpoint: ResearchCheckpoint): ResearchJo
   pushEvent(job, { type: 'status', status: 'paused', detail: 'Recovered after server restart. Resume this job explicitly to continue.', timestamp: nowIso() });
   trimJobs();
   return job;
+}
+
+/**
+ * Cancels paused jobs that aged past the TTL. A paused job holds a
+ * checkpoint and an evidence directory but does no work; without this the
+ * paused list is a graveyard that only grows. Cancelled jobs keep their
+ * record, so the audit trail survives. Returns the cancelled ids.
+ */
+export function cancelStalePausedJobs(ttlMs: number, nowMs: number = Date.now()): string[] {
+  const cancelled: string[] = [];
+  for (const job of jobs.values()) {
+    if (job.status !== 'paused') continue;
+    const pausedAt = job.pausedAt ? Date.parse(job.pausedAt) : Number.NaN;
+    /* No stamp (written by an older build): fall back to the last update so
+       it still expires instead of living forever. */
+    const ageMs = nowMs - (Number.isFinite(pausedAt) ? pausedAt : Date.parse(job.updatedAt));
+    if (!Number.isFinite(ageMs) || ageMs <= ttlMs) continue;
+    cancelResearchJob(job.id, `Paused too long (over ${Math.round(ttlMs / 60000)}m); cancelled automatically`);
+    cancelled.push(job.id);
+  }
+  return cancelled;
+}
+
+let pausedSweepTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Hourly sweep for stale paused jobs; runs in production, stopped in tests. */
+export function startPausedJobSweeper(ttlMs: number, intervalMs = 3_600_000): void {
+  stopPausedJobSweeper();
+  pausedSweepTimer = setInterval(() => {
+    try {
+      const cancelled = cancelStalePausedJobs(ttlMs);
+      for (const id of cancelled) console.log(`[paused-sweep] cancelled stale paused job ${id}`);
+    } catch (error) {
+      console.error('[paused-sweep] failed:', error instanceof Error ? error.message : String(error));
+    }
+  }, intervalMs);
+  if (typeof pausedSweepTimer.unref === 'function') pausedSweepTimer.unref();
+}
+
+export function stopPausedJobSweeper(): void {
+  if (pausedSweepTimer) clearInterval(pausedSweepTimer);
+  pausedSweepTimer = null;
 }
 
 /**
@@ -389,14 +438,14 @@ export function markResearchJobDeclined(id: string, reason: string): ResearchJob
   return job;
 }
 
-export function cancelResearchJob(id: string): ResearchJobRecord | undefined {
+export function cancelResearchJob(id: string, detail = 'Cancelled by user'): ResearchJobRecord | undefined {
   const job = jobs.get(id);
   if (!job) return undefined;
   job.cancelled = true;
   job.controller?.abort();
   job.status = 'cancelled';
   job.finishedAt = nowIso();
-  pushEvent(job, { type: 'status', status: 'cancelled', timestamp: nowIso(), detail: 'Cancelled by user' });
+  pushEvent(job, { type: 'status', status: 'cancelled', timestamp: nowIso(), detail });
   notify(id);
   /* A cancelled run never resumes, so its evidence goes now. A paused run
      keeps its store: resume reuses the same job id. */

@@ -14,7 +14,7 @@ const ENV_KEYS = [
   'ATHENA_SEARCH_FULL_EXTRACTION_LIMIT', 'ATHENA_EXTRACTION_CONTEXT_CHARS', 'ATHENA_EXTRACTION_SNIPPET_CHARS',
   'ATHENA_MAX_TOTAL_TURNS', 'ATHENA_WRAP_UP_TOOL_CALLS', 'ATHENA_FORCE_ANSWER_TOOL_CALLS',
   'ATHENA_MAX_QUERIES_PER_SEARCH', 'ATHENA_TOOL_WAIT_HEARTBEAT_MS', 'ATHENA_HISTORY_MESSAGE_LIMIT',
-  'ATHENA_SNIPPET_PREVIEW_CHARS',
+  'ATHENA_SNIPPET_PREVIEW_CHARS', 'ATHENA_STALL_TIMEOUT_MS', 'ATHENA_PAUSED_TTL_MINUTES',
   'ATHENA_REPORT_INPUT_CHARS', 'ATHENA_REPORT_SNIPPET_CHARS', 'ATHENA_REPORT_CLAIM_TOKENS',
   'ATHENA_REPORT_DEFAULT_SECTION',
 ];
@@ -92,6 +92,14 @@ describe('environment overrides', () => {
     expect(resolveConfig(configPath()).server.trustedProxies).toEqual([]);
     process.env.ATHENA_TRUSTED_PROXIES = '127.0.0.1, 10.0.0.0/8';
     expect(resolveConfig(configPath()).server.trustedProxies).toEqual(['127.0.0.1', '10.0.0.0/8']);
+  });
+
+  it('defaults the stall and paused ceilings', () => {
+    const research = resolveConfig(configPath()).research;
+    expect(research.stallTimeoutMs).toBe(1_200_000);
+    expect(research.pausedTtlMinutes).toBe(240);
+    process.env.ATHENA_PAUSED_TTL_MINUTES = '60';
+    expect(resolveConfig(configPath()).research.pausedTtlMinutes).toBe(60);
   });
 
   it('ignores empty values so an unset variable keeps the default', () => {
