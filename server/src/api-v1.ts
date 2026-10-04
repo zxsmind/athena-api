@@ -132,7 +132,7 @@ export function publicProgress(runtime: ResearchJobRecord['runtime']): unknown {
   };
   const out: Record<string, number> = {};
   const put = (key: string, value: number | null): void => {
-    if (value !== null) out[key] = key === 'used_cpu_seconds' ? Math.round(value) : value;
+    if (value !== null) out[key] = key === 'used_cpu_seconds' ? Math.round(value / 100) / 10 : value;
   };
   put('round', num(state.round));
   put('used_search_calls', pick('used_search_calls', 'usedSearchCalls'));

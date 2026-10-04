@@ -280,7 +280,7 @@ describe('public job payload', () => {
       used_fetch_calls: 5,
       used_turns: 7,
       used_tokens: 100,
-      used_cpu_seconds: 10083,
+      used_cpu_seconds: 10.1,
     });
     expect(JSON.stringify(progress)).not.toContain('tokenLedger');
     expect(JSON.stringify(progress)).not.toContain('startedAt');
