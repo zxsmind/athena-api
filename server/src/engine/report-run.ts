@@ -18,11 +18,16 @@ export async function buildReportForRun(
   preset: ResearchPreset,
   reasoningEffort: ReasoningEffort | undefined,
   signal: AbortSignal | undefined,
+  /* What is left of the job's promise. The extraction runs after the answer is
+     written, so it cannot have a budget of its own without either exceeding the
+     promise or being cut off by a number picked before the run started. */
+  deadlineMs: number,
 ): Promise<ResearchReport> {
   const sourceList = sources as SourceWithIndex[];
   const registry = Array.from(buildEvidenceRegistry(sourceList).values());
   const callOptions = {
     signal,
+    deadlineMs,
     ...(reasoningEffort ? { reasoningEffort } : {}),
   };
 

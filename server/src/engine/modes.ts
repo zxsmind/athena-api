@@ -165,6 +165,75 @@ export function remainingWallClockMs(state: BudgetState, preset: ResearchPreset,
   return Math.max(0, preset.maxWallClockMs - elapsedMs(state, now));
 }
 
+/**
+ * Output-side budgets for the forced final answer, by requested length.
+ *
+ * These are not a prediction of how long a round takes. They are the wall clock
+ * the report itself needs to be written, which is the largest output of the
+ * run, and their only job here is to tell the run when to stop researching.
+ */
+export const FINAL_ANSWER_TIMEOUT_MS = {
+  short: 240_000,
+  long: 540_000,
+  exhaustive: 900_000,
+} as const satisfies Record<ResponseLength, number>;
+
+/**
+ * Floor for any model call's deadline. Below this the only question left is
+ * whether the provider answers at all, and a short boring wait answers that as
+ * cheaply as a wrong answer can be. It also caps how far a job may run past its
+ * own promise at the tail, since the answer is never given less than this.
+ */
+export const MIN_CALL_DEADLINE_MS = 30_000;
+
+/**
+ * Wall clock held back from research rounds so the final answer can be written.
+ *
+ * An instant job promises five minutes in total, so reserving the nine minutes
+ * an exhaustive report asks for would leave nothing to research with. The
+ * reserve therefore never exceeds half of what the mode promised: a structural
+ * split of the promise, not a guess about latency.
+ */
+export function answerReserveMs(preset: ResearchPreset, responseLength: ResponseLength): number {
+  return Math.min(FINAL_ANSWER_TIMEOUT_MS[responseLength], Math.floor(preset.maxWallClockMs / 2));
+}
+
+/**
+ * True once what is left of the promise belongs to the answer rather than to
+ * another round of research.
+ */
+export function answerWindowReserved(
+  state: BudgetState,
+  preset: ResearchPreset,
+  responseLength: ResponseLength,
+  now: number = Date.now(),
+): boolean {
+  return remainingWallClockMs(state, preset, now) <= answerReserveMs(preset, responseLength);
+}
+
+/**
+ * Deadline for one model call in a research run.
+ *
+ * The caller's job budget is the only bound: the mode already promised the API
+ * caller a wall clock, and a per-round constant contradicted it (a deep run was
+ * killed at two minutes against a ninety-minute promise). Streaming calls add
+ * the idle timer on top, which is liveness rather than a prediction, because
+ * every chunk resets it.
+ */
+export function callDeadlineMs(
+  state: BudgetState,
+  preset: ResearchPreset,
+  responseLength: ResponseLength,
+  finalAnswer: boolean,
+  now: number = Date.now(),
+): number {
+  const remaining = remainingWallClockMs(state, preset, now);
+  /* The forced answer is the last call a job makes, so it gets everything that
+     is left. A research round leaves the answer's window alone. */
+  const usable = finalAnswer ? remaining : remaining - answerReserveMs(preset, responseLength);
+  return Math.max(MIN_CALL_DEADLINE_MS, usable);
+}
+
 /** The first ceiling reached, or null while the job may continue. */
 export function checkCeilings(
   state: BudgetState,
@@ -271,6 +340,16 @@ export const WRAP_UP_MESSAGE = '[wrap-up] Research is approaching its execution 
 export const SEARCH_RETIRED_MESSAGE = 'Search allowance for this job is spent. Continue reading what you found with fetch_url; do not ask for more searches.';
 
 export const FETCH_RETIRED_MESSAGE = 'Page-read allowance for this job is spent. Further searches return snippets only; answer when the evidence suffices.';
+
+/**
+ * Sent once when the remaining wall clock has shrunk to the answer's window.
+ *
+ * Wall clock is the one ceiling a reasoning round can spend a long time inside
+ * without noticing: the model is answering, it is just thinking. Rounds now
+ * leave the reserve alone, so without this notice a run would keep researching
+ * until its promise was gone and have nothing left to write with.
+ */
+export const ANSWER_WINDOW_MESSAGE = '[answer-window] The remaining time for this job is reserved for writing the final answer. Stop researching and answer now from the evidence already gathered. Cite supported claims with [N] and state explicitly what could not be confirmed.';
 
 /**
  * Code-engine wordings of the same retirements. The shared messages name

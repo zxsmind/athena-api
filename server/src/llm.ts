@@ -38,6 +38,22 @@ export function applyReasoningFloor(
   return RANK_TO_WIRE[Math.max(EFFORT_RANK[round], EFFORT_RANK[floor])];
 }
 
+/**
+ * The effort that will actually travel the wire for this provider and model.
+ *
+ * A provider floor can raise the round's effort, and a model listed in
+ * `disabledThinkingModels` never thinks at all, so the requested effort is not
+ * the answer to "how hard did this call think".
+ */
+export function resolvedWireEffort(
+  provider: { reasoningEffort?: ReasoningEffort; disabledThinkingModels?: string[] },
+  model: string,
+  effort: ReasoningEffort | undefined,
+): ReasoningEffort | undefined {
+  if (provider.disabledThinkingModels?.includes(model)) return 'none';
+  return applyReasoningFloor(effort, provider.reasoningEffort);
+}
+
 export interface LLMOptions {
   messages: unknown[];
   temperature?: number;
@@ -49,10 +65,18 @@ export interface LLMOptions {
   onModelSelected?: (model: string, provider: string) => void;
   label?: string;
   role?: LLMRole;
-  /** The requested answer length. Only read for output-side timeouts. */
+  /** The requested answer length. Read by callers sizing the answer's window. */
   responseLength?: ResponseLength;
   /** True on the forced final-answer call, whose output dwarfs other turns. */
   finalAnswer?: boolean;
+  /**
+   * Wall clock this call may use, in ms. The caller's bound, not a prediction
+   * made here: a research round passes what is left of the job's promise, and a
+   * bounded helper passes its own output budget. Omitting it leaves the call
+   * unbounded apart from the idle timer, which is only correct when the caller
+   * has a signal of its own.
+   */
+  deadlineMs?: number;
   signal?: AbortSignal;
   responseFormat?: unknown;
   reasoningEffort?: ReasoningEffort;
@@ -80,12 +104,21 @@ export interface LLMResult {
   model: string;
   provider: string;
   usage: LLMUsage;
+  /** Wall clock the successful attempt cost, across every key it tried. */
+  durationMs: number;
+  /**
+   * The effort that actually travelled the wire, after the provider's floor was
+   * applied. A run can send more thinking than its mode asked for, so this is
+   * the honest answer to "how hard did this call think" — the requested effort
+   * is not.
+   */
+  reasoningEffort?: ReasoningEffort;
 }
 
 type FailureReason = 'auth' | 'request' | 'rate-limit' | 'transient';
 type AttemptResult =
-  | { ok: true; data: unknown; fullContent?: string; usage: LLMUsage; observations?: CapacityObservation[] }
-  | { ok: false; reason: FailureReason; observations?: CapacityObservation[]; detail?: string };
+  | { ok: true; data: unknown; fullContent?: string; usage: LLMUsage; observations?: CapacityObservation[]; durationMs: number; reasoningEffort?: ReasoningEffort }
+  | { ok: false; reason: FailureReason; observations?: CapacityObservation[]; detail?: string; durationMs?: number };
 
 interface CapacityObservation {
   scopeId: string;
@@ -381,10 +414,26 @@ function createTimeoutSignal(parent: AbortSignal | undefined, timeoutMs: number)
   return parent ? AbortSignal.any([parent, timeout]) : timeout;
 }
 
+/* ── Deadlines ──
+ *
+ * This module does not decide how long a call may take. The caller does, and
+ * passes it as `deadlineMs`, because only the caller knows what the call is for:
+ * a research round knows what is left of its job's promise, a bounded extraction
+ * knows its output size.
+ *
+ * What this file used to own was a formula predicting a call's duration from its
+ * context size, plus one special case for `xhigh`. Both were guesses, and the
+ * guesses killed runs instead of bounding them: an xhigh round on a short
+ * context was cut at 126s while the provider had been explicitly told to think
+ * without limit (gemini-2.5 `thinkingBudget: -1`).
+ *
+ * The one deadline that stays here is the idle timer, because silence is
+ * observable rather than predicted: every chunk resets it, reasoning deltas
+ * included, so it fires on a dead connection and never on slow thinking. */
+
 /** Stall after which a flowing stream is declared dead. Chunks arrive far more
  *  often than this in a healthy stream; an hour-long silence is not patience. */
 export const LLM_STREAM_IDLE_TIMEOUT_MS = 60_000;
-export const DEEP_MAX_REASONING_TIMEOUT_MS = 500_000;
 
 /** Ceiling for turning a finished stream into text. The stream timers are
  *  disposed once consumption ends, so an SDK promise that never settles
@@ -401,31 +450,6 @@ export function materializeWithTimeout<T>(promise: Promise<T>, ms: number = LLM_
   });
 }
 
-/** Output-side budgets for the forced final answer, by requested length. The
- *  input-scaled total covers prefill; these cover generating the report,
- *  which is the largest output of the whole run. */
-export const FINAL_ANSWER_TIMEOUT_MS = {
-  short: 240_000,
-  long: 540_000,
-  exhaustive: 900_000,
-} as const satisfies Record<ResponseLength, number>;
-
-/**
- * Total budget for one model call, scaled with context. The forced answer at a
- * ceiling is the largest prompt of the run: a flat total-only deadline killed
- * runs that were still streaming (`j-faE5hOH46vGt`, then `j-iOjo2HjVNvkC` at
- * 377K chars against a 75s guillotine). A final answer takes the larger of the
- * input-scaled budget and its length's output budget
- * (`j-AbdnmdUTgeLo`: 405K chars in, long report out, dead at ~200s).
- * Streaming calls pair this with the idle timer below instead of relying on
- * it alone.
- */
-export function llmTotalTimeoutMs(contextChars: number, responseLength?: ResponseLength | null): number {
-  const inputScaled = 120_000 + Math.min(480_000, Math.floor(Math.max(0, contextChars) / 5_000) * 1_000);
-  if (!responseLength) return inputScaled;
-  return Math.max(inputScaled, FINAL_ANSWER_TIMEOUT_MS[responseLength]);
-}
-
 /**
  * Retry schedule for one model call. A final-answer call gets a single retry:
  * the final phase is wall-clock-bound, and six dead attempts is how a
@@ -437,22 +461,22 @@ export function retryDelaysForFinalAnswer(allDelaysMs: number[], finalAnswer: bo
 }
 
 /**
- * Streaming-aware timeout: a total deadline plus an idle deadline that
- * restarts on every reported chunk. A stream that flows is never cut; a stream
- * that stalls still dies. The idle arm starts on the first chunk, so a long
- * prefill is governed by the total alone. Call `dispose` once the stream is
- * fully consumed so neither timer outlives the call.
+ * Idle deadline for a streaming call: a total deadline would guess how long the
+ * work may take, while silence is observable. One rule covers the whole call —
+ * the timer is armed now and rearmed by every chunk, reasoning deltas included,
+ * so it fires when no byte has arrived for this long whether the provider is
+ * still connecting, prefilling, or generating. A stream that keeps talking is
+ * never cut, however long it talks. Call `dispose` once the stream is fully
+ * consumed so the timer does not outlive the call.
  */
 export function createStreamingTimeout(
   parent: AbortSignal | undefined,
-  totalMs: number,
   idleMs: number = LLM_STREAM_IDLE_TIMEOUT_MS,
 ): { signal: AbortSignal; chunk: () => void; dispose: () => void } {
   const controller = new AbortController();
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
-  const totalTimer = setTimeout(() => {
-    controller.abort(new Error(`LLM call exceeded its total budget of ${totalMs}ms`));
-  }, totalMs);
+  let idleTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+    controller.abort(new Error(`LLM stream stalled for ${idleMs}ms`));
+  }, idleMs);
   const chunk = (): void => {
     if (controller.signal.aborted) return;
     if (idleTimer) clearTimeout(idleTimer);
@@ -461,7 +485,6 @@ export function createStreamingTimeout(
     }, idleMs);
   };
   const dispose = (): void => {
-    clearTimeout(totalTimer);
     if (idleTimer) {
       clearTimeout(idleTimer);
       idleTimer = null;
@@ -638,6 +661,7 @@ async function callSelectedTarget(
   options: LLMOptions,
   streaming: boolean,
   label: string,
+  callSignal: AbortSignal | undefined,
 ): Promise<AttemptResult | null> {
   const settings = loadSettings();
   const provider = settings.providers[target.id];
@@ -645,6 +669,8 @@ async function callSelectedTarget(
   const resolution = resolveProvider(target.id, provider);
   if (!resolution.ok) return null;
   const scopeId = `${target.id}/${target.model}`;
+  const wireEffort = resolvedWireEffort(provider, target.model, options.reasoningEffort);
+  const startedAt = Date.now();
   let lastFailure: FailureReason = 'transient';
   let lastDetail: string | undefined;
   let lastObservations: CapacityObservation[] | undefined;
@@ -659,17 +685,13 @@ async function callSelectedTarget(
     const created = createLanguageModel(target.id, target.model, provider, trackedFetch, apiKey);
     if (!created.ok) return null;
     const model = created.model;
-    const contextChars = options.messages.reduce((n: number, m) => {
-      const content = (m as { content?: unknown }).content;
-      return n + (typeof content === 'string' ? content.length : 0);
-    }, 0);
-    const timeoutMs = options.reasoningEffort === 'xhigh' && !options.finalAnswer
-      ? DEEP_MAX_REASONING_TIMEOUT_MS
-      : llmTotalTimeoutMs(contextChars, options.finalAnswer ? options.responseLength ?? null : null);
+    /* No total deadline is invented here. `callSignal` already carries the
+       caller's bound, and a streaming call adds the idle timer, which measures
+       silence instead of guessing at duration. */
     const streamingTimeout = streaming
-      ? createStreamingTimeout(options.signal, timeoutMs)
+      ? createStreamingTimeout(callSignal)
       : null;
-    const signal = streamingTimeout ? streamingTimeout.signal : createTimeoutSignal(options.signal, timeoutMs);
+    const signal = streamingTimeout ? streamingTimeout.signal : callSignal;
     const modelTools = toSdkTools(options.tools);
     const providerOptions = modelProviderOptions(target, provider, resolution.provider.npm, options.reasoningEffort) as Parameters<typeof generateText>[0]['providerOptions'];
     /* The leading system prompt travels via the SDK's `system` option, not as
@@ -726,6 +748,8 @@ async function callSelectedTarget(
           fullContent: text,
           usage: toTokenUsage(usage),
           observations: responseHeadersToObservations(responseHeaders, scopeId),
+          durationMs: Date.now() - startedAt,
+          ...(wireEffort ? { reasoningEffort: wireEffort } : {}),
         };
       }
 
@@ -736,6 +760,8 @@ async function callSelectedTarget(
         data: engineResponse(result.text, toolCalls, result.finishReason, target.model, result.totalUsage, result.reasoningText),
         usage: toTokenUsage(result.totalUsage),
         observations: responseHeadersToObservations(responseHeaders, scopeId),
+        durationMs: Date.now() - startedAt,
+        ...(wireEffort ? { reasoningEffort: wireEffort } : {}),
       };
     } catch (error) {
       if (options.signal?.aborted) throw error;
@@ -762,10 +788,10 @@ async function callSelectedTarget(
       }
       lastDetail = error instanceof Error ? error.message : String(error);
       logError(label, target.url, status ?? 0, error instanceof Error ? error.message : String(error));
-      if (lastFailure === 'request') return { ok: false, reason: lastFailure, detail: lastDetail };
+      if (lastFailure === 'request') return { ok: false, reason: lastFailure, detail: lastDetail, durationMs: Date.now() - startedAt };
     }
   }
-  return { ok: false, reason: lastFailure, observations: lastObservations, detail: lastDetail };
+  return { ok: false, reason: lastFailure, observations: lastObservations, detail: lastDetail, durationMs: Date.now() - startedAt };
 }
 
 async function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> {
@@ -785,7 +811,52 @@ async function runLLM(options: LLMOptions, streaming: boolean): Promise<LLMResul
     reasoning: Boolean(options.reasoningEffort && options.reasoningEffort !== 'none' && options.reasoningEffort !== 'minimal'),
   };
   const startTime = Date.now();
-  const maxDurationMs = 120_000;
+  /* The caller's deadline is the only window this loop runs in. It used to carry
+     a second, private 120s limit, which was shorter than a single deep round's
+     budget and silently capped recovery: one attempt that used its whole budget
+     ended the loop with "all targets exhausted" while a healthy route sat there.
+     A separate clock for "how long may I retry" is a guess about a different
+     question than the one the caller already answered. */
+  const deadlineMs = options.deadlineMs;
+  const deadlineAt = deadlineMs === undefined ? null : startTime + deadlineMs;
+  const deadlineSignal = deadlineMs === undefined ? options.signal : createTimeoutSignal(options.signal, deadlineMs);
+  const triedList = (): string => tried.map((item) => `  • ${item}`).join('\n');
+  /* "Exhausted" is only true when there was nothing left to try. A single route
+     that stayed busy is a timeout, and saying otherwise sent the reader looking
+     for a fallback model that does not exist. */
+  const blockedError = (): Error => {
+    const distinctRoutes = new Set(tried.map((item) => item.split(' -> ')[0]));
+    const stillRoutable = distinctRoutes.size > 0 && distinctRoutes.size < configuredRouteCount();
+    const summary = stillRoutable
+      ? `${label} — the only configured route stayed unavailable for ${Math.round((Date.now() - startTime) / 1000)}s after ${attempts} attempts.`
+      : `${label} — all targets exhausted or timed out after ${attempts} attempts.`;
+    if (options.traceId) {
+      traceEvent(options.traceId, 'llm.error', {
+        label,
+        reason: stillRoutable ? 'only route unavailable' : 'all targets exhausted',
+        attempts,
+        elapsed_ms: Date.now() - startTime,
+        tried,
+      });
+    }
+    return new Error(`${summary}\n${triedList()}`);
+  };
+  const deadlineError = (): Error => {
+    const summary = deadlineMs === undefined
+      ? `${label} — no route became available after ${attempts} attempts.`
+      : `${label} — used its full ${Math.round(deadlineMs / 1000)}s budget after ${attempts} attempts.`;
+    if (options.traceId) {
+      traceEvent(options.traceId, 'llm.error', {
+        label,
+        reason: 'deadline reached',
+        attempts,
+        budget_ms: deadlineMs ?? null,
+        elapsed_ms: Date.now() - startTime,
+        tried,
+      });
+    }
+    return new Error(`${summary}\n${triedList()}`);
+  };
   /* A single route that is merely busy must not end the run. The same
      `withRetry` that protects search and fetch wraps each attempt here, so a
      429 from a busy provider is waited out instead of dropped. Previously the
@@ -797,22 +868,22 @@ async function runLLM(options: LLMOptions, streaming: boolean): Promise<LLMResul
      difference between "tried five times" and "spun for two minutes". */
   let attempts = 0;
 
-  while (Date.now() - startTime < maxDurationMs) {
+  for (;;) {
     if (options.signal?.aborted) throw new Error(`${label} cancelled`);
+    if (deadlineAt !== null && Date.now() >= deadlineAt) throw deadlineError();
     const selection = smartRouting.selectTarget(options.role, requirements, excludedRoutes);
     if (!selection) {
       /* Every route is cooling off. Wait for the shortest recovery and try
-         again, bounded by the same deadline as the rest of the loop. Before
-         this, one target out of one that was merely busy ended the run. */
+         again, bounded by the caller's deadline. Before this, one target out of
+         one that was merely busy ended the run. */
       const hasRemainingRoute = smartRouting.buildCandidates(options.role, requirements).candidates
         .some((candidate) => !excludedRoutes.has(candidate.routeId));
       const waitMs = hasRemainingRoute ? smartRouting.getMinRecoveryMs() : null;
-      const remaining = maxDurationMs - (Date.now() - startTime);
-      if (waitMs && waitMs > 0 && remaining > 0) {
-        await sleepWithSignal(Math.min(waitMs, remaining), options.signal);
-        continue;
-      }
-      throw new Error(`${label} - all targets are blocked or unavailable.\n${tried.map((item) => `  • ${item}`).join('\n')}`);
+      if (waitMs === null || waitMs <= 0) throw blockedError();
+      const remaining = deadlineAt === null ? waitMs : deadlineAt - Date.now();
+      if (remaining <= 0) throw deadlineError();
+      await sleepWithSignal(Math.min(waitMs, remaining), options.signal);
+      continue;
     }
 
     options.onModelSelected?.(selection.target.model, selection.target.id);
@@ -853,7 +924,7 @@ messages: summarizeMessages(options.messages),
        missing endpoint or invalid parameter cannot recover through backoff. */
     const callOnce = async (): Promise<AttemptResult | null> => {
       attempts++;
-      const r = await callSelectedTarget(selection.target, options, streaming, label);
+      const r = await callSelectedTarget(selection.target, options, streaming, label, deadlineSignal);
       if (r === null || r.ok) return r;
       if (r.reason === 'auth' || r.reason === 'request') return r;
       const err = new Error(
@@ -863,8 +934,11 @@ messages: summarizeMessages(options.messages),
       throw err;
     };
     let retryAfter: number | undefined;
+    /* The deadline gates the retries too, not just the call. Backoff delays run
+       for tens of seconds, so retrying past the budget would overrun it by more
+       than the budget itself. */
     const attempt = await withRetry(label, retryDelaysForFinalAnswer(retryDelays, options.finalAnswer), callOnce, {
-      signal: options.signal,
+      signal: deadlineSignal,
       retryAfterMs: () => retryAfter,
       onRetry: (info) => {
         if (options.traceId) {
@@ -925,7 +999,17 @@ messages: summarizeMessages(options.messages),
         model: selection.target.model,
         provider: selection.target.id,
         usage: result.usage,
+        durationMs: result.durationMs,
+        ...(result.reasoningEffort ? { reasoningEffort: result.reasoningEffort } : {}),
       };
+    }
+
+    /* A call that ran out of budget failed because we stopped it, not because
+       the provider misbehaved. Recording that as a capacity failure would cool
+       the route down for the next job that has time to use it. */
+    if (deadlineAt !== null && deadlineSignal?.aborted) {
+      smartRouting.saveSnapshot();
+      throw deadlineError();
     }
 
     if (!attempt.ok) {
@@ -964,26 +1048,6 @@ messages: summarizeMessages(options.messages),
     }
     smartRouting.saveSnapshot();
   }
-
-  /* "Exhausted" is only true when there was nothing left to try. A single route
-     that stayed busy is a timeout, and saying otherwise sent the reader looking
-     for a fallback model that does not exist. */
-  const distinctRoutes = new Set(tried.map((item) => item.split(' -> ')[0]));
-  const stillRoutable = distinctRoutes.size > 0 && distinctRoutes.size < configuredRouteCount();
-  const summary = stillRoutable
-    ? `${label} — the only configured route stayed unavailable for ${Math.round((Date.now() - startTime) / 1000)}s after ${attempts} attempts.`
-    : `${label} — all targets exhausted or timed out after ${attempts} attempts.`;
-  const exhausted = new Error(`${summary}\n${tried.map((item) => `  • ${item}`).join('\n')}`);
-  if (options.traceId) {
-    traceEvent(options.traceId, 'llm.error', {
-      label,
-      reason: stillRoutable ? 'only route unavailable' : 'all targets exhausted',
-      attempts,
-      elapsed_ms: Date.now() - startTime,
-      tried,
-    }, options.traceRound);
-  }
-  throw exhausted;
 }
 
 /**

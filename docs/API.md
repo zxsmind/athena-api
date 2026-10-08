@@ -435,6 +435,16 @@ Cache reads are excluded from the billable ceiling: they re-read a prefix the
 provider already holds. The context is bounded by the model's own window, not by
 this number.
 
+The wall clock is the promise a mode makes, and it is enforced as one. It bounds
+the whole job, not each round: a round gets what is left of it minus a window
+held back for writing the answer, so a mode that thinks for a long time spends
+its own budget instead of being cut mid-thought. When that answer window is all
+that is left, the run stops researching and answers from the evidence already
+gathered. A streaming call additionally ends if the provider goes silent for a
+minute, which is a measure of the connection rather than a limit on the work.
+Each step reports the round's own duration and the reasoning effort that reached
+the provider.
+
 ### `response_length` — how long the answer
 
 Sets the shape of the answer, not the amount of research.

@@ -1,4 +1,6 @@
-﻿export interface Source {
+﻿import type { ReasoningEffort as WireReasoningEffort } from './llm.js';
+
+export interface Source {
   source_index?: number;
   title: string | null;
   url: string;
@@ -24,6 +26,8 @@ export interface AgentStep {
   model?: string;
   reasoning?: string;
   duration_ms?: number;
+  /** Effort that reached the provider for this step, after any provider floor. */
+  reasoning_effort?: WireReasoningEffort;
   context?: string;
 }
 

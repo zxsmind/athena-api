@@ -16,7 +16,9 @@ import { usesInlineToolCalls } from './provider-registry.js';
 import { deleteResearchCheckpoint, loadResearchCheckpoint, saveResearchCheckpoint } from './engine/checkpoint.js';
 import {
   modeBehaviorBlock,
+  answerWindowReserved,
   budgetSnapshot,
+  callDeadlineMs,
   chargeFetchCalls,
   chargeSearchCalls,
   chargeUsage,
@@ -29,12 +31,14 @@ import {
   evidenceFloorMessage,
   remainingFetchCalls,
   remainingSearchCalls,
+  remainingWallClockMs,
   reasoningEffortForMode,
   resolveResearchPreset,
   shouldWrapUp,
   WRAP_UP_MESSAGE,
   SEARCH_RETIRED_MESSAGE,
   FETCH_RETIRED_MESSAGE,
+  ANSWER_WINDOW_MESSAGE,
   type StopReason,
   type BudgetState,
   type ReasoningEffort,
@@ -231,6 +235,11 @@ async function toolCallingRound(
       reasoningEffort,
       responseLength,
       finalAnswer: forceAnswer ?? false,
+      /* The job's own wall clock, minus the window held back for the answer.
+         Nothing here predicts how long this round takes: the mode already
+         promised the API caller a deadline, and a reasoning model is allowed to
+         use it. */
+      deadlineMs: callDeadlineMs(budget, preset, responseLength ?? DEFAULT_RESPONSE_LENGTH, forceAnswer === true),
       traceId,
       traceRound: round,
       onModelSelected: (selectedModel) => { step.model = selectedModel; onEvent({ type: 'step', data: step }); },
@@ -334,6 +343,12 @@ async function toolCallingRound(
      answer itself, so it never becomes a note. */
   if (msg.tool_calls && stated.note) step.note = stated.note;
   if (stated.reasoning) step.reasoning = stated.reasoning;
+  /* Always recorded, not only under trace. A wall-clock promise is only
+     meaningful next to what a round actually cost and how hard it was asked to
+     think, and this is where a slow mode can be read against its budget. The
+     effort is the one that reached the wire, after any provider floor. */
+  step.duration_ms = llmResult.durationMs;
+  step.reasoning_effort = llmResult.reasoningEffort ?? reasoningEffort;
   step.model = currentModel;
   onEvent({ type: 'step', data: step });
 
@@ -1203,6 +1218,7 @@ async function runAgenticResearchStream(
   let totalTurns = 0;
   let totalToolCalls = 0;
   let wrapUpWarned = false;
+  let answerWindowAnnounced = false;
   let retiredSearchNotified = false;
   let retiredFetchNotified = false;
   const maxTotalTurns = getConfig().research.maxTotalTurns;
@@ -1255,6 +1271,16 @@ async function runAgenticResearchStream(
     }
 
     const forceAnswer = budget.exhaustedBy !== null || totalToolCalls >= FORCE_ANSWER_THRESHOLD;
+    /* What is left of the wall clock can become the answer's window before the
+       ceiling itself is reached. Rounds leave that window alone, so the run
+       stops researching here instead of spending the time it needs to write. */
+    const answerWindow = !forceAnswer
+      && answerWindowReserved(budget, preset, options.responseLength ?? DEFAULT_RESPONSE_LENGTH);
+    if (answerWindow && !answerWindowAnnounced) {
+      answerWindowAnnounced = true;
+      messages.push({ role: 'user', content: ANSWER_WINDOW_MESSAGE });
+      if (traceId) traceEvent(traceId, 'note', { answer_window: true, remaining_ms: remainingWallClockMs(budget, preset) }, round);
+    }
     if (!forceAnswer && !wrapUpWarned && shouldWrapUp(budget, preset, totalToolCalls)) {
       /* The prompt's stopping rule names this signal, so keep the marker. */
       messages.push({ role: 'user', content: WRAP_UP_MESSAGE });

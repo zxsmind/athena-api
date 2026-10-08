@@ -36,6 +36,9 @@ import {
   remainingSearchCalls,
   CODE_FETCH_RETIRED_MESSAGE,
   CODE_SEARCH_RETIRED_MESSAGE,
+  ANSWER_WINDOW_MESSAGE,
+  answerWindowReserved,
+  callDeadlineMs,
   createBudgetState,
   DEFAULT_RESEARCH_MODE,
   DEFAULT_RESPONSE_LENGTH,
@@ -187,6 +190,7 @@ export async function runCodeResearchStream(
   let totalTurns = 0;
   let totalToolCalls = 0;
   let wrapUpWarned = false;
+  let answerWindowAnnounced = false;
   let retiredSearchNotified = false;
   let retiredFetchNotified = false;
   let emptyCompletionRetried = false;
@@ -232,6 +236,16 @@ export async function runCodeResearchStream(
     }
 
     const forceAnswer = budget.exhaustedBy !== null || totalToolCalls >= preset.forceAnswerToolCalls;
+    /* Same rule as the classic loop: once what is left of the wall clock is the
+       answer's window, stop researching rather than discover at the deadline
+       that there is no time left to write. */
+    const answerWindow = !forceAnswer
+      && answerWindowReserved(budget, preset, options.responseLength ?? DEFAULT_RESPONSE_LENGTH);
+    if (answerWindow && !answerWindowAnnounced) {
+      answerWindowAnnounced = true;
+      messages.push({ role: 'user', content: ANSWER_WINDOW_MESSAGE });
+      if (traceId) traceEvent(traceId, 'note', { answer_window: true }, round);
+    }
     if (forceAnswer && budget.exhaustedBy === null) {
       messages.push({
         role: 'user',
@@ -270,6 +284,9 @@ export async function runCodeResearchStream(
         reasoningEffort,
         responseLength: options.responseLength ?? DEFAULT_RESPONSE_LENGTH,
         finalAnswer: forceAnswer,
+        /* The job's remaining promise, minus the answer's window. The transport
+           adds nothing of its own except the idle timer, which watches silence. */
+        deadlineMs: callDeadlineMs(budget, preset, options.responseLength ?? DEFAULT_RESPONSE_LENGTH, forceAnswer),
         traceId,
         traceRound: round,
         label: `code-round-${round}`,

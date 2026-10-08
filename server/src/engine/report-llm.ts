@@ -47,6 +47,13 @@ Rules:
 interface CallOptions {
   signal?: AbortSignal;
   reasoningEffort?: ReasoningEffort;
+  /**
+   * Wall clock for the extraction call. It runs after the answer, so it takes
+   * what is left of the job's promise rather than a budget of its own: a
+   * non-streaming call has no idle timer to fall back on, so without a bound a
+   * stuck provider would hold the job open indefinitely.
+   */
+  deadlineMs: number;
 }
 
 /**
@@ -108,7 +115,7 @@ export async function extractClaims(input: {
   answer: string;
   registry: ReportSource[];
 } & CallOptions): Promise<ExtractedClaim[]> {
-  const { answer, registry, signal, reasoningEffort } = input;
+  const { answer, registry, signal, reasoningEffort, deadlineMs } = input;
   if (answer.trim().length === 0 || registry.length === 0) return [];
   try {
     const result = await callLLM({
@@ -124,6 +131,7 @@ export async function extractClaims(input: {
       role: 'deep',
       label: 'claim-extraction',
       signal,
+      deadlineMs,
       ...(reasoningEffort ? { reasoningEffort } : {}),
     });
     const parsed = CLAIMS_SCHEMA.safeParse(JSON.parse(extractJson(readAssistantText(result.data))));
