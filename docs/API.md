@@ -99,6 +99,8 @@ Every failure has the same shape:
 | `CONCURRENCY_LIMIT` | 429 | Too many jobs running for this key |
 | `SEARCH_NOT_CONFIGURED` | 503 | No search provider has a key configured on the server |
 | `SCHEMA_VIOLATION` | 400 | Body failed schema validation; `details` carries the issues |
+| `INVALID_JSON` | 400 | Request body is not valid JSON |
+| `PAYLOAD_TOO_LARGE` | 413 | Request body exceeds the configured size limit |
 | `LOCAL_MANAGEMENT_ONLY` | 403 | Key management is not exposed publicly |
 
 `SEARCH_NOT_CONFIGURED` is a server-side misconfiguration, not a client error. It

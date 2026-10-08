@@ -57,6 +57,17 @@ const app = express();
 app.disable('x-powered-by');
 app.use(cors());
 app.use(express.json({ limit: getConfig().server.jsonBodyLimit }));
+/* Parser errors use the same JSON contract as the routes, without dumping the
+   submitted body or an Express stack trace to the caller. */
+app.use(((error, _req, res, next) => {
+  if (error?.type === 'entity.parse.failed') {
+    res.status(400).json({ error: { code: 'INVALID_JSON', message: 'Request body must be valid JSON.', retryable: false } });
+  } else if (error?.type === 'entity.too.large') {
+    res.status(413).json({ error: { code: 'PAYLOAD_TOO_LARGE', message: 'Request body exceeds the configured limit.', retryable: false } });
+  } else {
+    next(error);
+  }
+}) as express.ErrorRequestHandler);
 
 /* Data retention from config.yaml: one pass at boot, then hourly. Nothing
    running is ever touched; logs rotate under their own limits. */
