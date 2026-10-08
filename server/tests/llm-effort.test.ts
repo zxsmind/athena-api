@@ -51,6 +51,14 @@ describe('reasoning effort on the wire', () => {
       modelProviderOptions(target('kilo'), sovinfra({ reasoningEffort: 'low' }), '@ai-sdk/openai-compatible', 'xhigh'),
     ).toEqual({ openaiCompatible: { reasoningEffort: 'xhigh' } });
   });
+
+  it('sends medium for SovInfra low rounds while preserving xhigh rounds', () => {
+    const provider = sovinfra({ reasoningEffort: 'medium' });
+    expect(modelProviderOptions(target('sovinfra'), provider, '@ai-sdk/openai-compatible', 'low'))
+      .toEqual({ openaiCompatible: { reasoningEffort: 'medium' } });
+    expect(modelProviderOptions(target('sovinfra'), provider, '@ai-sdk/openai-compatible', 'xhigh'))
+      .toEqual({ openaiCompatible: { reasoningEffort: 'xhigh' } });
+  });
 });
 
 describe('applyReasoningFloor', () => {

@@ -112,12 +112,14 @@ export class SmartRoutingBridge {
     return { candidates: allCandidates, providerMap };
   }
 
-  selectTarget(role?: LLMRole, requirements: { toolCall?: boolean; reasoning?: boolean } = {}): {
+  selectTarget(role?: LLMRole, requirements: { toolCall?: boolean; reasoning?: boolean } = {}, excludedRoutes?: ReadonlySet<string>): {
     target: TargetReference;
     leaseId: string;
     routeId: string;
   } | null {
-    const { candidates, providerMap } = this.buildCandidates(role, requirements);
+    const built = this.buildCandidates(role, requirements);
+    const candidates = built.candidates.filter((candidate) => !excludedRoutes?.has(candidate.routeId));
+    const providerMap = built.providerMap;
     if (candidates.length === 0) {
       return null;
     }

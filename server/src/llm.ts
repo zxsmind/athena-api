@@ -82,7 +82,7 @@ export interface LLMResult {
   usage: LLMUsage;
 }
 
-type FailureReason = 'auth' | 'rate-limit' | 'transient';
+type FailureReason = 'auth' | 'request' | 'rate-limit' | 'transient';
 type AttemptResult =
   | { ok: true; data: unknown; fullContent?: string; usage: LLMUsage; observations?: CapacityObservation[] }
   | { ok: false; reason: FailureReason; observations?: CapacityObservation[]; detail?: string };
@@ -384,6 +384,7 @@ function createTimeoutSignal(parent: AbortSignal | undefined, timeoutMs: number)
 /** Stall after which a flowing stream is declared dead. Chunks arrive far more
  *  often than this in a healthy stream; an hour-long silence is not patience. */
 export const LLM_STREAM_IDLE_TIMEOUT_MS = 60_000;
+
 
 /** Ceiling for turning a finished stream into text. The stream timers are
  *  disposed once consumption ends, so an SDK promise that never settles
@@ -692,7 +693,7 @@ async function callSelectedTarget(
 
     try {
       if (streaming) {
-        const result = streamText(common);
+        const result = streamText({ ...common, onError: () => undefined });
         let streamError: unknown;
         try {
           for await (const chunk of result.fullStream) {
@@ -751,11 +752,15 @@ async function callSelectedTarget(
         }];
       } else if (status === 401 || status === 403) {
         lastFailure = 'auth';
+      } else if ((status !== null && status >= 400 && status < 500 && status !== 408 && status !== 409)
+        || asRecord(error).isRetryable === false) {
+        lastFailure = 'request';
       } else {
         lastFailure = 'transient';
       }
       lastDetail = error instanceof Error ? error.message : String(error);
       logError(label, target.url, status ?? 0, error instanceof Error ? error.message : String(error));
+      if (lastFailure === 'request') return { ok: false, reason: lastFailure, detail: lastDetail };
     }
   }
   return { ok: false, reason: lastFailure, observations: lastObservations, detail: lastDetail };
@@ -772,6 +777,11 @@ async function sleepWithSignal(ms: number, signal?: AbortSignal): Promise<void> 
 async function runLLM(options: LLMOptions, streaming: boolean): Promise<LLMResult> {
   const label = options.label || (streaming ? 'callLLMStream' : 'callLLM');
   const tried: string[] = [];
+  const excludedRoutes = new Set<string>();
+  const requirements = {
+    toolCall: Boolean(options.tools?.length),
+    reasoning: Boolean(options.reasoningEffort && options.reasoningEffort !== 'none' && options.reasoningEffort !== 'minimal'),
+  };
   const startTime = Date.now();
   const maxDurationMs = 120_000;
   /* A single route that is merely busy must not end the run. The same
@@ -787,15 +797,14 @@ async function runLLM(options: LLMOptions, streaming: boolean): Promise<LLMResul
 
   while (Date.now() - startTime < maxDurationMs) {
     if (options.signal?.aborted) throw new Error(`${label} cancelled`);
-    const selection = smartRouting.selectTarget(options.role, {
-      toolCall: Boolean(options.tools?.length),
-      reasoning: Boolean(options.reasoningEffort && options.reasoningEffort !== 'none' && options.reasoningEffort !== 'minimal'),
-    });
+    const selection = smartRouting.selectTarget(options.role, requirements, excludedRoutes);
     if (!selection) {
       /* Every route is cooling off. Wait for the shortest recovery and try
          again, bounded by the same deadline as the rest of the loop. Before
          this, one target out of one that was merely busy ended the run. */
-      const waitMs = smartRouting.getMinRecoveryMs();
+      const hasRemainingRoute = smartRouting.buildCandidates(options.role, requirements).candidates
+        .some((candidate) => !excludedRoutes.has(candidate.routeId));
+      const waitMs = hasRemainingRoute ? smartRouting.getMinRecoveryMs() : null;
       const remaining = maxDurationMs - (Date.now() - startTime);
       if (waitMs && waitMs > 0 && remaining > 0) {
         await sleepWithSignal(Math.min(waitMs, remaining), options.signal);
@@ -838,13 +847,13 @@ messages: summarizeMessages(options.messages),
     /* `callSelectedTarget` reports a failure by returning `{ok:false}` rather
        than throwing, because it already handled the provider error. `withRetry`
        retries on a throw, so this adapter turns a retryable failure into one.
-       An auth failure is deliberately not thrown: a revoked or wrong key will
-       not fix itself, and retrying it five times just delays the real error. */
+       Auth and rejected requests are returned without retries: a revoked key,
+       missing endpoint or invalid parameter cannot recover through backoff. */
     const callOnce = async (): Promise<AttemptResult | null> => {
       attempts++;
       const r = await callSelectedTarget(selection.target, options, streaming, label);
       if (r === null || r.ok) return r;
-      if (r.reason === 'auth') return r;
+      if (r.reason === 'auth' || r.reason === 'request') return r;
       const err = new Error(
         `${selection.target.id}/${selection.target.model} -> ${r.reason}${r.detail ? `: ${r.detail}` : ''}`,
       ) as Error & { retryable: true };
@@ -926,9 +935,11 @@ messages: summarizeMessages(options.messages),
       tried.push(reason);
       smartRouting.recordOutcome(selection.leaseId, 'transient-failure', { detail: reason });
     } else if (result === null) {
+      excludedRoutes.add(selection.routeId);
       tried.push(`${selection.target.id}/${selection.target.model} -> no enabled keys`);
       smartRouting.recordOutcome(selection.leaseId, 'transient-failure', { detail: 'Model skipped (no enabled key)' });
     } else {
+      if (result.reason === 'auth' || result.reason === 'request') excludedRoutes.add(selection.routeId);
       const kind = result.reason === 'auth' ? 'auth-failure' : result.reason === 'rate-limit' ? 'rate-limit' : 'transient-failure';
       tried.push(`${selection.target.id}/${selection.target.model} -> ${result.reason}${result.detail ? `: ${result.detail}` : ''}`);
       smartRouting.recordOutcome(selection.leaseId, kind, {
