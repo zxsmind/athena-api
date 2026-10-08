@@ -50,7 +50,13 @@ To call it as `athena` from any directory:
 
 ```sh
 npm run link:cli             # builds and links `athena`
+athena mcp                   # local MCP client command
 ```
+
+Local MCP clients can launch `athena mcp` over stdio. Remote clients can connect
+to the running service at `/v1/mcp` over Streamable HTTP. Both transports use the
+same Athena tools and configuration. After `npm run link:cli`, configure a stdio
+client with command `athena` and argument `mcp`.
 
 ## Configuration
 
@@ -109,10 +115,15 @@ POST /v1/research
 GET  /v1/jobs/:id
 GET  /v1/jobs/:id/events
 GET  /v1/models
+POST /v1/mcp  (MCP Streamable HTTP)
 ```
 
 Remote `/v1` requests require `Authorization: Bearer <key>`. Loopback requests may
 use local access. Full contract: [docs/API.md](docs/API.md).
+
+MCP clients connect to `http://localhost:39921/v1/mcp`. Remote clients use the
+same Athena API key as `/v1`; loopback clients may omit it. For a remote hostname,
+add that hostname to `server.mcpAllowedHosts` in `config.yaml` and restart Athena.
 
 ## Research modes
 

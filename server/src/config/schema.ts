@@ -126,6 +126,8 @@ export const serverConfigSchema = z.object({
    * address, which a spoofed header cannot fake.
    */
   trustedProxies: z.array(z.string().min(1)).default([]),
+  /** Hostnames accepted by the MCP endpoint for Host and Origin validation. */
+  mcpAllowedHosts: z.array(z.string().min(1)).default(['localhost', '127.0.0.1', '[::1]']),
 });
 
 export const storageConfigSchema = z.object({

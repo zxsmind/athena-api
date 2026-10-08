@@ -4,6 +4,11 @@
  * kit, so piped output stays readable and interactive output stays animated.
  */
 import { input, select } from '@inquirer/prompts';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
+import { Meter } from './application/meter.js';
+import { ApiPlatformStore } from './api-platform-store.js';
+import { getConfig, initConfig } from './config/load.js';
+import { configureLogger } from './logger.js';
 import { runAbout, runAdminKey, runKeys, runLogs, runRepair, runStats, runStatus, checkKeyName, KEY_NAME_RULE, type KeysCommand, type LogsOptions, type StatsOptions } from './cli/admin.js';
 import { runConfig } from './cli/config.js';
 import { runSetup } from './cli/setup.js';
@@ -18,6 +23,9 @@ import {
 } from './cli/trace.js';
 import * as ui from './cli/ui.js';
 import { failure, info, line } from './cli/ui.js';
+import { closeAllSandboxes } from './sandbox/manager.js';
+import { closeDatabase, getDataPath } from './storage.js';
+import { assertConfigured } from './startup-guard.js';
 
 const PLANS = ['free', 'paid', 'enterprise'] as const;
 
@@ -70,6 +78,7 @@ function usage(): void {
   const rows: Array<[string, string]> = [
     ['config', 'Manage configuration at any time: providers, keys, models, search backends.'],
     ['setup', 'First-run wizard. Saves once at the end.'],
+    ['mcp', 'Expose Athena research tools to a local MCP client over stdio.'],
     ['status', 'Configured providers, backends, and server liveness.'],
     ['keys list', 'Show API keys with plan, usage, and last use.'],
     ['keys create --name <n> --plan <p>', 'Create a key. The secret is printed once.'],
@@ -142,6 +151,52 @@ async function runKeysCommand(action: string, parsed: Parsed): Promise<void> {
   await runKeys(command);
 }
 
+function redirectConsoleToStderr(): void {
+  const toStderr = (...args: Parameters<typeof console.log>) => console.error(...args);
+  console.log = toStderr;
+  console.info = toStderr;
+  console.warn = toStderr;
+  console.debug = toStderr;
+}
+
+async function runMcp(): Promise<void> {
+  redirectConsoleToStderr();
+  initConfig(getDataPath('config.yaml'));
+  configureLogger({ ...getConfig().logging, echoToStdout: false });
+  assertConfigured();
+
+  const [{ createAthenaMcpServer }, { applyRuntimeLimits, runResearchJob }] = await Promise.all([
+    import('./api-v1.js'),
+    import('./application/research-runner.js'),
+  ]);
+  applyRuntimeLimits();
+
+  const meter = new Meter(new ApiPlatformStore());
+  const context = {
+    usage: meter,
+    apiKeyId: null,
+    keyPlan: null,
+    startResearchJob: (jobId: string) => runResearchJob(jobId, meter),
+  };
+  const server = serveStdio(() => createAthenaMcpServer(context), {
+    onerror: (error) => process.stderr.write(`[athena mcp] ${error.message}\n`),
+  });
+
+  let closing = false;
+  const close = () => {
+    if (closing) return;
+    closing = true;
+    void server.close()
+      .catch((error: unknown) => process.stderr.write(`[athena mcp] ${error instanceof Error ? error.message : String(error)}\n`))
+      .finally(() => {
+        closeAllSandboxes();
+        closeDatabase();
+      });
+  };
+  process.once('SIGINT', close);
+  process.once('SIGTERM', close);
+}
+
 async function main(): Promise<void> {
   const parsed = parseArgs(process.argv.slice(2));
 
@@ -174,6 +229,9 @@ async function main(): Promise<void> {
     case 'status':
       ui.banner('status');
       await runStatus();
+      return;
+    case 'mcp':
+      await runMcp();
       return;
     case 'keys': {
       const action = parsed.words[0] ?? parsed.flags.get('action') ?? 'list';
@@ -266,6 +324,7 @@ async function main(): Promise<void> {
   }
 }
 
+const stdioMcpMode = process.argv[2] === 'mcp';
 main().catch((error: unknown) => {
   if (error instanceof Error && (error.name === 'ExitPromptError' || error.name === 'AbortPromptError')) {
     line();
@@ -273,6 +332,7 @@ main().catch((error: unknown) => {
     process.exitCode = 1;
     return;
   }
-  failure(error instanceof Error ? error.message : String(error));
+  if (stdioMcpMode) process.stderr.write(`[athena mcp] ${error instanceof Error ? error.message : String(error)}\n`);
+  else failure(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 });

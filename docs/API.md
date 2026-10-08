@@ -1,11 +1,13 @@
 # API reference
 
-Base URL `/v1`. Every request except `GET /health` requires an API key.
+Base URL `/v1`. Every remote request except `GET /health` requires an API key;
+loopback requests may use local access.
 
 Athena has three surfaces. `/search` and `/contents` are deterministic: they call
 a provider and return what it returned, with no model involved. `/research` runs
 an agentic loop that calls the same tools, keeps notes, and answers with inline
-`[N]` citations tied to the job's source registry.
+`[N]` citations tied to the job's source registry. The same operations are also
+available as MCP tools over Streamable HTTP.
 
 | | |
 |---|---|
@@ -18,6 +20,7 @@ an agentic loop that calls the same tools, keeps notes, and answers with inline
 ## Contents
 
 - [Authentication](#authentication)
+- [MCP server](#mcp-server)
 - [Public deployments](#public-deployments)
 - [Errors](#errors)
 - [Endpoints](#endpoints)
@@ -56,9 +59,40 @@ curl https://your-host/v1/research \
 An unknown or revoked key returns `401 UNAUTHORIZED`. A valid key on a plan that
 does not allow the call returns `403` with a code naming the limit.
 
-`GET /health` is the only unauthenticated endpoint, so an uptime check needs no
-credential. Requests from the machine itself (loopback) also skip key auth;
-everything else needs a key.
+`GET /health` is the only endpoint that remote callers can use without a key, so
+an uptime check needs no credential. Requests from the machine itself (loopback)
+also skip key auth.
+
+## MCP server
+
+Athena exposes MCP at `POST /v1/mcp` using Streamable HTTP. Start Athena as usual,
+then configure an MCP client to connect to that URL. Remote clients send the same
+`Authorization: Bearer <key>` used by the REST API; loopback clients use Athena's
+existing local access rule.
+
+For a local client that launches an MCP process, run `athena mcp`. It uses the
+same data directory and settings as the normal CLI and speaks MCP over stdio.
+Local stdio access has the same administrative scope as loopback access.
+
+The MCP tool catalog maps to Athena's existing API operations:
+
+- `athena_search` — same inputs and results as `POST /search`.
+- `athena_read_contents` — same inputs and results as `POST /contents`.
+- `athena_start_research` — same asynchronous start response as `POST /research`,
+  including the existing `job_id`.
+- `athena_list_jobs`, `athena_get_job`, `athena_cancel_job`,
+  `athena_pause_job`, and `athena_resume_job` — the corresponding job operations.
+
+Tool results contain the existing API response as JSON text. Operation failures
+are MCP tool errors with Athena's normal `code`, `message`, `details`, and
+`retryable` fields. API keys can only list and operate on jobs created with that
+key; loopback local access can manage all API jobs.
+
+The default `server.mcpAllowedHosts` list permits `localhost`, `127.0.0.1`, and
+`[::1]`. For a reverse-proxy hostname, add its hostname (without scheme or port)
+to that list in `config.yaml` and restart Athena. When a same-host reverse proxy
+is used, configure `server.trustedProxies` as described below. Host and Origin
+validation protects the MCP route.
 
 ## Public deployments
 
@@ -250,7 +284,8 @@ budget.
 
 Lists recent jobs, newest first. `?limit=` accepts 1 to 100 and defaults to 20.
 Only jobs created through `/research` appear here; internal chat runs are not
-listed.
+listed. An API key sees only jobs created with that key; loopback local access
+can see all API jobs.
 
 ### `GET /jobs/:id`
 

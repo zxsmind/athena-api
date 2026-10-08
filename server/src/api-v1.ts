@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
+import { hostHeaderValidation, originValidation } from '@modelcontextprotocol/express';
+import { toNodeHandler } from '@modelcontextprotocol/node';
+import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { isLocalManagementRequest, isLoopbackRequest } from './access.js';
 import { isAdminKey } from './admin-auth.js';
 import { ApiPlatformStore, publicApiKey, type KeyPlan } from './api-platform-store.js';
@@ -27,7 +30,6 @@ import {
   RESPONSE_LENGTHS,
   resolveResearchPreset,
   reasoningEffortForMode,
-  type ResearchMode,
 } from './engine/modes.js';
 import { getModelsDevSnapshot, listConfiguredModelsDevProviders } from './models-dev.js';
 
@@ -35,8 +37,8 @@ const SearchSchema = z.object({
   query: z.string().trim().min(1).max(2000),
   type: z.enum(['search', 'news', 'images', 'videos', 'places', 'shopping', 'scholar', 'patents']).default('search'),
   count: z.number().int().min(1).max(20).default(8),
-  country: z.string().trim().regex(/^[a-z]{2}$/i).default(getConfig().search.defaultCountry),
-  language: z.string().trim().regex(/^[a-z]{2,3}$/i).default(getConfig().search.defaultLanguage),
+  country: z.string().trim().regex(/^[a-z]{2}$/i).optional(),
+  language: z.string().trim().regex(/^[a-z]{2,3}$/i).optional(),
   time_range: z.enum(['day', 'week', 'month', 'year']).nullable().default(null),
   depth: z.enum(['links', 'passages', 'full']).default('passages'),
   include_domains: z.array(z.string().trim().min(1).max(253)).max(30).default([]),
@@ -72,21 +74,30 @@ interface ApiV1Dependencies {
   meter?: Meter;
 }
 
+export interface AthenaMcpDependencies {
+  usage: Meter;
+  apiKeyId: string | null;
+  keyPlan: KeyPlan | null;
+  startResearchJob: (id: string) => Promise<void> | void;
+}
+
+class ApiOperationError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+    readonly details?: unknown,
+    readonly retryable = status >= 500,
+  ) {
+    super(message);
+    this.name = 'ApiOperationError';
+  }
+}
+
 function sendError(res: Response, status: number, code: string, message: string, details?: unknown, retryable = status >= 500): void {
   res.status(status).json({
     error: { code, message, ...(details === undefined ? {} : { details }), retryable },
   });
-}
-
-function sendSearchNotConfigured(res: Response): void {
-  sendError(
-    res,
-    503,
-    'SEARCH_NOT_CONFIGURED',
-    'No search provider is configured. Add an API key for one of the search providers before searching or starting research.',
-    undefined,
-    false,
-  );
 }
 
 function routeTemplate(path: string): string {
@@ -173,13 +184,14 @@ export function publicJob(job: ResearchJobRecord) {
   };
 }
 
-function getApiResearchJob(id: string): ResearchJobRecord | undefined {
+function getApiResearchJob(id: string, apiKeyId?: string | null): ResearchJobRecord | undefined {
   const job = getResearchJob(id);
-  return job?.researchApi ? job : undefined;
+  if (!job?.researchApi) return undefined;
+  return apiKeyId && job.apiKeyId !== apiKeyId ? undefined : job;
 }
 
-function streamJobEvents(req: Request, res: Response, jobId: string): void {
-  const job = getApiResearchJob(jobId);
+function streamJobEvents(req: Request, res: Response, jobId: string, apiKeyId?: string | null): void {
+  const job = getApiResearchJob(jobId, apiKeyId);
   if (!job) {
     sendError(res, 404, 'NOT_FOUND', 'Research job was not found.');
     return;
@@ -244,9 +256,261 @@ function requestSignal(req: Request, res: Response): AbortSignal {
   return controller.signal;
 }
 
+type SearchInput = z.infer<typeof SearchSchema>;
+type ContentsInput = z.infer<typeof ContentsSchema>;
+type ResearchInput = z.infer<typeof ResearchSchema>;
+
+async function runSearch(input: SearchInput, signal: AbortSignal | undefined, usage: Meter, apiKeyId: string | null) {
+  const started = Date.now();
+  const country = input.country ?? getConfig().search.defaultCountry;
+  const language = input.language ?? getConfig().search.defaultLanguage;
+  try {
+    const result = await searchResults(input.query, input.type, signal, input.count, {
+      country,
+      language,
+      timeRange: input.time_range,
+      depth: input.depth,
+      includeDomains: input.include_domains,
+      excludeDomains: input.exclude_domains,
+    });
+    usage.chargeSearch(apiKeyId);
+    return {
+      query: input.query,
+      query_used: result.queryText,
+      type: input.type,
+      results: result.results,
+      applied: { country, language, time_range: input.time_range, depth: input.depth },
+      metadata: { provider: result.provider ?? 'unknown', count: result.results.length, elapsed_ms: Date.now() - started },
+    };
+  } catch (error: unknown) {
+    if (error instanceof SearchProviderNotConfiguredError) {
+      throw new ApiOperationError(
+        503,
+        'SEARCH_NOT_CONFIGURED',
+        'No search provider is configured. Add an API key for one of the search providers before searching or starting research.',
+        undefined,
+        false,
+      );
+    }
+    throw new ApiOperationError(502, 'SEARCH_PROVIDER_ERROR', error instanceof Error ? error.message : 'Search provider failed.');
+  }
+}
+
+async function runContents(input: ContentsInput, signal: AbortSignal | undefined, usage: Meter, apiKeyId: string | null) {
+  const results = await Promise.all(input.urls.map(async (url) => {
+    const extracted = await extractPageContent(url, signal);
+    if (extracted.error || !extracted.content) return { ok: false as const, url, error: extracted.error ?? 'No readable content found.' };
+    return {
+      ok: true as const,
+      document: {
+        url,
+        title: extracted.title,
+        content: extracted.content,
+        content_digest: createHash('sha256').update(extracted.content).digest('hex'),
+      },
+    };
+  }));
+  const documents = results.flatMap((result) => result.ok ? [result.document] : []);
+  usage.chargeContents(apiKeyId, documents.length);
+  return {
+    documents,
+    failed: results.flatMap((result) => result.ok ? [] : [{ url: result.url, error: result.error }]),
+  };
+}
+
+interface ResearchContext {
+  usage: Meter;
+  apiKeyId: string | null;
+  keyPlan: KeyPlan | null;
+  startResearchJob: (id: string) => Promise<void> | void;
+}
+
+function startApiResearch(input: ResearchInput, context: ResearchContext) {
+  if (!isSearchProviderConfigured()) {
+    throw new ApiOperationError(
+      503,
+      'SEARCH_NOT_CONFIGURED',
+      'No search provider is configured. Add an API key for one of the search providers before searching or starting research.',
+      undefined,
+      false,
+    );
+  }
+  const reasoningEffort = reasoningEffortForMode(input.mode);
+  if (!context.usage.acquireJobSlot(context.apiKeyId, context.keyPlan)) {
+    throw new ApiOperationError(429, 'CONCURRENCY_LIMIT', 'Too many research jobs are already running for this key.', {
+      max_concurrent_jobs: context.usage.jobSlotLimit(context.keyPlan),
+      active_jobs: context.usage.activeJobCount(context.apiKeyId),
+    }, false);
+  }
+  try {
+    const job = createResearchJob({
+      query: input.query,
+      mode: input.mode,
+      preset: resolveResearchPreset(input.mode),
+      reasoningEffort,
+      responseLength: input.response_length,
+      verbosity: input.verbosity,
+      researchApi: true,
+      apiKeyId: context.apiKeyId ?? undefined,
+    });
+    void Promise.resolve(context.startResearchJob(job.id)).catch((error) => console.error('[api-research-job]', error));
+    return { job, reasoningEffort };
+  } catch (error: unknown) {
+    context.usage.releaseJobSlot(context.apiKeyId);
+    throw new ApiOperationError(500, 'JOB_CREATE_FAILED', error instanceof Error ? error.message : 'Research job could not be created.');
+  }
+}
+
+function researchAccepted(input: ResearchInput, job: ResearchJobRecord, reasoningEffort: string) {
+  return {
+    job_id: job.id,
+    status: 'queued',
+    mode: input.mode,
+    reasoning_effort: reasoningEffort,
+    response_length: input.response_length,
+    verbosity: input.verbosity,
+    streams: { snapshot: `/v1/jobs/${job.id}`, events: `/v1/jobs/${job.id}/events` },
+  };
+}
+
+function listApiResearchJobs(limit: number, apiKeyId?: string | null) {
+  return listResearchJobs()
+    .filter((job) => job.researchApi && (!apiKeyId || job.apiKeyId === apiKeyId))
+    .slice(0, limit)
+    .map(publicJob);
+}
+
+function getPublicApiResearchJob(id: string, apiKeyId?: string | null) {
+  const job = getApiResearchJob(id, apiKeyId);
+  if (!job) throw new ApiOperationError(404, 'NOT_FOUND', 'Research job was not found.', undefined, false);
+  return job;
+}
+
+function cancelApiResearchJob(id: string, apiKeyId?: string | null) {
+  getPublicApiResearchJob(id, apiKeyId);
+  const job = cancelResearchJob(id);
+  if (!job) throw new ApiOperationError(404, 'NOT_FOUND', 'Research job was not found.', undefined, false);
+  return publicJob(job);
+}
+
+function pauseApiResearchJob(id: string, apiKeyId?: string | null) {
+  getPublicApiResearchJob(id, apiKeyId);
+  const job = pauseResearchJob(id);
+  if (!job) throw new ApiOperationError(400, 'JOB_NOT_PAUSABLE', 'Research job cannot be paused in its current state.', undefined, false);
+  return publicJob(job);
+}
+
+function resumeApiResearchJob(id: string, context: ResearchContext) {
+  getPublicApiResearchJob(id, context.apiKeyId);
+  if (!context.usage.acquireJobSlot(context.apiKeyId, context.keyPlan)) {
+    throw new ApiOperationError(429, 'CONCURRENCY_LIMIT', 'Too many research jobs are already running for this key.', {
+      max_concurrent_jobs: context.usage.jobSlotLimit(context.keyPlan),
+      active_jobs: context.usage.activeJobCount(context.apiKeyId),
+    }, false);
+  }
+  const job = resumeResearchJob(id);
+  if (!job) {
+    context.usage.releaseJobSlot(context.apiKeyId);
+    throw new ApiOperationError(400, 'JOB_NOT_RESUMABLE', 'Research job cannot be resumed in its current state.', undefined, false);
+  }
+  void Promise.resolve(context.startResearchJob(job.id)).catch((error) => console.error('[api-research-resume]', error));
+  return publicJob(job);
+}
+
+function mcpSuccess(value: unknown) {
+  return { content: [{ type: 'text' as const, text: JSON.stringify(value) }] };
+}
+
+function mcpFailure(error: unknown, fallbackCode: string) {
+  const result = error instanceof ApiOperationError
+    ? { code: error.code, message: error.message, ...(error.details === undefined ? {} : { details: error.details }), retryable: error.retryable }
+    : { code: fallbackCode, message: error instanceof Error ? error.message : 'MCP operation failed.', retryable: true };
+  return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ error: result }) }] };
+}
+
+export function createAthenaMcpServer(context: AthenaMcpDependencies): McpServer {
+    const server = new McpServer({ name: 'athena', version: '0.1.0' });
+    const researchContext: ResearchContext = {
+      usage: context.usage,
+      apiKeyId: context.apiKeyId,
+      keyPlan: context.keyPlan,
+      startResearchJob: context.startResearchJob,
+    };
+    const jobSchema = z.object({ job_id: z.string().trim().min(1).max(128) });
+    server.registerTool('athena_search', {
+      description: 'Search the web with Athena and return ranked results with provider metadata.',
+      inputSchema: SearchSchema,
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    }, async (input, ctx) => {
+      try { return mcpSuccess(await runSearch(input, ctx.mcpReq.signal, context.usage, context.apiKeyId)); }
+      catch (error: unknown) { return mcpFailure(error, 'SEARCH_PROVIDER_ERROR'); }
+    });
+    server.registerTool('athena_read_contents', {
+      description: 'Read and extract the main text from one or more web pages.',
+      inputSchema: ContentsSchema,
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    }, async (input, ctx) => {
+      try { return mcpSuccess(await runContents(input, ctx.mcpReq.signal, context.usage, context.apiKeyId)); }
+      catch (error: unknown) { return mcpFailure(error, 'CONTENTS_PROVIDER_ERROR'); }
+    });
+    server.registerTool('athena_start_research', {
+      description: 'Start an Athena research job and return its job_id.',
+      inputSchema: ResearchSchema,
+      annotations: { openWorldHint: true },
+    }, async (input) => {
+      try {
+        const { job, reasoningEffort } = startApiResearch(input, researchContext);
+        return mcpSuccess(researchAccepted(input, job, reasoningEffort));
+      } catch (error: unknown) { return mcpFailure(error, 'JOB_CREATE_FAILED'); }
+    });
+    server.registerTool('athena_list_jobs', {
+      description: 'List recent Athena research jobs available to this API key.',
+      inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(20) }),
+      annotations: { readOnlyHint: true },
+    }, async ({ limit }) => mcpSuccess({ jobs: listApiResearchJobs(limit, context.apiKeyId) }));
+    server.registerTool('athena_get_job', {
+      description: 'Get the status, progress, or result of an Athena research job.',
+      inputSchema: jobSchema,
+      annotations: { readOnlyHint: true },
+    }, async ({ job_id }) => {
+      try { return mcpSuccess(publicJob(getPublicApiResearchJob(job_id, context.apiKeyId))); }
+      catch (error: unknown) { return mcpFailure(error, 'NOT_FOUND'); }
+    });
+    server.registerTool('athena_cancel_job', {
+      description: 'Cancel an active Athena research job.',
+      inputSchema: jobSchema,
+      annotations: { destructiveHint: true },
+    }, async ({ job_id }) => {
+      try { return mcpSuccess(cancelApiResearchJob(job_id, context.apiKeyId)); }
+      catch (error: unknown) { return mcpFailure(error, 'NOT_FOUND'); }
+    });
+    server.registerTool('athena_pause_job', {
+      description: 'Pause a running Athena research job.',
+      inputSchema: jobSchema,
+    }, async ({ job_id }) => {
+      try { return mcpSuccess(pauseApiResearchJob(job_id, context.apiKeyId)); }
+      catch (error: unknown) { return mcpFailure(error, 'JOB_NOT_PAUSABLE'); }
+    });
+    server.registerTool('athena_resume_job', {
+      description: 'Resume a paused Athena research job.',
+      inputSchema: jobSchema,
+    }, async ({ job_id }) => {
+      try { return mcpSuccess(resumeApiResearchJob(job_id, researchContext)); }
+      catch (error: unknown) { return mcpFailure(error, 'JOB_NOT_RESUMABLE'); }
+    });
+    return server;
+}
+
+function createMcpHttpHandler(context: AthenaMcpDependencies) {
+  return toNodeHandler(createMcpHandler(() => createAthenaMcpServer(context)));
+}
+
 export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Dependencies) {
   const router = Router();
   const usage = meter ?? new Meter(store);
+  const mcpAllowedHosts = getConfig().server.mcpAllowedHosts;
+
+  router.use('/mcp', hostHeaderValidation(mcpAllowedHosts), originValidation(mcpAllowedHosts));
 
   router.use(async (req, res, next) => {
     const startedAt = Date.now();
@@ -324,6 +588,23 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
     res.locals.apiKeyId = apiKeyId;
     res.locals.keyPlan = keyPlan;
     next();
+  });
+
+  router.all('/mcp', (req, res) => {
+    const mcpHandler = createMcpHttpHandler({
+      usage,
+      apiKeyId: (res.locals.apiKeyId as string | null) ?? null,
+      keyPlan: (res.locals.keyPlan as KeyPlan | null) ?? null,
+      startResearchJob,
+    });
+    void Promise.resolve(mcpHandler(req, res, req.body)).catch((error: unknown) => {
+      console.error('[mcp]', error instanceof Error ? error.message : String(error));
+      if (res.headersSent) {
+        res.end();
+        return;
+      }
+      sendError(res, 500, 'MCP_INTERNAL_ERROR', 'MCP request could not be completed.');
+    });
   });
 
   router.get('/health', (_req, res) => {
@@ -410,30 +691,12 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
       sendError(res, 400, 'SCHEMA_VIOLATION', 'Search request did not match the endpoint schema.', parsed.error.issues);
       return;
     }
-    const input = parsed.data;
-    const started = Date.now();
     const signal = requestSignal(req, res);
     try {
-      const result = await searchResults(input.query, input.type, signal, input.count, {
-        country: input.country,
-        language: input.language,
-        timeRange: input.time_range,
-        depth: input.depth,
-        includeDomains: input.include_domains,
-        excludeDomains: input.exclude_domains,
-      });
-      res.json({
-        query: input.query,
-        query_used: result.queryText,
-        type: input.type,
-        results: result.results,
-        applied: { country: input.country, language: input.language, time_range: input.time_range, depth: input.depth },
-        metadata: { provider: result.provider ?? 'unknown', count: result.results.length, elapsed_ms: Date.now() - started },
-      });
-      usage.chargeSearch((res.locals.apiKeyId as string | null) ?? null);
+      res.json(await runSearch(parsed.data, signal, usage, (res.locals.apiKeyId as string | null) ?? null));
     } catch (error) {
-      if (error instanceof SearchProviderNotConfiguredError) {
-        sendSearchNotConfigured(res);
+      if (error instanceof ApiOperationError) {
+        sendError(res, error.status, error.code, error.message, error.details, error.retryable);
         return;
       }
       sendError(res, 502, 'SEARCH_PROVIDER_ERROR', error instanceof Error ? error.message : 'Search provider failed.');
@@ -446,27 +709,8 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
       sendError(res, 400, 'SCHEMA_VIOLATION', 'Contents request did not match the endpoint schema.', parsed.error.issues);
       return;
     }
-    const signal = requestSignal(req, res);
-    const results = await Promise.all(parsed.data.urls.map(async (url) => {
-      const extracted = await extractPageContent(url, signal);
-      if (extracted.error || !extracted.content) return { ok: false as const, url, error: extracted.error ?? 'No readable content found.' };
-      return {
-        ok: true as const,
-        document: {
-          url,
-          title: extracted.title,
-          content: extracted.content,
-          content_digest: createHash('sha256').update(extracted.content).digest('hex'),
-        },
-      };
-    }));
-    const documents = results.flatMap((result) => result.ok ? [result.document] : []);
-    res.json({
-      documents,
-      failed: results.flatMap((result) => result.ok ? [] : [{ url: result.url, error: result.error }]),
-    });
-    /* Only pages that were actually extracted are billed. */
-    usage.chargeContents((res.locals.apiKeyId as string | null) ?? null, documents.length);
+    const result = await runContents(parsed.data, requestSignal(req, res), usage, (res.locals.apiKeyId as string | null) ?? null);
+    res.json(result);
   });
 
   router.post('/research', (req, res) => {
@@ -475,121 +719,67 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
       sendError(res, 400, 'SCHEMA_VIOLATION', 'Research request did not match the endpoint schema.', parsed.error.issues);
       return;
     }
-    const input = parsed.data;
-    if (!isSearchProviderConfigured()) {
-      sendSearchNotConfigured(res);
-      return;
-    }
-    const mode: ResearchMode = input.mode;
-    /* Effort is a property of the mode, not something the caller chooses. */
-    const reasoningEffort = reasoningEffortForMode(mode);
-    const verbosity = input.verbosity;
-    const apiKeyId = (res.locals.apiKeyId as string | null) ?? null;
-    const keyPlan = (res.locals.keyPlan as KeyPlan | null) ?? null;
-    /* A research job holds a concurrency slot for its whole run, so the limit is
-       checked before the job is created rather than by the job registry. */
-    if (!usage.acquireJobSlot(apiKeyId, keyPlan)) {
-      sendError(res, 429, 'CONCURRENCY_LIMIT', 'Too many research jobs are already running for this key.', {
-        max_concurrent_jobs: usage.jobSlotLimit(keyPlan),
-        active_jobs: usage.activeJobCount(apiKeyId),
-      });
-      return;
-    }
     try {
-      const preset = resolveResearchPreset(mode);
-      const job = createResearchJob({
-        query: input.query,
-        mode,
-        preset,
-        reasoningEffort,
-        responseLength: input.response_length,
-        verbosity,
-        researchApi: true,
-        apiKeyId: apiKeyId ?? undefined,
+      const { job, reasoningEffort } = startApiResearch(parsed.data, {
+        usage,
+        apiKeyId: (res.locals.apiKeyId as string | null) ?? null,
+        keyPlan: (res.locals.keyPlan as KeyPlan | null) ?? null,
+        startResearchJob,
       });
-      void Promise.resolve(startResearchJob(job.id)).catch((error) => console.error('[api-research-job]', error));
-      res.status(202).json({
-        job_id: job.id,
-        status: 'queued',
-        mode,
-        reasoning_effort: reasoningEffort,
-        response_length: input.response_length,
-        verbosity,
-        streams: { snapshot: `/v1/jobs/${job.id}`, events: `/v1/jobs/${job.id}/events` },
-      });
+      res.status(202).json(researchAccepted(parsed.data, job, reasoningEffort));
     } catch (error) {
-      /* The job was never created, so the slot it reserved must go back. */
-      usage.releaseJobSlot(apiKeyId);
+      if (error instanceof ApiOperationError) {
+        sendError(res, error.status, error.code, error.message, error.details, error.retryable);
+        return;
+      }
       sendError(res, 500, 'JOB_CREATE_FAILED', error instanceof Error ? error.message : 'Research job could not be created.');
     }
   });
 
   router.get('/jobs', (req, res) => {
     const limit = Math.max(1, Math.min(100, Math.trunc(Number(req.query.limit) || 20)));
-    res.json({ jobs: listResearchJobs().filter((job) => job.researchApi).slice(0, limit).map(publicJob) });
+    res.json({ jobs: listApiResearchJobs(limit, (res.locals.apiKeyId as string | null) ?? null) });
   });
 
   router.get('/jobs/:id', (req, res) => {
-    const job = getApiResearchJob(req.params.id);
-    if (!job) {
-      sendError(res, 404, 'NOT_FOUND', 'Research job was not found.');
-      return;
+    try {
+      res.json(publicJob(getPublicApiResearchJob(req.params.id, (res.locals.apiKeyId as string | null) ?? null)));
+    } catch (error) {
+      if (error instanceof ApiOperationError) sendError(res, error.status, error.code, error.message, error.details, error.retryable);
+      else sendError(res, 500, 'JOB_READ_FAILED', error instanceof Error ? error.message : 'Research job could not be read.');
     }
-    res.json(publicJob(job));
   });
 
-  router.get('/jobs/:id/events', (req, res) => streamJobEvents(req, res, req.params.id));
+  router.get('/jobs/:id/events', (req, res) => streamJobEvents(req, res, req.params.id, (res.locals.apiKeyId as string | null) ?? null));
 
   router.post('/jobs/:id/cancel', (req, res) => {
-    if (!getApiResearchJob(req.params.id)) {
-      sendError(res, 404, 'NOT_FOUND', 'Research job was not found.');
-      return;
+    try { res.json(cancelApiResearchJob(req.params.id, (res.locals.apiKeyId as string | null) ?? null)); }
+    catch (error) {
+      if (error instanceof ApiOperationError) sendError(res, error.status, error.code, error.message, error.details, error.retryable);
+      else sendError(res, 500, 'JOB_CANCEL_FAILED', error instanceof Error ? error.message : 'Research job could not be cancelled.');
     }
-    const job = cancelResearchJob(req.params.id);
-    if (!job) {
-      sendError(res, 404, 'NOT_FOUND', 'Research job was not found.');
-      return;
-    }
-    res.json(publicJob(job));
   });
 
   router.post('/jobs/:id/pause', (req, res) => {
-    if (!getApiResearchJob(req.params.id)) {
-      sendError(res, 404, 'NOT_FOUND', 'Research job was not found.');
-      return;
+    try { res.json(pauseApiResearchJob(req.params.id, (res.locals.apiKeyId as string | null) ?? null)); }
+    catch (error) {
+      if (error instanceof ApiOperationError) sendError(res, error.status, error.code, error.message, error.details, error.retryable);
+      else sendError(res, 500, 'JOB_PAUSE_FAILED', error instanceof Error ? error.message : 'Research job could not be paused.');
     }
-    const job = pauseResearchJob(req.params.id);
-    if (!job) {
-      sendError(res, 400, 'JOB_NOT_PAUSABLE', 'Research job cannot be paused in its current state.');
-      return;
-    }
-    res.json(publicJob(job));
   });
 
   router.post('/jobs/:id/resume', (req, res) => {
-    if (!getApiResearchJob(req.params.id)) {
-      sendError(res, 404, 'NOT_FOUND', 'Research job was not found.');
-      return;
+    try {
+      res.json(resumeApiResearchJob(req.params.id, {
+        usage,
+        apiKeyId: (res.locals.apiKeyId as string | null) ?? null,
+        keyPlan: (res.locals.keyPlan as KeyPlan | null) ?? null,
+        startResearchJob,
+      }));
+    } catch (error) {
+      if (error instanceof ApiOperationError) sendError(res, error.status, error.code, error.message, error.details, error.retryable);
+      else sendError(res, 500, 'JOB_RESUME_FAILED', error instanceof Error ? error.message : 'Research job could not be resumed.');
     }
-    /* Pause returned the slot, so resume takes one again. Without this a
-       resumed job would run past the key's concurrency ceiling. */
-    const resumeKeyId = (res.locals.apiKeyId as string | null) ?? null;
-    const resumePlan = (res.locals.keyPlan as KeyPlan | null) ?? null;
-    if (!usage.acquireJobSlot(resumeKeyId, resumePlan)) {
-      sendError(res, 429, 'CONCURRENCY_LIMIT', 'Too many research jobs are already running for this key.', {
-        max_concurrent_jobs: usage.jobSlotLimit(resumePlan),
-        active_jobs: usage.activeJobCount(resumeKeyId),
-      });
-      return;
-    }
-    const job = resumeResearchJob(req.params.id);
-    if (!job) {
-      usage.releaseJobSlot(resumeKeyId);
-      sendError(res, 400, 'JOB_NOT_RESUMABLE', 'Research job cannot be resumed in its current state.');
-      return;
-    }
-    void Promise.resolve(startResearchJob(job.id)).catch((error) => console.error('[api-research-resume]', error));
-    res.json(publicJob(job));
   });
 
   return router;

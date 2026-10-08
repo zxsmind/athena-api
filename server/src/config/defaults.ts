@@ -11,6 +11,7 @@ export const defaultConfig: AppConfig = {
     jsonBodyLimit: '1mb',
     sseHeartbeatMs: 15_000,
     trustedProxies: [],
+    mcpAllowedHosts: ['localhost', '127.0.0.1', '[::1]'],
   },
   storage: {
     maxActiveJobs: 50,

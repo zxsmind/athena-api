@@ -317,7 +317,7 @@ describe('resume concurrency', () => {
     const h = await startHarness('free');
     try {
       /* A paused job holds no slot since pause returns it; fill the key. */
-      const paused = createResearchJob({ query: 'q', mode: 'instant', researchApi: true });
+      const paused = createResearchJob({ query: 'q', mode: 'instant', researchApi: true, apiKeyId: h.keyId });
       markResearchJobRunning(paused.id);
       pauseResearchJob(paused.id);
       const limit = planFor('free').maxConcurrentJobs;
