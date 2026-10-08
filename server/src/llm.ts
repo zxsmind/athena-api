@@ -384,7 +384,7 @@ function createTimeoutSignal(parent: AbortSignal | undefined, timeoutMs: number)
 /** Stall after which a flowing stream is declared dead. Chunks arrive far more
  *  often than this in a healthy stream; an hour-long silence is not patience. */
 export const LLM_STREAM_IDLE_TIMEOUT_MS = 60_000;
-
+export const DEEP_MAX_REASONING_TIMEOUT_MS = 500_000;
 
 /** Ceiling for turning a finished stream into text. The stream timers are
  *  disposed once consumption ends, so an SDK promise that never settles
@@ -663,7 +663,9 @@ async function callSelectedTarget(
       const content = (m as { content?: unknown }).content;
       return n + (typeof content === 'string' ? content.length : 0);
     }, 0);
-    const timeoutMs = llmTotalTimeoutMs(contextChars, options.finalAnswer ? options.responseLength ?? null : null);
+    const timeoutMs = options.reasoningEffort === 'xhigh' && !options.finalAnswer
+      ? DEEP_MAX_REASONING_TIMEOUT_MS
+      : llmTotalTimeoutMs(contextChars, options.finalAnswer ? options.responseLength ?? null : null);
     const streamingTimeout = streaming
       ? createStreamingTimeout(options.signal, timeoutMs)
       : null;
