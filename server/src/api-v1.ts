@@ -487,6 +487,10 @@ export function createAthenaMcpServer(context: AthenaMcpDependencies): McpServer
     server.registerTool('athena_pause_job', {
       description: 'Pause a running Athena research job.',
       inputSchema: jobSchema,
+      /* Neither destructive nor read-only: the job keeps its evidence and can be
+         resumed, but it does change job state. A client filtering on hints needs
+         to see that, which silence does not tell it. */
+      annotations: { openWorldHint: true },
     }, async ({ job_id }) => {
       try { return mcpSuccess(pauseApiResearchJob(job_id, context.apiKeyId)); }
       catch (error: unknown) { return mcpFailure(error, 'JOB_NOT_PAUSABLE'); }
@@ -494,6 +498,7 @@ export function createAthenaMcpServer(context: AthenaMcpDependencies): McpServer
     server.registerTool('athena_resume_job', {
       description: 'Resume a paused Athena research job.',
       inputSchema: jobSchema,
+      annotations: { openWorldHint: true },
     }, async ({ job_id }) => {
       try { return mcpSuccess(resumeApiResearchJob(job_id, researchContext)); }
       catch (error: unknown) { return mcpFailure(error, 'JOB_NOT_RESUMABLE'); }

@@ -442,8 +442,14 @@ its own budget instead of being cut mid-thought. When that answer window is all
 that is left, the run stops researching and answers from the evidence already
 gathered. A streaming call additionally ends if the provider goes silent for a
 minute, which is a measure of the connection rather than a limit on the work.
-Each step reports the round's own duration and the reasoning effort that reached
-the provider.
+
+Each step event carries the round's own duration and the reasoning effort that
+reached the provider, so a slow run can be read against the budget it was given.
+The final payload does not carry them: `GET /jobs/:id` returns the answer and its
+sources, and the step detail stays on the event stream
+(`GET /jobs/:id/events`) and in the job's trace when tracing is on. A wall-clock
+promise is only meaningful next to what a round actually cost, which is what those
+numbers are for.
 
 ### `response_length` — how long the answer
 

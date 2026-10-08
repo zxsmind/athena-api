@@ -4,6 +4,7 @@
  * kit, so piped output stays readable and interactive output stays animated.
  */
 import { input, select } from '@inquirer/prompts';
+import { redirectConsoleToStderr } from './cli/stdio.js';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { Meter } from './application/meter.js';
 import { ApiPlatformStore } from './api-platform-store.js';
@@ -149,14 +150,6 @@ async function runKeysCommand(action: string, parsed: Parsed): Promise<void> {
   if (action === 'revoke' || action === 'plan') command.id = requireFlag(parsed, 'id');
   if (action === 'plan') command.plan = parsePlan(requireFlag(parsed, 'plan'));
   await runKeys(command);
-}
-
-function redirectConsoleToStderr(): void {
-  const toStderr = (...args: Parameters<typeof console.log>) => console.error(...args);
-  console.log = toStderr;
-  console.info = toStderr;
-  console.warn = toStderr;
-  console.debug = toStderr;
 }
 
 async function runMcp(): Promise<void> {
