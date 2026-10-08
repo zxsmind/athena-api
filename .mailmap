@@ -1,0 +1,13 @@
+# Commit identities seen before this account was the only one.
+#
+# The early history was committed as `ares` and `ubuntu` on throwaway addresses.
+# Those names are not GitHub accounts, so GitHub listed them as separate greyed
+# contributors beside the real one. Mapping them here folds the old commits into
+# zxsmind without rewriting a single commit id: the canonical name and address
+# win, the old ones after it are what get replaced.
+#
+# `git log --use-mailmap` resolves this; GitHub reads the same file when it
+# attributes a commit.
+
+zxsmind <zxsmind@gmail.com> <ubuntu@ares.athena.local>
+zxsmind <zxsmind@gmail.com> <ubuntu@athena.local>
