@@ -10,7 +10,7 @@
     "start": "npm run start --prefix server",
     "test": "npm run test --prefix server",
     "cli": "npm run cli --prefix server",
-    "link:cli": "npm link --prefix server",
+    "link:cli": "npm run build && npm link --prefix server",
     "lint": "eslint ."
   },
   "devDependencies": {

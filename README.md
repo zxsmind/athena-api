@@ -21,6 +21,7 @@ Node.js 24 or newer.
 
 ```sh
 npm install
+npm install --prefix server
 npm run cli -- setup      # interactive wizard: provider, key, search backend
 npm run dev               # API on port 39921
 ```
@@ -48,7 +49,7 @@ Ctrl+C changes nothing.
 To call it as `athena` from any directory:
 
 ```sh
-npm run link:cli             # then `athena status`, `athena config`, ...
+npm run link:cli             # builds and links `athena`
 ```
 
 ## Configuration
@@ -142,7 +143,7 @@ context, and the model reads its own notes back on demand.
 
 ## Technology
 
-- Node.js 24, Express 5, TypeScript 5.9
+- Node.js 24, Express 5, TypeScript 6.0 for the server (Smart Routing core remains on 5.9)
 - Model calls through the Vercel AI SDK, routed across providers via the models.dev catalog (capabilities, context limits, pricing; 12 h refresh)
 - SQLite (`node:sqlite`) for keys, analytics, jobs, and events
 - 14 search provider modules behind a registry, with key rotation
