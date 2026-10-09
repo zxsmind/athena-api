@@ -167,3 +167,12 @@ explicit resume. Jobs without one become `failed`. Checkpoints are
 files in the data directory. Use `/v1` for external clients.
 
 Known gap: long runs have no context management yet.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
+
+A copy of the license travels with every distribution, and modified files carry a
+notice stating they were changed, as section 4 of the license requires. Nothing
+here grants permission to use the project's name or marks, which section 6 leaves
+to its own terms.
