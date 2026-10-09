@@ -1,6 +1,6 @@
 {
   "name": "athena",
-  "description": "Evidence-first web research API",
+  "description": "Self-hosted web research API and MCP server",
   "private": true,
   "version": "0.1.0",
   "type": "module",

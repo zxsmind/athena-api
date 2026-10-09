@@ -12,8 +12,9 @@ Three primitives:
 | **Contents** | Readable text from one or more URLs. No model. |
 | **Research** | Background job that investigates and cites. Uses a model. |
 
-There is no frontend in this repository. The deliverable is the HTTP API and a
-CLI.
+There is no frontend. The deliverable is the HTTP API and the MCP server, both
+built on the same operations; the CLI below exists to run it, not to be called by
+anything.
 
 ## Run locally
 
@@ -29,7 +30,10 @@ npm run dev               # API on port 39921
 The server refuses to open its listener until at least one LLM provider is
 configured, and it says what is missing instead of coming up unusable.
 
-## The CLI
+## Operating it
+
+The CLI is for whoever runs the server: setup, keys, logs, traces, repair. It is
+not part of the API surface, and nothing here is called by an HTTP or MCP client.
 
 ```sh
 npm run cli -- setup          # first-run wizard, saves once at the end
