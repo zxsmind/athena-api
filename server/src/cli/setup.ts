@@ -1,5 +1,6 @@
 import { checkbox, confirm, input, password, search, select } from '@inquirer/prompts';
-import { getModelsDevSnapshot } from '../models-dev.js';
+import { getModelsDevSnapshot, type ModelsDevModel, type ModelsDevSnapshot } from '../models-dev.js';
+import { resolveModelEffort, MODE_EFFORT_RUNGS } from '../reasoning-effort.js';
 import { listSupportedPackages } from '../provider-registry.js';
 import { BACK_CHOICE, BACK_LABEL, createStepMachine } from './steps.js';
 import { getAdminKey } from '../admin-auth.js';
@@ -246,6 +247,95 @@ async function askModels(id: string, catalog: CatalogEntry[], custom: boolean, e
   return chosen;
 }
 
+/** A model served under a provider id the catalog does not name (a custom
+ *  endpoint, a proxy, a local build). The model id is the stable part, so the
+ *  first provider that serves the same id stands in for it. */
+function findModelAcrossCatalog(snapshot: ModelsDevSnapshot, modelId: string): ModelsDevModel | null {
+  for (const provider of Object.values(snapshot.providers)) {
+    const record = provider.models?.[modelId];
+    if (record) return record;
+  }
+  return null;
+}
+
+/** What the setup report is built from, kept pure so the mapping can be tested
+ *  without a terminal. */
+export interface ModelEffortReport {
+  rows: string[][];
+  thinkingless: number;
+  divergent: number;
+}
+
+/** The modes' rungs, in display order. The value sent comes from the model. */
+const MODE_RUNGS = MODE_EFFORT_RUNGS;
+
+/**
+ * What each configured model will be asked to think, per mode.
+ *
+ * A mode names a rung, not a value, and the value comes from the model's own
+ * vocabulary in the catalog. An operator who picked models has no way to see
+ * that mapping without this, and the surprises are common: 2425 reasoning models
+ * accept no `none` and 2063 have no value at or below `low`, so an `instant` or
+ * `default` run lands somewhere other than its name.
+ */
+export function modelEffortReport(
+  snapshot: ModelsDevSnapshot,
+  settings: SettingsStore,
+): ModelEffortReport {
+  const providers = Object.entries(settings.providers).filter(([, state]) => state.enabled);
+  const rows: string[][] = [];
+  let thinkingless = 0;
+  let divergent = 0;
+  for (const [id, state] of providers) {
+    /* A provider serving "all catalog models" has no model list, and listing its
+       whole catalog would bury the answer, so the first 40 stand in. */
+    const models = state.models?.length ? state.models : Object.keys(snapshot.providers[id]?.models ?? {}).slice(0, 40);
+    for (const model of models) {
+      const catalog = snapshot.providers[id]?.models?.[model] ?? findModelAcrossCatalog(snapshot, model);
+      if (!catalog) continue;
+      if (catalog.reasoning !== true) {
+        /* A model that does no reasoning never receives an effort, which is the
+           correct answer and not a gap to report. */
+        thinkingless += 1;
+        continue;
+      }
+      const rawValues = catalog.reasoning_options?.values ?? [];
+      const values = (Array.isArray(rawValues) ? rawValues : []).filter(
+        (value: unknown): value is string => typeof value === 'string' && value.length > 0,
+      );
+      if (values.length === 0) continue;
+      const sent = MODE_RUNGS.map((entry) => {
+        const resolution = resolveModelEffort(entry.effort, values);
+        return resolution.kind === 'send' ? resolution.effort : '—';
+      });
+      if (sent.join() !== MODE_RUNGS.map((entry) => entry.effort).join()) divergent += 1;
+      if (rows.length < 12) rows.push([model, ...sent]);
+    }
+  }
+  return { rows, thinkingless, divergent };
+}
+
+/**
+ * Prints the report, and names the key to edit where a model cannot express a
+ * mode. Read-only on purpose: `config.yaml` has no writer in this codebase, so
+ * this reports where things stand rather than inventing a second way to set it.
+ */
+async function reportModelEfforts(
+  snapshot: ModelsDevSnapshot,
+  settings: SettingsStore,
+): Promise<void> {
+  const { rows, thinkingless, divergent } = modelEffortReport(snapshot, settings);
+  if (rows.length === 0) {
+    if (thinkingless > 0) ui.info(`${thinkingless} configured model(s) do no reasoning; they never receive an effort.`);
+    return;
+  }
+  ui.section('Reasoning effort by mode');
+  ui.table(['model', 'instant', 'default', 'deep', 'max'], rows);
+  if (divergent > 0) {
+    ui.info(`${divergent} model(s) here think differently from the mode's name. Set an exact value in config.yaml under research.modelEfforts, keyed by model id.`);
+  }
+}
+
 async function configureLlmProvider(
   catalog: CatalogEntry[],
   settings: SettingsStore,
@@ -388,6 +478,9 @@ export async function runSetup(): Promise<void> {
         });
         for (const id of disable) settings.providers[id].enabled = false;
       }
+      /* What the choices just made mean for reasoning, shown before the step ends
+         so a model that cannot express a mode is visible while it can be changed. */
+      await reportModelEfforts(await getModelsDevSnapshot(), settings);
       if (machine.next() === 'finish') return;
       continue;
     }
