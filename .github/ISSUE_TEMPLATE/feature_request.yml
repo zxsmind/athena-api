@@ -1,0 +1,43 @@
+name: Feature request
+description: A capability Athena does not have, or a behaviour you would change.
+title: "[feature] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem before the solution. A new knob is easy to add and hard to justify; the reason it is needed is the part that cannot be inferred from the code.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What you are trying to do that this cannot do, and what you do today instead.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: The shape of the thing, not the implementation.
+    validations:
+      required: false
+  - type: textarea
+    id: considered
+    attributes:
+      label: Alternatives you considered
+      description: Workarounds, or other ways the same need could be met.
+    validations:
+      required: false
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where it belongs
+      options:
+        - REST API (/v1)
+        - MCP tools
+        - Research modes or ceilings
+        - Search backends
+        - CLI / operations
+        - Documentation
+    validations:
+      required: false

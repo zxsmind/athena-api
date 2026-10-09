@@ -1,0 +1,74 @@
+name: Bug report
+description: A defect in a running server: wrong behaviour, a crash, or an unexpected error.
+title: "[bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. A reproducible report gets fixed much faster than a description of the symptom alone.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The behaviour you saw, including any error message verbatim.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: The request, or the sequence of actions. Include a `job_id` if a research run was involved.
+      placeholder: |
+        curl http://localhost:39921/v1/research -H "Authorization: Bearer ath_..." \
+          -d '{"query":"...","mode":"deep"}'
+        → job j-... failed with ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      description: Which entry point.
+      options:
+        - POST /v1/search
+        - POST /v1/contents
+        - POST /v1/research
+        - GET /v1/jobs/:id
+        - GET /v1/jobs/:id/events
+        - POST /v1/mcp (Streamable HTTP)
+        - athena mcp (stdio)
+        - CLI
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The release tag, or the commit sha.
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Node, from source
+        - Docker / compose
+    validations:
+      required: true
+  - type: textarea
+    id: trace
+    attributes:
+      label: Trace, if you can
+      description: |
+        Turn on `logging.trace` in config.yaml and re-run. The trace records what the model was sent, what it answered, and what the provider returned, which is usually the whole answer. Redact anything sensitive; it can be long.
+      render: text
+    validations:
+      required: false
