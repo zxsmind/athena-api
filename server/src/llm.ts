@@ -3,6 +3,7 @@ import type { ResponseLength } from './engine/modes.js';
 import { createLanguageModel, resolveProvider, usesGoogleOptions } from './provider-registry.js';
 import { loadSettings } from './settings-store.js';
 import { smartRouting } from './smart-routing-bridge.js';
+import { findModelReasoningOptions } from './models-dev.js';
 import { withRetry } from './engine/retry.js';
 import { getConfig } from './config/load.js';
 import { traceEvent } from './trace.js';
@@ -17,12 +18,121 @@ export interface TargetReference {
   model: string;
 }
 
-export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+/** Every effort value this code can name, ordered by how hard it thinks.
+ *
+ *  `max` exists in the models.dev catalog (`{low, medium, high, xhigh, max}` for
+ *  609 models) and `default` in one listing; both are candidates the catalog
+ *  can hand back, never values a mode asks for. `minimal` and `high` exist for
+ *  settings but are not part of the mode vocabulary. */
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-const EFFORT_RANK: Record<ReasoningEffort, number> = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5 };
-/* Wire-safe landing for each rank: `minimal`/`high` exist in settings but
-   never travel the wire, so a floor on either rounds up to `low`/`xhigh`. */
-const RANK_TO_WIRE: ReasoningEffort[] = ['none', 'low', 'low', 'medium', 'xhigh', 'xhigh'];
+const EFFORT_RANK: Record<ReasoningEffort, number> = { none: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
+
+/** What a mode asks for, before the model has a say in it. Ordered so the
+ *  position can be read as a rung rather than as a label. */
+const MODE_EFFORT_RUNG = ['none', 'low', 'medium', 'xhigh'] as const;
+
+/**
+ * What a model's vocabulary says about a requested effort.
+ *
+ * `unknown` and `omit` are deliberately different answers, because the caller
+ * must do opposite things with them: nothing is known, so keep the previous
+ * behaviour, or the question is settled and the field is left off the request.
+ */
+export type EffortResolution =
+  | { readonly kind: 'unknown' }
+  | { readonly kind: 'send'; readonly effort: ReasoningEffort }
+  | { readonly kind: 'omit' };
+
+/**
+ * The effort a model should be sent for a round.
+ *
+ * The mode names a rung; the model's own vocabulary from the catalog decides
+ * which value fills it. A mode asking for a value the model supports sends
+ * exactly that, so nothing changes for the majority of models. Where the model
+ * lacks granularity the rung is mapped onto the values it does accept:
+ *
+ * - `low` (the cheap rung) clamps DOWN to the highest supported value at or
+ *   below low, because the cheap mode must stay cheap. A model whose floor is
+ *   `high` therefore omits the field for a low round.
+ * - `medium` takes the middle of what is supported, so a gappy ladder still
+ *   reads as "harder than the cheap mode".
+ * - `xhigh` takes the highest supported value at or below xhigh, so a model
+ *   without xhigh spends its own ceiling while a model that has it is sent
+ *   exactly what the mode asked for.
+ * - `none` sends nothing when the model supports none, and the lowest supported
+ *   value when it does not: 2425 reasoning models in the catalog accept no
+ *   `none`, and dropping the field there leaves the provider to decide, which is
+ *   the silence this whole path exists to avoid.
+ */
+export function resolveModelEffort(
+  requested: ReasoningEffort | undefined,
+  supported: readonly string[] | null,
+): EffortResolution {
+  if (!supported) return { kind: 'unknown' };
+  const values = supported.filter((value) => value !== 'none');
+  if (requested === 'none') {
+    if (supported.includes('none')) return { kind: 'send', effort: 'none' };
+    /* The model's floor is the closest thing to "not thinking" it can express.
+       A model whose only value is `high` has nothing cheaper, so that is sent. */
+    if (values.length === 0) return { kind: 'unknown' };
+    return { kind: 'send', effort: lowest(values) };
+  }
+  if (!requested) return { kind: 'unknown' };
+  const rung = MODE_EFFORT_RUNG.indexOf(requested as (typeof MODE_EFFORT_RUNG)[number]);
+  if (rung === -1) return { kind: 'unknown' };
+  if (supported.includes(requested)) return { kind: 'send', effort: requested };
+  if (values.length === 0) return { kind: 'unknown' };
+  if (rung === 1) {
+    const below = highestAtOrBelow(values, requested);
+    return below === null ? { kind: 'omit' } : { kind: 'send', effort: below };
+  }
+  if (rung === 2) return { kind: 'send', effort: middle(values) };
+  /* The top rung spends whatever the model offers, including `max`, which sits
+     above xhigh in the catalog: a mode that asked for the hardest thinking gets
+     the hardest this model can do. A model that supports xhigh still gets xhigh
+     exactly, because the exact match above already answered. */
+  return { kind: 'send', effort: highest(values) };
+}
+
+/** The lowest value in a sorted catalogue, or null when none is known. */
+function lowest(values: string[]): ReasoningEffort {
+  let best = values[0] as ReasoningEffort;
+  for (const value of values) {
+    if (rank(value) < rank(best)) best = value as ReasoningEffort;
+  }
+  return best;
+}
+
+function highest(values: string[]): ReasoningEffort {
+  let best = values[0] as ReasoningEffort;
+  for (const value of values) {
+    if (rank(value) > rank(best)) best = value as ReasoningEffort;
+  }
+  return best;
+}
+
+/** The highest value that does not think harder than the ceiling, or null when
+ *  every supported value exceeds it. */
+function highestAtOrBelow(values: string[], ceiling: ReasoningEffort): ReasoningEffort | null {
+  let best: ReasoningEffort | null = null;
+  for (const value of values) {
+    if (rank(value) > rank(ceiling)) continue;
+    if (best === null || rank(value) > rank(best)) best = value as ReasoningEffort;
+  }
+  return best;
+}
+
+/** The middle of the supported values: the middle index, and the higher of the
+ *  two when the count is even, so a gappy ladder still leans up. */
+function middle(values: string[]): ReasoningEffort {
+  const sorted = [...values].sort((a, b) => rank(a) - rank(b));
+  return sorted[Math.floor(sorted.length / 2)] as ReasoningEffort;
+}
+
+function rank(value: string): number {
+  return EFFORT_RANK[value as ReasoningEffort] ?? 0;
+}
 
 /**
  * The provider's `reasoningEffort` is a floor, not a fallback: the round's
@@ -33,9 +143,14 @@ export function applyReasoningFloor(
   round: ReasoningEffort | undefined,
   floor: ReasoningEffort | undefined,
 ): ReasoningEffort | undefined {
+  /* The floor is the operator's promise that this route thinks at least this
+     hard, so the higher of the two wins. Every value in this vocabulary travels
+     the wire for some model: the catalog lists `minimal` for 627 and `high` for
+     3805 of them, so rounding either up would send more thinking than asked to
+     models that do not support the rounded value. */
   if (!floor) return round;
-  if (!round) return RANK_TO_WIRE[EFFORT_RANK[floor]];
-  return RANK_TO_WIRE[Math.max(EFFORT_RANK[round], EFFORT_RANK[floor])];
+  if (!round) return floor;
+  return EFFORT_RANK[round] >= EFFORT_RANK[floor] ? round : floor;
 }
 
 /**
@@ -364,21 +479,62 @@ function toSdkToolChoice(choice: LLMOptions['toolChoice']): ToolChoice<ToolSet> 
   return undefined;
 }
 
+/**
+ * The effort that reaches the wire for this provider and model.
+ *
+ * Order matters: the operator's floor is applied first, because it is a statement
+ * about the route, then the result is adapted to what the model itself accepts,
+ * because the catalog is the authority on that. Adapting first would let a floor
+ * push a model above its own ceiling.
+ *
+ * Returns null when the caller should fall back to the previous behaviour, which
+ * is when the catalog has no vocabulary for this model.
+ */
+function effortForTarget(
+  target: TargetReference,
+  provider: ReturnType<typeof loadSettings>['providers'][string],
+  effort: ReasoningEffort | undefined,
+): ReasoningEffort | undefined {
+  /* A model the operator has switched off for thinking never gets an effort, and
+     this stays ahead of the catalog: the operator's setting is the more specific
+     knowledge. */
+  if (provider.disabledThinkingModels?.includes(target.model)) return undefined;
+  if (!effort) return undefined;
+  /* The operator's per-model word outranks the mode's rung and the provider's
+     floor alike, because it is the most specific statement available. It is
+     still clamped to the model's vocabulary, which the resolver does. */
+  const override = getConfig().research.modelEfforts[target.model];
+  const requested = override ?? applyReasoningFloor(effort, provider.reasoningEffort);
+  if (!requested) return undefined;
+  const catalog = findModelReasoningOptions(target.model, target.id);
+  const supported = catalog ? catalog.values : null;
+  /* Nothing in the catalog means no vocabulary to adapt to, so the request
+     stands as it was before this path existed. */
+  if (!supported) return requested;
+  /* A model the catalog marks as not reasoning is the same case as the manual
+     list above: no effort at all rather than one the model ignores. */
+  if (catalog?.reasoning === false) return undefined;
+  const resolved = resolveModelEffort(requested, supported);
+  if (resolved.kind === 'unknown') return requested;
+  return resolved.kind === 'send' ? resolved.effort : undefined;
+}
+
 function googleOptions(target: TargetReference, provider: ReturnType<typeof loadSettings>['providers'][string], effort?: ReasoningEffort): Record<string, unknown> | undefined {
-  const resolvedEffort = applyReasoningFloor(effort, provider.reasoningEffort);
-  if (!resolvedEffort || provider.disabledThinkingModels?.includes(target.model)) return undefined;
+  const resolvedEffort = effortForTarget(target, provider, effort);
+  if (resolvedEffort === undefined || resolvedEffort === 'none') return undefined;
   const modelId = target.model.toLowerCase();
   const includeThoughts = provider.includeThoughts ?? false;
+  /* Gemini-3 names its own levels: `max` has no equivalent, so the top of the
+     ladder maps to the highest level it does name. */
+  const thinkingLevel = resolvedEffort === 'minimal'
+    ? 'minimal'
+    : resolvedEffort === 'xhigh' || resolvedEffort === 'max' ? 'high' : resolvedEffort;
   if (modelId.includes('gemini-3')) {
-    const thinkingLevel = resolvedEffort === 'none' || resolvedEffort === 'minimal'
-      ? 'minimal'
-      : resolvedEffort === 'xhigh' ? 'high' : resolvedEffort;
     return { google: { thinkingConfig: { thinkingLevel, includeThoughts } } };
   }
   if (modelId.includes('gemini-2.5')) {
-    const thinkingBudget = resolvedEffort === 'none' ? 0
-      : resolvedEffort === 'minimal' || resolvedEffort === 'low' ? 2048
-        : resolvedEffort === 'medium' ? 8192 : -1;
+    const thinkingBudget = resolvedEffort === 'minimal' || resolvedEffort === 'low' ? 2048
+      : resolvedEffort === 'high' || resolvedEffort === 'xhigh' || resolvedEffort === 'max' ? -1 : 8192;
     return { google: { thinkingConfig: { thinkingBudget, includeThoughts } } };
   }
   return undefined;
@@ -399,8 +555,8 @@ export function modelProviderOptions(
      a package does not understand is ignored by that package. */
   if (usesGoogleOptions(npm)) return googleOptions(target, provider, effort);
 
-  const resolvedEffort = applyReasoningFloor(effort, provider.reasoningEffort);
-  if (!resolvedEffort || provider.disabledThinkingModels?.includes(target.model)) return undefined;
+  const resolvedEffort = effortForTarget(target, provider, effort);
+  if (!resolvedEffort || resolvedEffort === 'none') return undefined;
   /* Generic packages read their own namespace, not the provider id: a custom
      endpoint on the openai-compatible package never saw `sovinfra`, so the
      effort died in the SDK while the trace still labelled it. Measured: no

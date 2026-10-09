@@ -67,8 +67,15 @@ describe('applyReasoningFloor', () => {
     expect(applyReasoningFloor(undefined, undefined)).toBeUndefined();
   });
 
-  it('rounds a non-wire floor up to the nearest wire value', () => {
-    expect(applyReasoningFloor('none', 'minimal')).toBe('low');
-    expect(applyReasoningFloor('none', 'high')).toBe('xhigh');
+  it('keeps a floor at the value the operator named', () => {
+    /* This used to round `high` up to `xhigh`. The catalog lists `high` for 3805
+       models, so rounding it up sends more thinking than the operator asked for
+       and lands on a value many of those models reject. `minimal` is a wire value
+       for 627 more, for the same reason. */
+    expect(applyReasoningFloor('none', 'minimal')).toBe('minimal');
+    expect(applyReasoningFloor('none', 'high')).toBe('high');
+    expect(applyReasoningFloor('low', 'high')).toBe('high');
+    expect(applyReasoningFloor('xhigh', 'high')).toBe('xhigh');
+    expect(applyReasoningFloor('low', undefined)).toBe('low');
   });
 });

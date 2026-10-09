@@ -15,6 +15,13 @@ export interface ModelsDevModel {
   id: string;
   name?: string;
   reasoning?: boolean;
+  /**
+   * The reasoning efforts this model accepts, as the catalog lists them:
+   * `{ type: 'effort', values: ['none', 'low', 'medium', 'high', 'xhigh', 'max'] }`.
+   * Absent when the catalog knows the model thinks but not at which settings,
+   * and empty for a model that does not think at all.
+   */
+  reasoning_options?: { type?: string; values?: unknown[] };
   tool_call?: boolean;
   structured_output?: boolean;
   attachment?: boolean;
@@ -283,6 +290,84 @@ export function findModelWindowAcrossProviders(modelId: string): number | null {
     }
   }
   return best;
+}
+
+/**
+ * The reasoning efforts a model accepts, from the catalog.
+ *
+ * A local provider id (self-hosted endpoint, proxy, a custom name like
+ * "sovinfra") never matches a catalog provider id, so the lookup falls back to
+ * the model id across every provider — the id is the stable part, `qwen3.8-27b`
+ * is the same model wherever it is served. Where providers disagree the most
+ * common set wins, because that is the model's own vocabulary and a single
+ * provider's listing choice is not.
+ *
+ * Returns null when the catalog does not know, which is every caller's cue to
+ * fall back to the previous behaviour rather than guess.
+ */
+/* A catalog lookup walks every provider and every model when the provider id is
+   local, which is 8455 models on the common path. The answer cannot change
+   inside one snapshot, and the snapshot is replaced whole on refresh, so the
+   memo is keyed by the snapshot it was computed against. */
+let memoSnapshotAt = '';
+let memo = new Map<string, { reasoning: boolean; values: string[] } | null>();
+
+export function findModelReasoningOptions(modelId: string, providerId?: string): { reasoning: boolean; values: string[] } | null {
+  const snapshot = currentSnapshot();
+  if (!snapshot || !modelId) return null;
+  if (snapshot.fetchedAt !== memoSnapshotAt) {
+    memoSnapshotAt = snapshot.fetchedAt;
+    memo = new Map();
+  }
+  const key = `${providerId ?? ''}\u0000${modelId}`;
+  const hit = memo.get(key);
+  if (hit !== undefined) return hit;
+  const resolved = lookupReasoningOptions(snapshot, modelId, providerId);
+  memo.set(key, resolved);
+  return resolved;
+}
+
+function lookupReasoningOptions(
+  snapshot: ModelsDevSnapshot,
+  modelId: string,
+  providerId?: string,
+): { reasoning: boolean; values: string[] } | null {
+  /* A provider-scoped record is the most specific, so it wins outright. */
+  const scoped = providerId ? snapshot.providers[providerId]?.models?.[modelId] : undefined;
+  if (scoped?.reasoning_options) {
+    const values = readReasoningValues(scoped);
+    if (values) return values;
+  }
+  const votes = new Map<string, number>();
+  for (const provider of Object.values(snapshot.providers)) {
+    const record = provider.models?.[modelId];
+    if (!record || record.reasoning !== true) continue;
+    const values = readReasoningValues(record);
+    if (!values) continue;
+    const key = values.values.join(',');
+    votes.set(key, (votes.get(key) ?? 0) + 1);
+  }
+  if (votes.size === 0) return null;
+  let bestKey = '';
+  let bestVotes = -1;
+  for (const [key, count] of votes) {
+    if (count > bestVotes) {
+      bestKey = key;
+      bestVotes = count;
+    }
+  }
+  return { reasoning: true, values: bestKey.length > 0 ? bestKey.split(',') : [] };
+}
+
+/** Reads `reasoning_options.values` as strings, or null when absent or unusable. */
+function readReasoningValues(record: ModelsDevModel): { reasoning: boolean; values: string[] } | null {
+  const raw = record.reasoning_options;
+  if (!raw || !Array.isArray(raw.values)) return null;
+  const values = raw.values
+    .map((value) => (typeof value === 'string' ? value : null))
+    .filter((value): value is string => value !== null && value.length > 0);
+  if (values.length === 0) return null;
+  return { reasoning: record.reasoning === true, values };
 }
 
 export interface ModelTokenPrice {

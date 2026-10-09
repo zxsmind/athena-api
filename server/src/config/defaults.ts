@@ -67,6 +67,9 @@ export const defaultConfig: AppConfig = {
     historyMessageLimit: 12,
     snippetPreviewChars: 400,
     stallTimeoutMs: 1_200_000,
+    /* Empty by default: the mode names a rung and the model's vocabulary fills
+       it, and an override is only for a model that cannot express the rung. */
+    modelEfforts: {},
     pausedTtlMinutes: 240,
   },
   compaction: {

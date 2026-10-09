@@ -8,6 +8,9 @@ import { z } from 'zod';
  */
 
 const positiveInt = z.number().int().positive();
+/** Every effort value the resolver can rank, ordered by how hard it thinks.
+ *  `none` and an absent value are different answers, so both are expressible. */
+const effortEnum = z.enum(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
 export const searchConfigSchema = z.object({
   /** Provider endpoint and per-request deadlines. */
@@ -67,6 +70,21 @@ export const researchLimitsSchema = z.object({
    * would kill healthy runs.
    */
   stallTimeoutMs: positiveInt,
+  /**
+   * Per-model override of the reasoning effort a round asks for, keyed by model
+   * id and ranked above every default the mode names.
+   *
+   * The mode picks the rung (instant none, default low, deep medium, max xhigh)
+   * and the model's own vocabulary from the models.dev catalog fills it. This
+   * entry is for the operator who knows better than both: a model whose floor
+   * is `high` can never express the cheap rungs, so a mode that reads as `low`
+   * there is really `none`, and this is how that gets said.
+   *
+   * Values are clamped to the model's own vocabulary, because sending an effort
+   * the model rejects is worse than sending one it thinks is too soft. An empty
+   * map is the default, and omitting the file's whole block behaves the same.
+   */
+  modelEfforts: z.record(z.string(), effortEnum).default({}),
 });
 
   /**
