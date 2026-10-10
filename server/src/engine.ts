@@ -380,7 +380,14 @@ async function toolCallingRound(
     const declineTasks: { tcId: string; reason: string }[] = [];
     for (const tc of msg.tool_calls) {
       let args: Record<string, unknown>;
-      try { args = JSON.parse(tc.function.arguments); } catch { continue; }
+      try { args = JSON.parse(tc.function.arguments); } catch {
+        /* Every call id needs an answer or the provider can reject the next
+           turn, so an unparseable argument list is answered like any other
+           invalid call rather than left silently open. */
+        const tcId = tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+        messages.push({ role: 'tool', tool_call_id: tcId, content: 'Invalid tool call arguments. No results available.' });
+        continue;
+      }
       const tcId = tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
       const toolCallId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -597,10 +604,6 @@ async function toolCallingRound(
       if (traceId) {
         traceEvent(traceId, 'plan.edit', { goal: researchPlanRef.current?.goal, summary: planSummary(researchPlanRef.current) }, round);
       }
-    }
-
-    if (totalTasks === 0 && recallTasks.length === 0 && planCreateTasks.length === 0 && planEditTasks.length === 0 && planReadTasks.length === 0 && budgetReadTasks.length === 0 && declineTasks.length === 0) {
-      return { kind: 'tools', researchToolCalls: 0 };
     }
     /* Decline wins terminally and spends nothing further: research tasks in
        the same batch are dropped unexecuted, and every other call id still
@@ -1155,7 +1158,6 @@ async function runAgenticResearchStream(
          NaN: undefined plus a number is not a number. */
       budget.usedTotalTokens ??= 0;
       budget.usedCpuMs ??= 0;
-      budget.startedAt = Date.now() - (Date.now() - budget.startedAt);
       startRound = checkpoint.round;
       for (const source of checkpoint.sourceMap) {
         allSources.set(source.url, source);
@@ -1425,11 +1427,6 @@ async function runAgenticResearchStream(
     /* The v1 API serves answer + indexed sources only (see publicJob); the
        structured evidence report is nobody's contract, so no extraction pass
        is spent building one. Legacy chat callers keep the prose answer. */
-    if (options.researchApi) {
-      onEvent({ type: 'done', response: responseBase as SearchResponse });
-      return;
-    }
-
     onEvent({ type: 'done', response: responseBase as SearchResponse });
     return;
   }

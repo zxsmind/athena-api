@@ -156,6 +156,12 @@ function pushEvent(job: ResearchJobRecord, event: ResearchJobEvent) {
     job.events.splice(0, job.events.length - MAX_EVENTS);
   }
   job.updatedAt = nowIso();
+  /* Token deltas are the highest-frequency event a run produces — one per
+     provider chunk, thousands over a job — and they are replay noise: a
+     reconnecting client needs the steps and the answer, not the character
+     trickle that preceded them. They stay in the live registry so the SSE
+     stream sees them, and never reach SQLite. */
+  if (event.type === 'token') return;
   const { events: _events, controller: _controller, ...stored } = job;
   void _events;
   void _controller;

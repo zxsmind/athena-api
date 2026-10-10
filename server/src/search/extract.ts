@@ -278,7 +278,7 @@ export async function extractPageContent(
       const content = (article?.textContent || document.body?.textContent || '')
         .replace(/\s+/g, ' ')
         .trim()
-        .slice(0, 12_000);
+        .slice(0, getConfig().search.pageTextChars);
       return { title, content: content || '[No readable page text found]' };
     } finally {
       clean();

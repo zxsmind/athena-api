@@ -78,3 +78,36 @@ export function rotateAdminKey(): string {
 export function resetAdminKeyCache(): void {
   cached = null;
 }
+
+/**
+ * Coarse brute-force guard for the admin key. A valid key is trusted input by
+ * design, so guessing it is the only remaining attack on `/v1/keys` and
+ * `/v1/analytics`; five wrong attempts from one address stall that address for
+ * ten minutes. In-memory on purpose: a restart forgetting a lockout costs one
+ * waiter, not a security property, and the map stays bounded because each
+ * address holds exactly one record.
+ */
+const ADMIN_MAX_ATTEMPTS = 5;
+const ADMIN_LOCKOUT_MS = 10 * 60 * 1000;
+
+const adminFailures = new Map<string, { count: number; until: number }>();
+
+export function adminAttemptLocked(identifier: string, now: number = Date.now()): boolean {
+  const entry = adminFailures.get(identifier);
+  return entry !== undefined && entry.count >= ADMIN_MAX_ATTEMPTS && now < entry.until;
+}
+
+export function recordAdminFailure(identifier: string, now: number = Date.now()): void {
+  const entry = adminFailures.get(identifier);
+  if (!entry || now >= entry.until) {
+    if (entry && now >= entry.until) adminFailures.delete(identifier);
+    adminFailures.set(identifier, { count: 1, until: 0 });
+    return;
+  }
+  const count = entry.count + 1;
+  adminFailures.set(identifier, { count, until: count >= ADMIN_MAX_ATTEMPTS ? now + ADMIN_LOCKOUT_MS : 0 });
+}
+
+export function recordAdminSuccess(identifier: string): void {
+  adminFailures.delete(identifier);
+}

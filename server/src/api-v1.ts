@@ -4,8 +4,8 @@ import { z } from 'zod';
 import { hostHeaderValidation, originValidation } from '@modelcontextprotocol/express';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
-import { isLocalManagementRequest, isLoopbackRequest } from './access.js';
-import { isAdminKey } from './admin-auth.js';
+import { clientAddress, isLocalManagementRequest, isLoopbackRequest } from './access.js';
+import { adminAttemptLocked, isAdminKey, recordAdminFailure, recordAdminSuccess } from './admin-auth.js';
 import { ApiPlatformStore, publicApiKey, type KeyPlan } from './api-platform-store.js';
 import { Meter } from './application/meter.js';
 import {
@@ -548,11 +548,21 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
     /* Local alone is not enough: anyone on the same private network could
        otherwise mint API keys. Management routes need the admin secret too. */
     if (keyManagement || analyticsManagement) {
+      /* A coarse brute-force guard first: five wrong admin keys from one address
+         stall that address, so guessing the secret cannot be repeated as fast
+         as the network allows. */
+      const adminIdentity = clientAddress(req) || 'unknown';
+      if (adminAttemptLocked(adminIdentity)) {
+        sendError(res, 429, 'RATE_LIMITED', 'Too many failed admin-key attempts. Try again later.', undefined, false);
+        return;
+      }
       const presented = req.header('x-admin-key');
       if (!isAdminKey(presented)) {
+        recordAdminFailure(adminIdentity);
         sendError(res, 401, 'UNAUTHORIZED', 'This route needs the admin key in the X-Admin-Key header.');
         return;
       }
+      recordAdminSuccess(adminIdentity);
     }
 
     /* A presented key is always metered, whatever the source address. Presenting

@@ -115,7 +115,6 @@ export async function runCodeResearchStream(
       Object.assign(budget, checkpoint.budget);
       budget.usedTotalTokens ??= 0;
       budget.usedCpuMs ??= 0;
-      budget.startedAt = Date.now() - (Date.now() - budget.startedAt);
       startRound = checkpoint.round;
       for (const source of checkpoint.sourceMap) allSources.set(source.url, source);
       const resumeStep: AgentStep = {
