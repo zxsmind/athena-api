@@ -12,6 +12,7 @@ export const defaultConfig: AppConfig = {
     sseHeartbeatMs: 15_000,
     trustedProxies: [],
     mcpAllowedHosts: ['localhost', '127.0.0.1', '[::1]'],
+    corsOrigins: [],
   },
   storage: {
     maxActiveJobs: 50,
@@ -49,6 +50,7 @@ export const defaultConfig: AppConfig = {
     fullExtractionLimit: 10,
     extractionContextChars: 3_000,
     extractionSnippetChars: 500,
+    pageTextChars: 12_000,
   },
   research: {
     /* Hard guard, well above the largest mode so it can never be the binding

@@ -1,4 +1,4 @@
-﻿import express from 'express';
+﻿import express, { type Request, type Response } from 'express';
 import cors from 'cors';
 import { dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
@@ -55,7 +55,24 @@ startCatalogRefresh({
 
 const app = express();
 app.disable('x-powered-by');
-app.use(cors());
+
+/* CORS is opt-in. Empty (the default) means disabled: a client carrying a
+   bearer key does not need CORS at all, so an unset list must never behave as
+   "every origin allowed". Each entry is a deliberate public-surface choice. */
+if (getConfig().server.corsOrigins.length > 0) {
+  app.use(cors({ origin: getConfig().server.corsOrigins }));
+}
+
+/* Minimum security headers. There is no HTML surface to defend, so the set is
+   deliberately small: nosniff keeps a JSON body from being sniffed as HTML if
+   it is ever opened directly, and no-referrer keeps job ids out of the logs of
+   any host a client links onward. */
+app.use((_req: Request, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+
 app.use(express.json({ limit: getConfig().server.jsonBodyLimit }));
 /* Parser errors use the same JSON contract as the routes, without dumping the
    submitted body or an Express stack trace to the caller. */
@@ -67,6 +84,19 @@ app.use(((error, _req, res, next) => {
   } else {
     next(error);
   }
+}) as express.ErrorRequestHandler);
+
+/* Final error handler: an unexpected throw answers in the API's JSON contract,
+   not Express's default HTML page, and the detail goes to the log only. */
+app.use(((error: unknown, _req: Request, res: Response, next: (err?: unknown) => void) => {
+  logger.error('unhandled request error', { error: error instanceof Error ? error.message : String(error) });
+  /* Response already streaming: delegate to the default terminal handler,
+     which only closes the connection. */
+  if (res.headersSent) {
+    next(error);
+    return;
+  }
+  res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred.', retryable: true } });
 }) as express.ErrorRequestHandler);
 
 /* Data retention from config.yaml: one pass at boot, then hourly. Nothing
@@ -116,6 +146,10 @@ function shutdown(signal: string): void {
      outlive the server that owns them. */
   closeAllSandboxes();
   server.close(() => process.exit(0));
+  /* Keep-alive SSE streams and slow clients hold the close callback open for
+     as long as they stay connected, which a restart must not owe to the
+     slowest of them. The exit is therefore bounded. */
+  setTimeout(() => process.exit(0), 10_000).unref();
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));

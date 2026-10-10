@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { dump, load } from 'js-yaml';
 
@@ -35,5 +35,11 @@ export function writeStructuredFile(path: string, value: unknown): void {
   const text = formatOf(path) === 'yaml'
     ? dump(value, { noRefs: true, lineWidth: 120 })
     : JSON.stringify(value, null, 2);
-  writeFileSync(path, text, 'utf-8');
+  /* Written beside the target and renamed into place: the rename is atomic on
+     POSIX and on Windows (same volume), so a crash mid-write cannot leave the
+     file half-written. settings.yaml holds provider keys; a truncated file is
+     not a recoverable state for that. */
+  const temp = `${path}.tmp`;
+  writeFileSync(temp, text, 'utf-8');
+  renameSync(temp, path);
 }

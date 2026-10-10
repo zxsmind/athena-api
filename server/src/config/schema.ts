@@ -25,6 +25,8 @@ export const searchConfigSchema = z.object({
   /** Page payload sizes kept in context and in the source registry. */
   extractionContextChars: positiveInt,
   extractionSnippetChars: positiveInt,
+  /** Characters of extracted HTML text kept from one page. */
+  pageTextChars: positiveInt,
 });
 
 export const researchLimitsSchema = z.object({
@@ -146,6 +148,13 @@ export const serverConfigSchema = z.object({
   trustedProxies: z.array(z.string().min(1)).default([]),
   /** Hostnames accepted by the MCP endpoint for Host and Origin validation. */
   mcpAllowedHosts: z.array(z.string().min(1)).default(['localhost', '127.0.0.1', '[::1]']),
+  /**
+   * Origins allowed by the browser CORS policy. Empty (the default) means CORS
+   * is disabled: a key-carrying API client sends `Authorization` from any
+   * origin regardless of CORS, while a browser page needs an explicit allow
+   * entry, so every entry here is a deliberate public surface decision.
+   */
+  corsOrigins: z.array(z.string().min(1)).default([]),
 });
 
 export const storageConfigSchema = z.object({

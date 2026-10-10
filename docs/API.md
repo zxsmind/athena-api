@@ -94,6 +94,11 @@ to that list in `config.yaml` and restart Athena. When a same-host reverse proxy
 is used, configure `server.trustedProxies` as described below. Host and Origin
 validation protects the MCP route.
 
+CORS is disabled unless `server.corsOrigins` (`ATHENA_CORS_ORIGINS`, a
+comma/space-separated list) names one or more origins. A bearer client does not
+need CORS; a browser page does, so each entry is a deliberate public-surface
+decision.
+
 ## Public deployments
 
 Binding `0.0.0.0` and publishing the port is enough to serve the internet, but

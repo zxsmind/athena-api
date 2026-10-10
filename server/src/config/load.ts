@@ -18,6 +18,7 @@ const ENV_MAP: Array<{ path: string; key: string; kind: EnvKind }> = [
   { path: 'server.jsonBodyLimit', key: 'ATHENA_JSON_BODY_LIMIT', kind: 'string' },
   { path: 'server.sseHeartbeatMs', key: 'ATHENA_SSE_HEARTBEAT_MS', kind: 'number' },
   { path: 'server.trustedProxies', key: 'ATHENA_TRUSTED_PROXIES', kind: 'stringList' },
+  { path: 'server.corsOrigins', key: 'ATHENA_CORS_ORIGINS', kind: 'stringList' },
   { path: 'storage.maxActiveJobs', key: 'ATHENA_MAX_ACTIVE_JOBS', kind: 'number' },
   { path: 'storage.maxActiveBatches', key: 'ATHENA_MAX_ACTIVE_BATCHES', kind: 'number' },
   { path: 'storage.maxEventsPerJob', key: 'ATHENA_MAX_EVENTS_PER_JOB', kind: 'number' },

@@ -13,6 +13,9 @@ vi.mock('fs', () => ({
     storedWritePath = filePath;
     storedContent = data;
   },
+  renameSync: (from: string, to: string) => {
+    if (from === storedWritePath) storedWritePath = to;
+  },
   existsSync: () => storedContent !== null,
   mkdirSync: () => undefined,
 }));
