@@ -6,7 +6,7 @@ function configure(id: string, fallback = false): void {
   const settings = loadSettings();
   settings.providers = {
     [id]: { enabled: true, keys: ['key-1', 'key-2'], models: ['model'], npm: '@ai-sdk/openai-compatible', url: `https://${id}.example/v1` },
-    ...(fallback ? { backup: { enabled: true, keys: ['key'], models: ['model'], npm: '@ai-sdk/openai-compatible', url: 'https://backup.example/v1' } } : {}),
+    ...(fallback ? { backup: { enabled: true, keys: ['key'], models: ['model'], npm: '@ai-sdk/openai-compatible', url: 'https://alpha.example/v1' } } : {}),
   };
   settings.providerOrder = [id, ...(fallback ? ['backup'] : [])];
   settings.modelRouting.default = {

@@ -1,4 +1,4 @@
-﻿import { generateText, jsonSchema, streamText, tool, type ModelMessage, type ToolChoice, type ToolSet } from 'ai';
+import { generateText, jsonSchema, streamText, tool, type ModelMessage, type ToolChoice, type ToolSet } from 'ai';
 import type { ResponseLength } from './engine/modes.js';
 import { createLanguageModel, resolveProvider, usesGoogleOptions } from './provider-registry.js';
 import { loadSettings } from './settings-store.js';
@@ -428,7 +428,7 @@ export function modelProviderOptions(
   const resolvedEffort = effortForTarget(target, provider, effort);
   if (!resolvedEffort || resolvedEffort === 'none') return undefined;
   /* Generic packages read their own namespace, not the provider id: a custom
-     endpoint on the openai-compatible package never saw `sovinfra`, so the
+     endpoint on the openai-compatible package never saw `selfhosted`, so the
      effort died in the SDK while the trace still labelled it. Measured: no
      thinking in any qwen response at any effort level. */
   if (npm === '@ai-sdk/openai-compatible') return { openaiCompatible: { reasoningEffort: resolvedEffort } };

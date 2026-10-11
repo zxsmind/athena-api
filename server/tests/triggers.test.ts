@@ -30,7 +30,7 @@ describe('offload triggers', () => {
     vi.doMock('../src/settings-store.js', () => ({
       loadSettings: () => ({
         modelRouting: { deep: { primary: { providerId: '', model: '' } } },
-        providers: { sovinfra: { enabled: true, models: ['qwen3.8-27b'], keys: [] } },
+        providers: { selfhosted: { enabled: true, models: ['test-model'], keys: [] } },
       }),
     }));
     vi.doMock('../src/models-dev.js', () => ({
@@ -38,7 +38,7 @@ describe('offload triggers', () => {
       findModelWindowAcrossProviders: () => 262_144,
     }));
     const { researchRoutePrimary } = await setup();
-    expect(researchRoutePrimary()).toEqual({ providerId: 'sovinfra', model: 'qwen3.8-27b' });
+    expect(researchRoutePrimary()).toEqual({ providerId: 'selfhosted', model: 'test-model' });
   });
 
   it('prefers the route for the mode being run, since routes are per mode', async () => {
@@ -48,7 +48,7 @@ describe('offload triggers', () => {
           instant: { primary: { providerId: 'quick', model: 'quick-model' } },
           deep: { primary: { providerId: 'routed', model: 'routed-model' } },
         },
-        providers: { sovinfra: { enabled: true, models: ['qwen3.8-27b'], keys: [] } },
+        providers: { selfhosted: { enabled: true, models: ['test-model'], keys: [] } },
       }),
     }));
     const { researchRoutePrimary } = await setup();
@@ -61,7 +61,7 @@ describe('offload triggers', () => {
       loadSettings: () => ({
         modelRouting: { deep: { primary: { providerId: '', model: '' } } },
         providers: {
-          sovinfra: { enabled: true, models: ['qwen3.8-27b'], keys: [] },
+          selfhosted: { enabled: true, models: ['test-model'], keys: [] },
           other: { enabled: true, models: ['other-model'], keys: [] },
         },
       }),

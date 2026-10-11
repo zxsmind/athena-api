@@ -259,9 +259,9 @@ export function getCachedModelsDevModel(providerId: string, modelId: string): Mo
  * Finds a model by id across every catalog provider.
  *
  * Local provider ids (a self-hosted endpoint, a proxy, a custom name like
- * "sovinfra") never match catalog provider ids, so a provider-scoped lookup
+ * "selfhosted") never match catalog provider ids, so a provider-scoped lookup
  * returns null for exactly the setups that need a window most. The model id is
- * the stable part: `qwen3.8-27b` is the same model wherever it is served.
+ * the stable part: `test-model` is the same model wherever it is served.
  *
  * When providers disagree, the most common value wins: it is the model's
  * native capability, and outliers in either direction are one provider's
@@ -296,8 +296,8 @@ export function findModelWindowAcrossProviders(modelId: string): number | null {
  * The reasoning efforts a model accepts, from the catalog.
  *
  * A local provider id (self-hosted endpoint, proxy, a custom name like
- * "sovinfra") never matches a catalog provider id, so the lookup falls back to
- * the model id across every provider — the id is the stable part, `qwen3.8-27b`
+ * "selfhosted") never matches a catalog provider id, so the lookup falls back to
+ * the model id across every provider — the id is the stable part, `test-model`
  * is the same model wherever it is served. Where providers disagree the most
  * common set wins, because that is the model's own vocabulary and a single
  * provider's listing choice is not.

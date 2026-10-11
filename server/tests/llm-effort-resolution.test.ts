@@ -1,4 +1,4 @@
-﻿import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { applyReasoningFloor, resolveModelEffort } from '../src/llm.js';
 import { findModelReasoningOptions } from '../src/models-dev.js';
 
@@ -114,9 +114,9 @@ describe('applyReasoningFloor', () => {
 
 describe('the catalog lookup the resolver depends on', () => {
   it('reads a vocabulary for a model it is given, across providers', () => {
-    /* A local provider id (sovinfra, a self-hosted endpoint) matches no catalog
+    /* A local provider id (selfhosted, a self-hosted endpoint) matches no catalog
        provider, so the id is resolved across every provider that serves it. */
-    const found = findModelReasoningOptions('qwen3.8-27b');
+    const found = findModelReasoningOptions('Qwen/Qwen3.8-27B');
     if (found) {
       expect(found.values.length).toBeGreaterThan(0);
       expect(found.values.every((value) => typeof value === 'string')).toBe(true);
@@ -142,7 +142,7 @@ describe('the catalog lookup the resolver depends on', () => {
       expect(sent(resolveModelEffort('xhigh', gappy.values))).toBe('max');
     }
     /* A model that cannot express none at all, which is the `instant` case. */
-    const noneFree = findModelReasoningOptions('Qwen/Qwen3.8-27B');
+    const noneFree = findModelReasoningOptions('Qwen/test-model');
     if (noneFree) {
       expect(noneFree.values).not.toContain('none');
       expect(sent(resolveModelEffort('none', noneFree.values))).toBe('low');

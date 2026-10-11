@@ -13,11 +13,11 @@ import type { SettingsStore } from '../src/settings-store.js';
  *  report is tested against shapes that actually exist in models.dev. */
 const snapshot = (models: Record<string, unknown>) => ({
   fetchedAt: '2026-10-09T00:00:00.000Z',
-  providers: { sovinfra: { id: 'sovinfra', models } },
+  providers: { selfhosted: { id: 'selfhosted', models } },
 }) as ModelsDevSnapshot;
 
 const settings = (models: string[]) => ({
-  providers: { sovinfra: { enabled: true, keys: ['k'], models } },
+  providers: { selfhosted: { enabled: true, keys: ['k'], models } },
 }) as SettingsStore;
 
 describe('modelEffortReport', () => {
@@ -76,7 +76,7 @@ describe('modelEffortReport', () => {
   it('says nothing when no model is configured or enabled', () => {
     expect(modelEffortReport(snapshot({}), settings([])).rows).toEqual([]);
     expect(modelEffortReport(snapshot({ 'm': { id: 'm', reasoning: true, reasoning_options: { values: [] } } }), {
-      providers: { sovinfra: { enabled: false, keys: ['k'], models: ['m'] } },
+      providers: { selfhosted: { enabled: false, keys: ['k'], models: ['m'] } },
     } as SettingsStore).rows).toEqual([]);
   });
 });
