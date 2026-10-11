@@ -13,22 +13,30 @@ equivalent, and both run the same code with the same billing and error shape.
 | `POST /v1/contents` | Readable text from one or more URLs. No model involved. |
 | `POST /v1/research` | Background job that investigates and cites. Uses a model. |
 
-There is no frontend. The HTTP API and the MCP server are the product; the CLI
-described later exists to run them.
+A browser console ships with the server: a playground for the three API
+operations and an operator section for keys, analytics, jobs and the model
+catalog. The server serves it from its `public/` directory whenever one exists,
+so the console is the same origin as the API it calls.
 
 ## Running it
 
-Node.js 24 or newer. Two install roots, because the server is its own package:
+Node.js 24 or newer. Three install roots, because the server and the web
+console are their own packages:
 
 ```sh
 npm install
 npm install --prefix server
+npm install --prefix web
 npm run cli -- setup      # providers, keys, search backends
 npm run dev               # API on :39921
 ```
 
 The server refuses to open its listener until at least one LLM provider is
 configured, and names what is missing rather than coming up unusable.
+
+The console is optional: without `npm install --prefix web && npm run build
+--prefix web` there is no `public/` directory, and the server runs exactly as
+before — a pure API deploy.
 
 ### Docker
 
@@ -39,6 +47,22 @@ docker compose up --build -d
 The image runs as the non-root `node` user, and the named volume keeps SQLite
 state, settings, checkpoints, traces, routing state and the models.dev cache
 across image updates. `ATHENA_PORT` changes the host port.
+
+## Web console
+
+```sh
+npm install --prefix web
+npm run web                    # dev server on :5173, proxied to a local Athena
+npm run build --prefix web     # builds into server/src/public
+```
+
+- `/` — playground: search, contents, and research with the live event stream, budget gauges and the cited answer.
+- `/admin` — operator console: usage rollups, API keys, jobs and the models.dev catalog. Gated by the same local-network + `X-Admin-Key` rule the API enforces; the key lives in the tab's session only.
+- No cookies, no CORS: every call carries the same `Authorization` / `X-Admin-Key` headers the API documents, from the same origin.
+
+The server build copies the console into `dist/public`, so the Docker image
+needs no extra step: the console is served whenever it has been built, and a
+pure API deploy simply ships without one.
 
 ## Operating it
 

@@ -5,6 +5,8 @@ node_modules
 dist
 **/dist
 server/data
+server/src/public
+web/node_modules
 **/*.sqlite
 **/*.sqlite-*
 **/*.log

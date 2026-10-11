@@ -2,10 +2,11 @@
   "name": "athena",
   "description": "Self-hosted web research API and MCP server",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "npm run dev --prefix server",
+    "web": "npm run dev --prefix web",
     "build": "npm run build --prefix server",
     "start": "npm run start --prefix server",
     "test": "npm run test --prefix server",

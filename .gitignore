@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# The web console is built by web/ into the server's static directory; both
+# the workspace's node_modules and the built bundle are build output.
+web/node_modules
+server/src/public
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

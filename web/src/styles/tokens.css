@@ -1,0 +1,91 @@
+/*
+ * Design tokens. A monochrome scale in the spirit of the Vercel console:
+ * one neutral ramp, one foreground accent (the theme inverts), and a single
+ * signal color for live/ok states. Every surface, border and text color in
+ * the app resolves through these, so the theme swap is one attribute.
+ */
+
+:root {
+  --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+
+  --radius-1: 6px;
+  --radius-2: 12px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --sidebar-width: 248px;
+  --topbar-height: 56px;
+
+  --transition-fast: 120ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 350ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Light — paper white surfaces, near-black accent. */
+[data-theme='light'] {
+  --background: #ffffff;
+  --background-100: #ffffff;
+  --background-200: #fafafa;
+  --background-300: #f2f2f2;
+  --foreground: #000000;
+  --gray-100: #f2f2f2;
+  --gray-200: #ebebeb;
+  --gray-300: #e6e6e6;
+  --gray-400: #d4d4d4;
+  --gray-500: #a8a8a8;
+  --gray-600: #8f8f8f;
+  --gray-700: #666666;
+  --gray-800: #4d4d4d;
+  --gray-900: #171717;
+  --border: #ebebeb;
+  --border-strong: #d4d4d4;
+  --accent: #000000;
+  --accent-foreground: #ffffff;
+  --accent-hover: #383838;
+  --live: #0070f3;
+  --ok: #0070f3;
+  --warn: #f5a623;
+  --danger: #e5484d;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.1);
+  color-scheme: light;
+}
+
+/* Dark — true black base, white accent. */
+[data-theme='dark'] {
+  --background: #000000;
+  --background-100: #0a0a0a;
+  --background-200: #111111;
+  --background-300: #1a1a1a;
+  --foreground: #ededed;
+  --gray-100: #1a1a1a;
+  --gray-200: #242424;
+  --gray-300: #2e2e2e;
+  --gray-400: #3d3d3d;
+  --gray-500: #6b6b6b;
+  --gray-600: #8f8f8f;
+  --gray-700: #a1a1a1;
+  --gray-800: #c4c4c4;
+  --gray-900: #ededed;
+  --border: #242424;
+  --border-strong: #3d3d3d;
+  --accent: #ffffff;
+  --accent-foreground: #000000;
+  --accent-hover: #d4d4d4;
+  --live: #52a8ff;
+  --ok: #52a8ff;
+  --warn: #f5a623;
+  --danger: #ff6369;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}

@@ -2,19 +2,23 @@
 
 ## Building and testing
 
-The repository has two install roots. The server is its own package, and its
-commands run from `server/`.
+The repository has three install roots: the linter at the top level, the
+server as its own package, and the web console as its own package. Their
+commands run from their own directories.
 
 ```sh
 npm install
 npm install --prefix server
+npm install --prefix web
 npm run build --prefix server   # TypeScript, plus the local routing package
+npm run build --prefix web      # console bundle into server/src/public
 npm test  --prefix server       # vitest
 npm run lint                    # from the repository root
 ```
 
-All three are expected to pass before a change is finished. A change to dead-data
-behaviour should also come with a test that fails without it.
+All three steps — build, test, lint — are expected to pass before a change is
+finished. A change to dead-data behaviour should also come with a test that
+fails without it.
 
 ## Where things live
 
@@ -26,6 +30,7 @@ behaviour should also come with a test that fails without it.
 | `server/src/reasoning-effort.ts` | Pure rules for mapping a rung onto a model's vocabulary |
 | `server/src/api-v1.ts` | REST routes and the MCP server |
 | `server/src/models-dev.ts` | The models.dev catalog snapshot and its lookups |
+| `web/src/` | The browser console: playground (/), operator section (/admin) |
 | `docs/API.md` | The public contract for both transports |
 
 Two files in the data directory are never committed: `settings.yaml` (secrets) and

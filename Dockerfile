@@ -1,11 +1,18 @@
-# Build stage. The local routing package lives inside server/ and is consumed as
-# a file: dependency, so it must be built before the server that imports it.
+# Build stage. The local routing package lives inside server/ and is consumed
+# as a file: dependency, so it must be built before the server that imports it.
+# The web console builds into server/src/public, so it runs before the server
+# build copies that directory into dist.
 FROM node:24-bookworm-slim AS build
 
 WORKDIR /app
 
 COPY server/smart-routing-core ./server/smart-routing-core
 RUN npm ci --prefix server/smart-routing-core && npm run build --prefix server/smart-routing-core
+
+COPY web/package.json web/package-lock.json ./web/
+RUN npm ci --prefix web
+COPY web ./web
+RUN npm run build --prefix web
 
 COPY server/package.json server/package-lock.json ./server/
 RUN npm ci --prefix server
