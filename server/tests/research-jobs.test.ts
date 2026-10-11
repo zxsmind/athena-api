@@ -11,6 +11,7 @@ import {
   cancelStalePausedJobs,
   pauseResearchJob,
   resumeResearchJob,
+  resolveRestoredMode,
   setResearchJobStatus,
   subscribeResearchJob,
 } from '../src/research-jobs.js';
@@ -22,10 +23,10 @@ describe('ResearchJobs', () => {
   });
 
   it('should create a job with queued status', () => {
-    const job = createResearchJob({ query: 'What is AI?', mode: 'standard' });
+    const job = createResearchJob({ query: 'What is AI?', mode: 'default' });
     expect(job.status).toBe('queued');
     expect(job.query).toBe('What is AI?');
-    expect(job.mode).toBe('standard');
+    expect(job.mode).toBe('default');
     expect(job.cancelled).toBe(false);
     expect(job.id).toBeDefined();
   });
@@ -204,5 +205,26 @@ describe('paused job expiry', () => {
     job.updatedAt = new Date(Date.now() - 5 * 3_600_000).toISOString();
 
     expect(cancelStalePausedJobs(4 * 3_600_000, Date.now())).toEqual([id]);
+  });
+});
+
+describe('restored job rows', () => {
+  it('keeps a mode this build knows', () => {
+    expect(resolveRestoredMode('deep')).toBe('deep');
+    expect(resolveRestoredMode('instant')).toBe('instant');
+  });
+
+  it('migrates a retired mode name onto its successor', () => {
+    /* Rows written before the rename used to be skipped on every boot with a
+       warning that never stopped, which dropped finished jobs from the
+       registry permanently. They resolve to the mode the concept became. */
+    expect(resolveRestoredMode('standard')).toBe('default');
+  });
+
+  it('rejects anything that is not a mode in any spelling', () => {
+    expect(resolveRestoredMode('nonsense')).toBeNull();
+    expect(resolveRestoredMode('')).toBeNull();
+    expect(resolveRestoredMode(undefined)).toBeNull();
+    expect(resolveRestoredMode(42)).toBeNull();
   });
 });

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { Router, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { hostHeaderValidation, originValidation } from '@modelcontextprotocol/express';
@@ -428,8 +429,23 @@ function mcpFailure(error: unknown, fallbackCode: string) {
   return { isError: true, content: [{ type: 'text' as const, text: JSON.stringify({ error: result }) }] };
 }
 
+/**
+ * The version the MCP handshake reports. Read from package.json rather than
+ * written here: a hardcoded copy drifts the moment the version moves, and the
+ * handshake is the one place a client reads it.
+ */
+function serverVersion(): string {
+  try {
+    const raw = readFileSync(new URL('../package.json', import.meta.url), 'utf-8');
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    return typeof parsed.version === 'string' && parsed.version ? parsed.version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
 export function createAthenaMcpServer(context: AthenaMcpDependencies): McpServer {
-    const server = new McpServer({ name: 'athena', version: '0.1.0' });
+    const server = new McpServer({ name: 'athena', version: serverVersion() });
     const researchContext: ResearchContext = {
       usage: context.usage,
       apiKeyId: context.apiKeyId,

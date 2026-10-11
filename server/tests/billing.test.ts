@@ -1,4 +1,4 @@
-﻿import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+﻿import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -350,11 +350,21 @@ describe('shared limiter state', () => {
     const second = new Meter(store);
     const { record } = store.createApiKey('k', 'free');
 
-    /* Free allows 10 per second. Spend them through the first meter. */
-    for (let i = 0; i < 10; i += 1) expect(first.admit(record.id, 'free')).toBeNull();
-    expect(first.admit(record.id, 'free')?.reason).toBe('rate_limit');
-    /* The second meter sees the same buckets: the 11th request is refused. */
-    expect(second.admit(record.id, 'free')?.reason).toBe('rate_limit');
+    /* Free allows 10 per second. The clock is frozen so the ten spends land in
+       one instant: on a loaded machine the ten SQLite transactions can span
+       more than the 100ms the bucket needs to refill one token, which made
+       the eleventh admission a coin flip. Freezing time makes the arithmetic
+       exact instead of racing the disk. */
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    try {
+      for (let i = 0; i < 10; i += 1) expect(first.admit(record.id, 'free')).toBeNull();
+      expect(first.admit(record.id, 'free')?.reason).toBe('rate_limit');
+      /* The second meter sees the same buckets: the 11th request is refused. */
+      expect(second.admit(record.id, 'free')?.reason).toBe('rate_limit');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shares concurrency slots across Meter instances on the same database', () => {

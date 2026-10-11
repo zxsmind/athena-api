@@ -3,7 +3,7 @@ import type { AgentStep, SearchResponse, Source } from './schemas.js';
 import type { ReasoningEffort, ResearchMode, ResearchVerbosity, ResearchPreset, ResponseLength } from './engine/modes.js';
 import { loadResearchCheckpoint, saveResearchCheckpoint, type ResearchCheckpoint } from './engine/checkpoint.js';
 import { deleteEvidence } from './engine/evidence-store.js';
-import { assertResearchMode, DEFAULT_RESEARCH_MODE, DEFAULT_RESEARCH_VERBOSITY, DEFAULT_RESPONSE_LENGTH, reasoningEffortForMode } from './engine/modes.js';
+import { assertResearchMode, DEFAULT_RESEARCH_MODE, DEFAULT_RESEARCH_VERBOSITY, DEFAULT_RESPONSE_LENGTH, RESEARCH_MODES, reasoningEffortForMode } from './engine/modes.js';
 import {
   deletePersistedResearchJob,
   loadRecentResearchJobs,
@@ -495,8 +495,33 @@ export function subscribeResearchJob(id: string, listener: (job: ResearchJobReco
   };
 }
 
+/**
+ * Modes this build retired, mapped to their successor. A stored row written
+ * before a rename is not corrupt data — it is history — and skipping it makes
+ * a finished job vanish from the registry on every boot with a warning that
+ * never goes away. The mode travels *inside* the checkpoint preset, so the
+ * job resolves its own ceilings once migrated; a value still unknown after
+ * the map is a real error and still throws.
+ */
+const LEGACY_MODE_ALIASES: Record<string, ResearchMode> = {
+  standard: DEFAULT_RESEARCH_MODE,
+};
+
+/**
+ * The mode a stored job row should run under, or null when the value is not a
+ * mode this build knows in any spelling. Pure so the mapping rule is pinned by
+ * a test rather than by whatever rows happen to be lying around.
+ */
+export function resolveRestoredMode(stored: unknown): ResearchMode | null {
+  if (typeof stored !== 'string' || stored.length === 0) return null;
+  if ((RESEARCH_MODES as readonly string[]).includes(stored)) return stored as ResearchMode;
+  return LEGACY_MODE_ALIASES[stored] ?? null;
+}
+
 function restorePersistedJobs(): void {
   const active = new Set<ResearchJobStatus>(['queued', 'planning', 'searching', 'reviewing', 'synthesizing', 'running']);
+  let migrated = 0;
+  let skipped = 0;
   for (const row of loadRecentResearchJobs(MAX_JOBS)) {
     try {
       const data = JSON.parse(row.data) as Record<string, unknown>;
@@ -514,8 +539,15 @@ function restorePersistedJobs(): void {
       job.lastEventSeq = lastSeq;
       /* The mode comes out of a JSON column rather than a request body, so it is
          validated here. A bad value throws instead of quietly resolving the
-         ceilings of a different mode. */
-      job.mode = assertResearchMode(job.mode);
+         ceilings of a different mode; a retired name migrates to its successor
+         rather than dropping a finished job from the registry forever. */
+      const restoredMode = resolveRestoredMode(job.mode);
+      if (restoredMode === null) throw assertResearchMode(job.mode);
+      if (restoredMode !== job.mode) {
+        job.mode = restoredMode;
+        if (job.preset) job.preset.mode = restoredMode;
+        migrated += 1;
+      }
       /* Effort is derived from the mode, so a row written by an older build
          cannot leave the job thinking at a level its mode never allowed. */
       job.reasoningEffort = reasoningEffortForMode(job.mode);
@@ -548,8 +580,17 @@ function restorePersistedJobs(): void {
         jobs.set(job.id, job);
       }
     } catch (error) {
+      skipped += 1;
       console.error('[research-job-store] skipped an unreadable stored job:', error instanceof Error ? error.message : String(error));
     }
+  }
+  /* One line per outcome class, not per row: a boot that migrates a legacy
+     mode or skips one corrupt row should say so once and move on. */
+  if (migrated > 0) {
+    console.log(`[research-job-store] migrated ${migrated} stored job(s) off retired mode names`);
+  }
+  if (skipped > 0) {
+    console.log(`[research-job-store] ${skipped} stored job(s) could not be read and stay skipped`);
   }
   trimJobs();
 }

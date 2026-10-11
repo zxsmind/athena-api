@@ -18,7 +18,7 @@ import { loadRecentResearchJobs, loadResearchJobEvents } from '../src/research-j
  */
 
 function newJob(query: string) {
-  const preset = resolveResearchPreset('deep', 'standard');
+  const preset = resolveResearchPreset('deep');
   return createResearchJob({ query, mode: 'deep', preset, researchApi: true });
 }
 
