@@ -7,6 +7,7 @@ import {
   Button,
   Card,
   CardHeader,
+  Dialog,
   Field,
   Input,
   Select,
@@ -188,6 +189,7 @@ function ProvidersSection({
   const catalogIds = draft.providerOrder.filter((id) => draft.providers[id]);
   const available = settings.catalog.providers.filter((entry) => !draft.providers[entry.id]);
   const [adding, setAdding] = useState('');
+  const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
 
   const add = () => {
     const id = adding || available[0]?.id;
@@ -244,10 +246,30 @@ function ProvidersSection({
             provider={draft.providers[id]}
             edited={JSON.stringify(draft.providers[id]) !== JSON.stringify(settings.providers[id])}
             edit={edit}
-            onRemove={() => remove(id)}
+            onRemove={() => setPendingRemoval(id)}
           />
         ))}
       </div>
+
+      <Dialog
+        open={pendingRemoval !== null}
+        onClose={() => setPendingRemoval(null)}
+        title={`Remove ${pendingRemoval ?? ''}?`}
+        description="Its stored keys go with it. Keys are never sent to the browser, so this cannot be undone from here — restore settings.yaml or a backup to get them back."
+      >
+        <div className="flex justify-end gap-[8px]">
+          <Button onClick={() => setPendingRemoval(null)}>Keep it</Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              if (pendingRemoval) remove(pendingRemoval);
+              setPendingRemoval(null);
+            }}
+          >
+            Remove provider
+          </Button>
+        </div>
+      </Dialog>
     </Card>
   );
 }
@@ -266,6 +288,7 @@ function ProviderRow({
   onRemove: () => void;
 }) {
   const [newKey, setNewKey] = useState('');
+  const [pendingKey, setPendingKey] = useState<number | null>(null);
 
   const setKeys = (keys: string[]) => {
     edit((next) => {
@@ -279,6 +302,12 @@ function ProviderRow({
     if (!value) return;
     setKeys([...provider.keys, value]);
     setNewKey('');
+  };
+
+  const confirmKeyRemoval = () => {
+    if (pendingKey === null) return;
+    setKeys(provider.keys.filter((_, position) => position !== pendingKey));
+    setPendingKey(null);
   };
 
   return (
@@ -314,7 +343,7 @@ function ProviderRow({
               type="button"
               aria-label={`Remove key ${index + 1}`}
               className="text-[var(--gray-500)] hover:text-[var(--danger)]"
-              onClick={() => setKeys(provider.keys.filter((_, position) => position !== index))}
+              onClick={() => setPendingKey(index)}
             >
               ×
             </button>
@@ -374,6 +403,20 @@ function ProviderRow({
           Choose models →
         </Link>
       </div>
+
+      <Dialog
+        open={pendingKey !== null}
+        onClose={() => setPendingKey(null)}
+        title="Remove this key?"
+        description="The full key is never sent to the browser, so it cannot be restored from this screen. Keep a copy somewhere, or restore settings.yaml."
+      >
+        <div className="flex justify-end gap-[8px]">
+          <Button onClick={() => setPendingKey(null)}>Keep it</Button>
+          <Button variant="danger" onClick={confirmKeyRemoval}>
+            Remove key
+          </Button>
+        </div>
+      </Dialog>
     </div>
   );
 }
@@ -394,6 +437,15 @@ function SearchSection({
   const configured = draft.searchProviderOrder.filter((id) => draft.searchProviders[id]);
   const available = settings.catalog.search.filter((entry) => !draft.searchProviders[entry.id]);
   const [adding, setAdding] = useState('');
+  const [pendingBackend, setPendingBackend] = useState<string | null>(null);
+  const [pendingKey, setPendingKey] = useState<{ backend: string; index: number } | null>(null);
+
+  const dropKey = (backend: string, index: number) => {
+    edit((next) => {
+      const target = next.searchProviders[backend];
+      if (target) target.keys = target.keys.filter((_, position) => position !== index);
+    });
+  };
 
   const add = () => {
     const entry = available.find((item) => item.id === adding) ?? available[0];
@@ -459,7 +511,7 @@ function SearchSection({
                   {backend.keyless && <Badge tone="ok">keyless</Badge>}
                   {backend.keyCount > 0 && <Badge>{backend.keyCount} keys</Badge>}
                 </div>
-                <Button size="sm" variant="danger" onClick={() => remove(id)}>
+                <Button size="sm" variant="danger" onClick={() => setPendingBackend(id)}>
                   <Trash2 size={13} />
                   Remove
                 </Button>
@@ -476,12 +528,7 @@ function SearchSection({
                       type="button"
                       aria-label={`Remove key ${index + 1}`}
                       className="text-[var(--gray-500)] hover:text-[var(--danger)]"
-                      onClick={() =>
-                        edit((next) => {
-                          const target = next.searchProviders[id];
-                          if (target) target.keys = target.keys.filter((_, position) => position !== index);
-                        })
-                      }
+                      onClick={() => setPendingKey({ backend: id, index })}
                     >
                       ×
                     </button>
@@ -533,6 +580,46 @@ function SearchSection({
           );
         })}
       </div>
+
+      <Dialog
+        open={pendingBackend !== null}
+        onClose={() => setPendingBackend(null)}
+        title={`Remove ${pendingBackend ?? ''}?`}
+        description="Its stored keys go with it. Keys are never sent to the browser, so this cannot be undone from here — restore settings.yaml or a backup."
+      >
+        <div className="flex justify-end gap-[8px]">
+          <Button onClick={() => setPendingBackend(null)}>Keep it</Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              if (pendingBackend) remove(pendingBackend);
+              setPendingBackend(null);
+            }}
+          >
+            Remove backend
+          </Button>
+        </div>
+      </Dialog>
+
+      <Dialog
+        open={pendingKey !== null}
+        onClose={() => setPendingKey(null)}
+        title="Remove this key?"
+        description="The full key is never sent to the browser, so it cannot be restored from this screen. Keep a copy somewhere, or restore settings.yaml."
+      >
+        <div className="flex justify-end gap-[8px]">
+          <Button onClick={() => setPendingKey(null)}>Keep it</Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              if (pendingKey) dropKey(pendingKey.backend, pendingKey.index);
+              setPendingKey(null);
+            }}
+          >
+            Remove key
+          </Button>
+        </div>
+      </Dialog>
     </Card>
   );
 }

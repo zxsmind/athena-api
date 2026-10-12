@@ -268,6 +268,17 @@ describe('UpdateSettingsSchema', () => {
     expect(parsed.success).toBe(false);
   });
 
+  it('accepts a patch that names only one mode', () => {
+    /* Zod 4 makes an enum-keyed `z.record` exhaustive, so requiring all four
+       modes turned "move the deep default" into a 400. One mode in, one mode
+       out; the rest are left alone. */
+    const parsed = UpdateSettingsSchema.safeParse({
+      modelRouting: { deep: { primary: { providerId: 'openrouter', model: 'm1' } } },
+    });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && Object.keys(parsed.data.modelRouting ?? {})).toEqual(['deep']);
+  });
+
   it('rejects an unknown mode', () => {
     expect(UpdateSettingsSchema.safeParse({ modelRouting: { banana: {} } }).success).toBe(false);
   });

@@ -162,7 +162,10 @@ export const UpdateSettingsSchema = z
     providerOrder: z.array(ProviderIdSchema).max(200).optional(),
     searchProviders: z.record(ProviderIdSchema, SearchPatchSchema.nullable()).optional(),
     searchProviderOrder: z.array(ProviderIdSchema).max(200).optional(),
-    modelRouting: z.record(z.enum(RESEARCH_MODES), RoutePatchSchema).optional(),
+    /* partialRecord, not record: an enum-keyed `z.record` in Zod 4 requires every
+       member to be present, so a patch that moves one mode's default was refused
+       for missing the other three. Only the modes named here change. */
+    modelRouting: z.partialRecord(z.enum(RESEARCH_MODES), RoutePatchSchema).optional(),
     api: ApiPatchSchema.optional(),
     general: GeneralPatchSchema.optional(),
   })

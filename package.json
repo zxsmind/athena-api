@@ -2,7 +2,7 @@
   "name": "athena",
   "description": "Self-hosted web research API and MCP server",
   "private": true,
-  "version": "0.5.3",
+  "version": "0.5.4",
   "type": "module",
   "scripts": {
     "dev": "npm run dev --prefix server",
