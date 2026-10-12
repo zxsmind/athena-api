@@ -9,6 +9,11 @@ services:
       PORT: "39921"
       HOST: 0.0.0.0
       ATHENA_DATA_DIR: /data
+      # Optional: choose the admin key up front (16+ chars). Without it the
+      # server generates one on first boot and prints it once to the log —
+      # `docker compose logs athena | grep -i "admin key"`, or read
+      # /data/admin.key from the volume. See README "The admin key under Docker".
+      # ATHENA_ADMIN_KEY: change-me-to-something-long
     ports:
       - "${ATHENA_PORT:-39921}:39921"
     volumes:

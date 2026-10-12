@@ -48,6 +48,31 @@ The image runs as the non-root `node` user, and the named volume keeps SQLite
 state, settings, checkpoints, traces, routing state and the models.dev cache
 across image updates. `ATHENA_PORT` changes the host port.
 
+#### The admin key under Docker
+
+On first boot the server generates the admin key that `/v1/keys` and
+`/v1/analytics` need, writes it to `/data/admin.key` inside the volume, and
+prints it **once** to the container log:
+
+```sh
+docker compose logs athena | grep -i "admin key"      # find it later
+docker compose exec athena cat /data/admin.key        # or read the file
+docker compose exec athena node server/dist/cli.js admin-key show
+```
+
+Restarting does not print it again — the volume already holds it, so the log
+line above is from the first boot only. Three ways to keep hold of it:
+
+- **Set it yourself** before the first boot (`ATHENA_ADMIN_KEY` in the compose
+  environment, 16+ characters). The file is then never the source of truth and
+  a redeploy cannot change it under you.
+- **Read it back** from the volume at any time with either command above.
+- **Rotate it** if it is truly gone: `… admin-key rotate` replaces it, prints
+  the new value once, and the old key stops working immediately.
+
+The console's `/admin` section asks for this key on first visit; it is kept in
+the browser tab's session only.
+
 ## Web console
 
 ```sh

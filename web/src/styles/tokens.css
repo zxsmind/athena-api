@@ -53,6 +53,9 @@
   --ok: #0070f3;
   --warn: #f5a623;
   --danger: #e5484d;
+  /* Scrim behind dialogs, per theme: a dark overlay on a dark surface reads as
+     nothing, and a light one on a light surface leaves the dialog unseparated. */
+  --overlay: rgba(0, 0, 0, 0.4);
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.06);
   --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.1);
@@ -83,7 +86,8 @@
   --live: #52a8ff;
   --ok: #52a8ff;
   --warn: #f5a623;
-  --danger: #ff6369;
+  --danger: #e5484d;
+  --overlay: rgba(0, 0, 0, 0.62);
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.5);
   --shadow-3: 0 12px 32px rgba(0, 0, 0, 0.6);

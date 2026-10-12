@@ -29,8 +29,7 @@ const buttonVariants: Record<ButtonVariant, string> = {
   primary: 'bg-[var(--accent)] text-[var(--accent-foreground)] border border-[var(--accent)] hover:bg-[var(--accent-hover)] hover:border-[var(--accent-hover)]',
   secondary: 'bg-[var(--background-100)] border border-[var(--border-strong)] hover:border-[var(--foreground)] hover:bg-[var(--background-200)]',
   ghost: 'bg-transparent border border-transparent hover:bg-[var(--background-200)] text-[var(--gray-700)] hover:text-[var(--foreground)]',
-  danger: 'bg-transparent border border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white',
-};
+  danger: 'bg-transparent border border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--danger)] hover:text-white',};
 
 const buttonSizes: Record<ButtonSize, string> = {
   sm: 'h-[32px] px-[10px] text-[13px] rounded-[var(--radius-1)]',
@@ -304,7 +303,7 @@ export function Dialog({
           exit={{ opacity: 0 }}
           transition={{ duration: 0.16 }}
         >
-          <div className="absolute inset-0 bg-[rgba(0,0,0,0.4)]" onClick={onClose} />
+          <div className="absolute inset-0 bg-[var(--overlay)]" onClick={onClose} />
           <motion.div
             role="dialog"
             aria-modal="true"
