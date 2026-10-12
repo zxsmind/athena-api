@@ -41,13 +41,32 @@ before — a pure API deploy.
 
 ### Docker
 
+The published image is what runs: multi-arch (`linux/amd64` and `linux/arm64`),
+so neither platform builds anything.
+
 ```sh
-docker compose up --build -d
+docker compose up -d
 ```
+
+To move to a newer release:
+
+```sh
+docker compose pull
+docker compose up -d          # recreates the container when the image changed
+```
+
+Pin `image:` in `compose.yaml` to a version tag — `ghcr.io/zxsmind/athena-api:v0.5.4`
+— to keep a deployment reproducible.
 
 The image runs as the non-root `node` user, and the named volume keeps SQLite
 state, settings, checkpoints, traces, routing state and the models.dev cache
 across image updates. `ATHENA_PORT` changes the host port.
+
+Building from source is optional, for development only:
+
+```sh
+docker compose -f compose.yaml -f compose.build.yaml up --build -d
+```
 
 #### The admin key under Docker
 

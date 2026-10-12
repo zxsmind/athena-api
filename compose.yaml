@@ -1,8 +1,8 @@
 services:
   athena:
-    build:
-      context: .
-    image: athena:local
+    # The published image, multi-arch (linux/amd64 + linux/arm64), so neither
+    # platform builds anything. Pin a version tag here for a reproducible run.
+    image: ghcr.io/zxsmind/athena-api:latest
     restart: unless-stopped
     environment:
       NODE_ENV: production

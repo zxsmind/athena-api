@@ -1,0 +1,11 @@
+# Optional override: build from source instead of pulling the published image.
+#
+#   docker compose -f compose.yaml -f compose.build.yaml up --build -d
+#
+# Plain `docker compose up -d` in compose.yaml never builds — it pulls
+# ghcr.io/zxsmind/athena-api:latest, which is already multi-arch.
+services:
+  athena:
+    image: athena:local
+    build:
+      context: .
