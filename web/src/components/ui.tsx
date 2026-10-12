@@ -102,6 +102,43 @@ export function Field({
   );
 }
 
+/* ── Checkbox ───────────────────────────────────────────────────────────── */
+
+export function Checkbox({
+  checked,
+  onChange,
+  disabled = false,
+  label,
+  indeterminate = false,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  disabled?: boolean;
+  label?: ReactNode;
+  indeterminate?: boolean;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+
+  return (
+    <label
+      className={`inline-flex items-center gap-[8px] text-[13px] ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+    >
+      <input
+        ref={ref}
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        className="h-[15px] w-[15px] cursor-pointer accent-[var(--accent)]"
+      />
+      {label && <span>{label}</span>}
+    </label>
+  );
+}
+
 /* ── Card ───────────────────────────────────────────────────────────────── */
 
 export function Card({

@@ -190,6 +190,10 @@ export interface CatalogModel {
   cost?: { input?: number; output?: number; cache_read?: number; cache_write?: number };
   release_date?: string;
   last_updated?: string;
+  /** Whether this deployment serves the model. */
+  configured: boolean;
+  /** Modes whose primary route points here, so "default" can be set per row. */
+  default_modes: string[];
 }
 
 export interface CatalogProvider {
@@ -198,13 +202,20 @@ export interface CatalogProvider {
   npm?: string;
   api?: string;
   doc?: string;
+  enabled: boolean;
+  /** An empty whitelist means the whole catalog, which is what this reports. */
+  serves_whole_catalog: boolean;
   configured_models: string[];
+  catalog_count: number;
   models: CatalogModel[];
 }
 
+/** Admin-gated: the console reads it behind the operator key. */
 export const models = (provider?: string) =>
   request<{ source: string; fetched_at: string; providers: CatalogProvider[] }>(
     `/models${provider ? `?provider=${encodeURIComponent(provider)}` : ''}`,
+    {},
+    true,
   );
 
 /* ── Keys (admin) ───────────────────────────────────────────────────────── */
@@ -229,3 +240,103 @@ export const createKey = (name: string, plan: 'free' | 'paid' | 'enterprise') =>
 
 export const revokeKey = (id: string) =>
   request<{ revoked: boolean }>(`/keys/${id}`, { method: 'DELETE' }, true);
+
+/* ── Settings (admin) ───────────────────────────────────────────────────── */
+
+/**
+ * The settings document as the console sees it: the stored `settings.yaml`,
+ * camelCase and all, with every secret replaced by its mask. Send a mask back
+ * to keep the secret it came from; send a new value to replace it.
+ */
+export interface SettingsProviderState {
+  enabled: boolean;
+  /** Masked: `…1234`. Never the stored secret. */
+  keys: string[];
+  keyCount: number;
+  /** Empty `models` means the whole catalog is served. */
+  servesWholeCatalog: boolean;
+  models: string[];
+  anonymous?: boolean;
+  url?: string;
+  name?: string;
+  npm?: string;
+  env?: string[];
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  includeThoughts?: boolean;
+  disabledThinkingModels?: string[];
+  inlineToolCallModels?: string[];
+  modelPrices?: Record<string, { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }>;
+}
+
+export interface SettingsSearchProviderState {
+  keys: string[];
+  keyCount: number;
+  url?: string;
+  zone?: string;
+  keyless?: boolean;
+}
+
+export interface ModelReference {
+  providerId: string;
+  model: string;
+}
+
+export interface ModelRoute {
+  primary: ModelReference;
+  fallback: ModelReference[];
+}
+
+export type ResearchModeId = 'instant' | 'default' | 'deep' | 'max';
+
+export interface OperatorSettings {
+  providers: Record<string, SettingsProviderState>;
+  providerOrder: string[];
+  searchProviders: Record<string, SettingsSearchProviderState>;
+  searchProviderOrder: string[];
+  modelRouting: Record<ResearchModeId, ModelRoute>;
+  api: {
+    defaultMaxConcurrent: number;
+    maxActiveJobs: number;
+    maxActiveBatches: number;
+    maxEventsPerJob: number;
+    maxEventsPerBatch: number;
+    maxRetentionMinutes: number;
+    defaultMode: 'default' | 'deep' | 'max';
+  };
+  general: {
+    maxSources: number;
+    deepIterations: number;
+    thinkingStripPatterns: string;
+    titleModel: string;
+    showDebugContext: boolean;
+    autocompleteCount: number;
+  };
+  modes: ResearchModeId[];
+  /** Read-only: both take effect when the server binds its socket. */
+  server: { port: number; host: string };
+  catalog: {
+    providers: Array<{ id: string; name: string; npm: string; modelCount: number; configured: boolean; enabled: boolean }>;
+    search: Array<{ id: string; name: string; needsZone: boolean; keyless: boolean }>;
+  };
+  readiness: { ready: boolean; problems: string[]; hints: string[] };
+}
+
+/**
+ * Fields a section-level change may carry. Everything is optional, so the
+ * console can send just the section it edited; `null` removes a provider or a
+ * search backend.
+ */
+export interface SettingsPatch {
+  providers?: Record<string, SettingsProviderState | null>;
+  providerOrder?: string[];
+  searchProviders?: Record<string, SettingsSearchProviderState | null>;
+  searchProviderOrder?: string[];
+  modelRouting?: Partial<Record<ResearchModeId, { primary?: ModelReference; fallback?: ModelReference[] }>>;
+  api?: Partial<OperatorSettings['api']>;
+  general?: Partial<OperatorSettings['general']>;
+}
+
+export const getSettings = () => request<OperatorSettings>('/settings', {}, true);
+
+export const updateSettings = (patch: SettingsPatch) =>
+  request<OperatorSettings>('/settings', { method: 'PUT', body: JSON.stringify(patch) }, true);

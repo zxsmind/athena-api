@@ -3,7 +3,8 @@ import express from 'express';
 import { ApiPlatformStore } from '../src/api-platform-store.js';
 import { Meter } from '../src/application/meter.js';
 import { createApiV1Router } from '../src/api-v1.js';
-import { getAdminKey, resetAdminKeyCache } from '../src/admin-auth.js';
+import { getAdminKey, resetAdminKeyCache, resetAdminLockout } from '../src/admin-auth.js';
+import { resetSettingsCache } from '../src/settings-store.js';
 import { publicJob, publicProgress, publicResult, publicSources } from '../src/api-v1.js';
 import type { ResearchJobRecord } from '../src/research-jobs.js';
 import { appendResearchJobEvent, createResearchJob } from '../src/research-jobs.js';
@@ -94,11 +95,15 @@ describe('v1 authentication and metering wiring', () => {
          so an exact admitted count is not a stable assertion. The per-minute
          ceiling is the deterministic bound, so the burst is sized well above it
          and asserted against that.
-         /v1/models is metered and does no outbound work. */
+         /v1/models is metered and does no outbound work. It is also a management
+         route, so the admin key rides along: without it the burst would be
+         refused at the gate and nothing would ever reach the rate limiter. */
       const burst = 150;
       const startedAt = performance.now();
       const responses = await Promise.all(
-        Array.from({ length: burst }, () => fetch(`${h.url}/models`, { headers: auth(h.secret) })),
+        Array.from({ length: burst }, () => fetch(`${h.url}/models`, {
+          headers: { ...auth(h.secret), 'X-Admin-Key': getAdminKey() },
+        })),
       );
       const elapsedMs = performance.now() - startedAt;
       const statuses = responses.map((res) => res.status);
@@ -175,11 +180,15 @@ describe('management route admin key', () => {
 
   beforeEach(() => {
     resetAdminKeyCache();
+    /* Wrong-key cases in this suite share one address; without a reset the fifth
+       refusal would lock every later case out for ten minutes. */
+    resetAdminLockout();
     process.env.ATHENA_ADMIN_KEY = ADMIN;
   });
 
   afterEach(() => {
     resetAdminKeyCache();
+    resetAdminLockout();
     delete process.env.ATHENA_ADMIN_KEY;
   });
 
@@ -221,6 +230,68 @@ describe('management route admin key', () => {
       expect(analytics.status).toBe(200);
     } finally {
       await h.close();
+    }
+  });
+
+  it('gates settings and models the same way as keys', async () => {
+    const h = await startHarness('free');
+    try {
+      /* Both management routes: no admin key means refused, not served. */
+      expect((await fetch(`${h.url}/settings`)).status).toBe(401);
+      expect((await fetch(`${h.url}/models`)).status).toBe(401);
+      expect((await fetch(`${h.url}/settings`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ general: { maxSources: 11 } }),
+      })).status).toBe(401);
+
+      const settings = await fetch(`${h.url}/settings`, { headers: adminHeader(ADMIN) });
+      expect(settings.status).toBe(200);
+      const body = await settings.json() as { server: { port: number }; providers: Record<string, { keys: string[]; keyCount: number }> };
+      expect(body.server.port).toBeGreaterThan(0);
+      /* Nothing readable comes back: every stored key is a mask. */
+      for (const provider of Object.values(body.providers)) {
+        for (const key of provider.keys) expect(key.startsWith('…')).toBe(true);
+      }
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('writes settings through PUT and reads the change back', async () => {
+    const h = await startHarness('free');
+    const before = await (await fetch(`${h.url}/settings`, { headers: adminHeader(ADMIN) })).json() as { general: { maxSources: number } };
+    const target = before.general.maxSources === 11 ? 13 : 11;
+    try {
+      const put = await fetch(`${h.url}/settings`, {
+        method: 'PUT',
+        headers: { ...adminHeader(ADMIN), 'content-type': 'application/json' },
+        body: JSON.stringify({ general: { maxSources: target } }),
+      });
+      expect(put.status).toBe(200);
+
+      const after = await (await fetch(`${h.url}/settings`, { headers: adminHeader(ADMIN) })).json() as { general: { maxSources: number } };
+      expect(after.general.maxSources).toBe(target);
+    } finally {
+      await h.close();
+      resetSettingsCache();
+    }
+  });
+
+  it('refuses a settings body that does not validate', async () => {
+    const h = await startHarness('free');
+    try {
+      const res = await fetch(`${h.url}/settings`, {
+        method: 'PUT',
+        headers: { ...adminHeader(ADMIN), 'content-type': 'application/json' },
+        body: JSON.stringify({ general: { maxSources: -5 } }),
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: { code: string } };
+      expect(body.error.code).toBe('SCHEMA_VIOLATION');
+    } finally {
+      await h.close();
+      resetSettingsCache();
     }
   });
 });

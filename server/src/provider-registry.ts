@@ -5,6 +5,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import type { LanguageModel } from 'ai';
 import { getCachedModelsDevProvider } from './models-dev.js';
+import { catalogModelsOf } from './operator-settings.js';
 import type { ProviderState } from './settings-store.js';
 
 /**
@@ -261,18 +262,17 @@ export function listRoutableModels(
   for (const id of [...catalogIds, ...Object.keys(settings.providers)]) {
     if (settings.providers[id]?.enabled && !ordered.includes(id)) ordered.push(id);
   }
-  const catalogModelsOf = (pid: string): string[] => {
+  const servedModelsOf = (pid: string): string[] => {
     const state = settings.providers[pid];
     if (!state) return [];
     const catalog = getCachedModelsDevProvider(pid);
-    if (catalog?.models) {
-      const ids = Object.keys(catalog.models);
-      return state.models.length > 0 ? ids.filter((id) => state.models.includes(id)) : ids;
-    }
+    /* Shared with GET /v1/models: an empty whitelist means the whole catalog
+       there, so it means it here too. One definition, one reading. */
+    if (catalog?.models) return catalogModelsOf(state, Object.keys(catalog.models));
     /* Custom provider: only the explicitly listed models exist. */
     return state.npm ? [...state.models] : [];
   };
   return ordered.flatMap((pid) =>
-    catalogModelsOf(pid).map((model) => ({ providerId: pid, model, state: settings.providers[pid] })),
+    servedModelsOf(pid).map((model) => ({ providerId: pid, model, state: settings.providers[pid] })),
   );
 }

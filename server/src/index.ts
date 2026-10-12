@@ -11,6 +11,7 @@ import { getConfig, initConfig } from './config/load.js';
 import { DATA_DIR, getDataPath, resolvedDataDir } from './storage.js';
 import { configureLogger, logger } from './logger.js';
 import { assertConfigured, type ConfigAudit } from './startup-guard.js';
+import { getAdminKey } from './admin-auth.js';
 import { catalogIntervalMsFromHours, setCatalogRefreshIntervalMs, startCatalogRefresh } from './models-dev.js';
 import { retentionWindows, startRetentionSweeper, sweepRetention } from './application/retention.js';
 import { enableTrace } from './trace.js';
@@ -132,6 +133,11 @@ if (existsSync(publicDir)) {
 
 applyRuntimeLimits();
 recoverInterruptedResearchJobs();
+/* The admin key gates keys, analytics, settings and models. Resolving it here is
+   what makes "generated on first boot, printed once" true: left to the first
+   admin request it stayed absent until someone presented a wrong key, and the
+   operator met the gate before they had ever seen the secret. */
+getAdminKey();
 
 const server = app.listen(getConfig().server.port, getConfig().server.host, () => {
   const config = getConfig();

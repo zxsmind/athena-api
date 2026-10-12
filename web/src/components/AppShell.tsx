@@ -13,6 +13,7 @@ import {
   Plug,
   ScrollText,
   Search,
+  Settings,
   Sun,
   TerminalSquare,
 } from 'lucide-react';
@@ -33,6 +34,7 @@ const adminNav = [
   { to: '/admin/keys', label: 'Keys', icon: KeyRound },
   { to: '/admin/jobs', label: 'Jobs', icon: ListChecks },
   { to: '/admin/models', label: 'Models', icon: ScrollText },
+  { to: '/admin/settings', label: 'Settings', icon: Settings },
   { to: '/admin/ops', label: 'Ops', icon: TerminalSquare },
 ];
 

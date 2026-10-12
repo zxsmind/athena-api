@@ -99,8 +99,11 @@ export function adminAttemptLocked(identifier: string, now: number = Date.now())
 
 export function recordAdminFailure(identifier: string, now: number = Date.now()): void {
   const entry = adminFailures.get(identifier);
-  if (!entry || now >= entry.until) {
-    if (entry && now >= entry.until) adminFailures.delete(identifier);
+  /* `until: 0` means "counting, not locked". The expiry test must only fire when
+     a lock window was actually set: treating 0 as an elapsed window reset the
+     counter on every attempt, so the fifth wrong key never locked anything and
+     the guard below was inert. */
+  if (!entry || (entry.until > 0 && now >= entry.until)) {
     adminFailures.set(identifier, { count: 1, until: 0 });
     return;
   }
@@ -110,4 +113,9 @@ export function recordAdminFailure(identifier: string, now: number = Date.now())
 
 export function recordAdminSuccess(identifier: string): void {
   adminFailures.delete(identifier);
+}
+
+/** For tests: the map is module state, and a lockout must not outlive a case. */
+export function resetAdminLockout(): void {
+  adminFailures.clear();
 }

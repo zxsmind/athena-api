@@ -5,14 +5,17 @@ import { listSupportedPackages } from '../provider-registry.js';
 import { normalizeKeyName } from '../api-platform-store.js';
 import type { SettingsStore } from '../settings-store.js';
 import { getDataPath } from '../storage.js';
-import { rankProviders, SEARCH_BACKEND_CHOICES, parseList } from './setup.js';
+import { rankProviders, parseList } from './setup.js';
+import { SEARCH_BACKEND_CHOICES } from '../search/catalog.js';
+import { maskSecret } from '../operator-settings.js';
 import * as edit from './config-edit.js';
 import * as ui from './ui.js';
 
-/** Last four characters of a key, which is enough to tell keys apart. */
-export function maskKey(key: string): string {
-  return `…${key.slice(-4)}`;
-}
+/**
+ * Last four characters of a key, which is enough to tell keys apart. Shared with
+ * the operator console so both surfaces show a key the same way.
+ */
+export const maskKey = maskSecret;
 
 interface CatalogEntry {
   id: string;

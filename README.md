@@ -14,9 +14,10 @@ equivalent, and both run the same code with the same billing and error shape.
 | `POST /v1/research` | Background job that investigates and cites. Uses a model. |
 
 A browser console ships with the server: a playground for the three API
-operations and an operator section for keys, analytics, jobs and the model
-catalog. The server serves it from its `public/` directory whenever one exists,
-so the console is the same origin as the API it calls.
+operations and an operator section where keys, providers, search backends,
+models, default routes and limits are all editable in place. The server serves
+it from its `public/` directory whenever one exists, so the console is the same
+origin as the API it calls.
 
 ## Running it
 
@@ -50,9 +51,9 @@ across image updates. `ATHENA_PORT` changes the host port.
 
 #### The admin key under Docker
 
-On first boot the server generates the admin key that `/v1/keys` and
-`/v1/analytics` need, writes it to `/data/admin.key` inside the volume, and
-prints it **once** to the container log:
+On first boot the server generates the admin key that `/v1/keys`,
+`/v1/analytics`, `/v1/settings` and `/v1/models` need, writes it to
+`/data/admin.key` inside the volume, and prints it **once** to the container log:
 
 ```sh
 docker compose logs athena | grep -i "admin key"      # find it later
@@ -82,7 +83,7 @@ npm run build --prefix web     # builds into server/src/public
 ```
 
 - `/` — playground: search, contents, and research with the live event stream, budget gauges and the cited answer.
-- `/admin` — operator console: usage rollups, API keys, jobs and the models.dev catalog. Gated by the same local-network + `X-Admin-Key` rule the API enforces; the key lives in the tab's session only.
+- `/admin` — operator console: usage rollups, API keys, jobs, and everything in `settings.yaml` — provider keys, search backends, which models each provider serves, the default model per mode, and the limits. Gated by the same local-network + `X-Admin-Key` rule the API enforces; the key lives in the tab's session only.
 - No cookies, no CORS: every call carries the same `Authorization` / `X-Admin-Key` headers the API documents, from the same origin.
 
 The server build copies the console into `dist/public`, so the Docker image

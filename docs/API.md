@@ -388,9 +388,17 @@ billed the same way.
 
 ## `GET /models`
 
-Lists the models the server can route to, with the context window and pricing from
-the local models.dev cache. `?provider=` narrows the list to one provider. A model
-known not to support reasoning or tool calls is excluded from research routing.
+Lists the models in the local models.dev cache, with context windows and pricing,
+overlaid with what this deployment serves. Needs the admin key (below).
+
+`?provider=` returns that provider's full catalog, each model carrying
+`configured` and `default_modes`. Without it, only the models the server would
+actually serve are returned — the whole catalog of 226 providers is megabytes no
+client renders — and each provider reports `enabled`, `catalog_count` and
+`configured_models` instead.
+
+An empty model whitelist means "every model of this provider", which is the same
+reading the router uses; `serves_whole_catalog` reports it.
 
 ## `GET /analytics`
 
@@ -400,23 +408,61 @@ Needs the admin key (below).
 
 ---
 
-## Key management
+## Management routes
 
 Available only from the local network — remote deployments return
 `403 LOCAL_MANAGEMENT_ONLY`. Local alone is not enough: every request also
 needs the admin key in the `X-Admin-Key` header, otherwise `401 UNAUTHORIZED`.
 The key is generated on first boot and printed once to the server log;
 override it with `ATHENA_ADMIN_KEY`, show it with `athena admin-key show`,
-replace it with `athena admin-key rotate`.
+replace it with `athena admin-key rotate`. Five wrong attempts from one address
+lock it out for ten minutes.
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/keys` | List keys. Never returns secrets |
 | `POST` | `/keys` | Create a key. `{ "name", "plan" }` where plan is `free`, `paid`, or `enterprise` |
 | `DELETE` | `/keys/:id` | Revoke a key |
+| `GET` | `/analytics` | Usage rollup over a `?days=` window |
+| `GET` | `/models` | Catalog overlaid with what this server serves |
+| `GET` | `/settings` | The whole settings document, secrets masked |
+| `PUT` | `/settings` | Apply a patch to that document |
 
 The secret is returned once, in the create response, and stored hashed. It cannot
 be retrieved afterwards.
+
+### `PUT /settings`
+
+The body is a patch: only the sections you send are changed, and inside a
+section only the fields you send. `providers` and `searchProviders` are keyed by
+provider id; sending `null` for an id removes it.
+
+```jsonc
+{
+  "providers": {
+    "openrouter": { "enabled": true, "models": ["gpt-5", "claude-sonnet-4-5"] },
+    "groq": null                       // removed
+  },
+  "providerOrder": ["openrouter"],
+  "modelRouting": { "default": { "primary": { "providerId": "openrouter", "model": "gpt-5" } } },
+  "general": { "maxSources": 12 },
+  "api": { "maxActiveJobs": 80 }
+}
+```
+
+Success returns the stored document as `GET /settings` would, so a client can
+redraw from what was written rather than from what it hoped it wrote. An invalid
+body is `400 SCHEMA_VIOLATION`.
+
+**Secrets never cross the wire.** `GET /settings` returns each key as its mask,
+`…` plus the last four characters. Send a mask back unchanged and the key it
+stands for is kept; send a new value and it replaces that key; send an empty
+array and the keys are cleared. `port` and `host` are read-only here: they decide
+where the socket binds, so changing them means editing `settings.yaml` and
+restarting.
+
+Changes take effect immediately — `saveSettings` refreshes the store's cache, so
+the router reads the new values on its next call without a restart.
 
 ---
 

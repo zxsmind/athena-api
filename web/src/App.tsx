@@ -11,6 +11,7 @@ import { AdminDashboard } from './admin/DashboardPage';
 import { AdminKeys } from './admin/KeysPage';
 import { AdminJobs } from './admin/JobsPage';
 import { AdminModels } from './admin/ModelsPage';
+import { AdminSettings } from './admin/SettingsPage';
 import { AdminOps } from './admin/OpsPage';
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
             <Route path="keys" element={<AdminKeys />} />
             <Route path="jobs" element={<AdminJobs />} />
             <Route path="models" element={<AdminModels />} />
+            <Route path="settings" element={<AdminSettings />} />
             <Route path="ops" element={<AdminOps />} />
           </Route>
         </Routes>

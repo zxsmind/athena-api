@@ -21,6 +21,13 @@ import {
 } from './research-jobs.js';
 import { extractPageContent, searchResults, isSearchProviderConfigured, SearchProviderNotConfiguredError } from './search/index.js';
 import { loadSettings } from './settings-store.js';
+import {
+  UpdateSettingsSchema,
+  applySettingsPatch,
+  catalogModelsOf,
+  defaultModesOf,
+  describeSettings,
+} from './operator-settings.js';
 import { getConfig } from './config/load.js';
 import {
   DEFAULT_RESEARCH_MODE,
@@ -32,7 +39,7 @@ import {
   resolveResearchPreset,
   reasoningEffortForMode,
 } from './engine/modes.js';
-import { getModelsDevSnapshot, listConfiguredModelsDevProviders } from './models-dev.js';
+import { getModelsDevSnapshot, listConfiguredModelsDevProviders, type ModelsDevModel } from './models-dev.js';
 
 const SearchSchema = z.object({
   query: z.string().trim().min(1).max(2000),
@@ -555,15 +562,23 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
 
     const loopback = isLoopbackRequest(req);
     const localManagement = isLocalManagementRequest(req);
+    /* Management routes: mutating, or exposing the deployment's own state. Both
+       gates apply — local network, then admin key. `/models` used to sit outside
+       them, which let any bearer key read which providers and models this server
+       holds, and made the Models page fail for a console with no API key set. */
     const keyManagement = req.path === '/keys' || req.path.startsWith('/keys/');
     const analyticsManagement = req.path === '/analytics';
-    if ((keyManagement || analyticsManagement) && !localManagement) {
-      sendError(res, 403, 'LOCAL_MANAGEMENT_ONLY', 'Key management and usage analytics are available from the local network only.');
+    const settingsManagement = req.path === '/settings';
+    const modelsManagement = req.path === '/models' || req.path.startsWith('/models/');
+    const management = keyManagement || analyticsManagement || settingsManagement || modelsManagement;
+    if (management && !localManagement) {
+      sendError(res, 403, 'LOCAL_MANAGEMENT_ONLY', 'Key management, settings and usage analytics are available from the local network only.');
       return;
     }
     /* Local alone is not enough: anyone on the same private network could
-       otherwise mint API keys. Management routes need the admin secret too. */
-    if (keyManagement || analyticsManagement) {
+       otherwise mint API keys or change settings. Management routes need the
+       admin secret too. */
+    if (management) {
       /* A coarse brute-force guard first: five wrong admin keys from one address
          stall that address, so guessing the secret cannot be repeated as fast
          as the network allows. */
@@ -592,7 +607,7 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
       return;
     }
 
-    if (req.path !== '/health' && !key && !loopback && !((keyManagement || analyticsManagement) && localManagement)) {
+    if (req.path !== '/health' && !key && !loopback && !(management && localManagement)) {
       sendError(res, 401, 'UNAUTHORIZED', 'A valid Athena API key is required.');
       return;
     }
@@ -685,34 +700,71 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
       const providers = listConfiguredModelsDevProviders(providerIds)
         .filter((provider) => !requested || provider.id === requested)
         .map((provider) => {
-          const configuredModels = new Set(settings.providers[provider.id]?.models ?? []);
-          const catalogModels = Object.values(provider.models ?? {});
-          const filtered = requested ? catalogModels : catalogModels.filter((model) => configuredModels.has(model.id));
+          const state = settings.providers[provider.id];
+          const catalogIds = Object.keys(provider.models ?? {});
+          const served = new Set(catalogModelsOf(state, catalogIds));
+          const describe = (entry: ModelsDevModel) => ({
+            id: entry.id,
+            name: entry.name,
+            reasoning: entry.reasoning ?? false,
+            tool_call: entry.tool_call ?? false,
+            structured_output: entry.structured_output ?? false,
+            attachment: entry.attachment ?? false,
+            context: entry.limit?.context,
+            max_output: entry.limit?.output,
+            cost: entry.cost,
+            release_date: entry.release_date,
+            last_updated: entry.last_updated,
+            configured: served.has(entry.id),
+            default_modes: defaultModesOf(settings.modelRouting, provider.id, entry.id),
+          });
           return {
             id: provider.id,
             name: provider.name,
             npm: provider.npm,
             api: provider.api,
             doc: provider.doc,
-            configured_models: [...configuredModels],
-            models: filtered.map((model) => ({
-              id: model.id,
-              name: model.name,
-              reasoning: model.reasoning ?? false,
-              tool_call: model.tool_call ?? false,
-              structured_output: model.structured_output ?? false,
-              attachment: model.attachment ?? false,
-              context: model.limit?.context,
-              max_output: model.limit?.output,
-              cost: model.cost,
-              release_date: model.release_date,
-              last_updated: model.last_updated,
-            })),
+            enabled: state?.enabled ?? false,
+            /** No whitelist means the router serves everything the catalog lists. */
+            serves_whole_catalog: !state || state.models.length === 0,
+            configured_models: [...served],
+            catalog_count: catalogIds.length,
+            /* With no provider asked for, only the served models are listed: the
+               whole catalog of 226 providers is megabytes nobody renders. Ask
+               for one provider to get its full list, flags included. */
+            models: Object.values(provider.models ?? {})
+              .filter((entry) => requested || served.has(entry.id))
+              .map(describe),
           };
         });
       res.json({ source: 'models.dev', fetched_at: snapshot.fetchedAt, providers });
     } catch (error) {
       sendError(res, 502, 'MODEL_CATALOG_UNAVAILABLE', error instanceof Error ? error.message : 'Model catalog is unavailable.');
+    }
+  });
+
+  /**
+   * The whole settings document, masked. Read here instead of from the CLI so
+   * the console can show what the server will actually use.
+   */
+  router.get('/settings', (_req, res) => {
+    res.json(describeSettings());
+  });
+
+  router.put('/settings', (req, res) => {
+    const parsed = UpdateSettingsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendError(res, 400, 'SCHEMA_VIOLATION', 'Settings did not match the expected shape.', parsed.error.issues);
+      return;
+    }
+    try {
+      applySettingsPatch(parsed.data);
+      /* Returns the stored document, so the console redraws from what was
+         written rather than from what it hoped it wrote. */
+      res.json(describeSettings());
+    } catch (error) {
+      console.error('[settings] save failed:', error instanceof Error ? error.message : String(error));
+      sendError(res, 500, 'SETTINGS_SAVE_FAILED', 'Settings could not be written.');
     }
   });
 

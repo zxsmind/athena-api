@@ -1,105 +1,382 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Page } from '../components/Page';
-import { Badge, Card, Input, Select, Table, Td, Tr } from '../components/ui';
-import { models, type CatalogModel, type CatalogProvider } from '../lib/api';
+import {
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  Input,
+  Select,
+  Spinner,
+  Table,
+  Td,
+  Tr,
+  useToast,
+} from '../components/ui';
+import {
+  ApiError,
+  getSettings,
+  models,
+  updateSettings,
+  type CatalogModel,
+  type CatalogProvider,
+  type OperatorSettings,
+  type ResearchModeId,
+  type SettingsProviderState,
+} from '../lib/api';
 
+const PAGE_SIZE = 60;
+
+const MODE_LABELS: Record<ResearchModeId, string> = {
+  instant: 'instant',
+  default: 'default',
+  deep: 'deep',
+  max: 'max',
+};
+
+/**
+ * The catalog, and what this deployment serves of it.
+ *
+ * Two things used to be wrong here: the endpoint returned nothing for a
+ * configured server (an empty whitelist was read as "no models" rather than
+ * "every model"), and the page could only read. It can now choose what a
+ * provider serves and where a mode's default model points.
+ */
 export function AdminModels() {
-  const [providers, setProviders] = useState<CatalogProvider[] | null>(null);
-  const [fetchedAt, setFetchedAt] = useState('');
-  const [providerFilter, setProviderFilter] = useState('');
+  const toast = useToast();
+
+  const [settings, setSettings] = useState<OperatorSettings | null>(null);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [providerId, setProviderId] = useState('');
+  const [catalog, setCatalog] = useState<CatalogProvider | null>(null);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [wholeCatalog, setWholeCatalog] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [visible, setVisible] = useState(PAGE_SIZE);
+  const [saving, setSaving] = useState(false);
+
+  const loadSettings = useCallback(async () => {
+    try {
+      const value = await getSettings();
+      setSettings(value);
+      setSettingsError(null);
+      return value;
+    } catch (error) {
+      setSettingsError(error instanceof ApiError ? error.message : 'Settings could not be loaded.');
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
+    void loadSettings().then((value) => {
+      if (value) setProviderId(defaultProvider(value));
+    });
+  }, [loadSettings]);
+
+  /* Provider choice drives a fresh catalog fetch; the saved whitelist decides
+     which mode the editor starts in. */
+  useEffect(() => {
+    if (!providerId) return;
     let cancelled = false;
-    models()
+    setCatalog(null);
+    setCatalogError(null);
+    setVisible(PAGE_SIZE);
+    models(providerId)
       .then((response) => {
         if (cancelled) return;
-        setProviders(response.providers);
-        setFetchedAt(response.fetched_at);
+        setCatalog(response.providers[0] ?? null);
       })
-      .catch(() => {
-        if (!cancelled) setProviders([]);
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setCatalogError(error instanceof ApiError ? error.message : 'The catalog could not be loaded.');
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [providerId]);
+
+  useEffect(() => {
+    if (!settings || !providerId) return;
+    const state = settings.providers[providerId];
+    const whitelist = state?.models ?? [];
+    setWholeCatalog(whitelist.length === 0);
+    setSelected(new Set(whitelist));
+  }, [settings, providerId]);
 
   const rows = useMemo(() => {
-    if (!providers) return [];
+    if (!catalog) return [];
     const needle = query.trim().toLowerCase();
-    const out: Array<{ provider: string; model: CatalogModel; configured: boolean }> = [];
-    for (const provider of providers) {
-      if (providerFilter && provider.id !== providerFilter) continue;
-      const configured = new Set(provider.configured_models);
-      for (const model of provider.models) {
-        if (needle && !model.id.toLowerCase().includes(needle)) continue;
-        out.push({ provider: provider.id, model, configured: configured.has(model.id) });
-      }
+    return catalog.models.filter(
+      (model) => !needle || model.id.toLowerCase().includes(needle) || (model.name ?? '').toLowerCase().includes(needle),
+    );
+  }, [catalog, query]);
+
+  const shown = rows.slice(0, visible);
+
+  const savedState = settings?.providers[providerId];
+  const savedWhitelist = savedState?.models ?? [];
+  const dirty =
+    !settings ||
+    wholeCatalog !== (savedWhitelist.length === 0) ||
+    (!wholeCatalog && sortedKey(selected) !== sortedKey(new Set(savedWhitelist)));
+
+  const toggleModel = (id: string, checked: boolean) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const save = async () => {
+    if (!settings || !providerId) return;
+    if (!wholeCatalog && selected.size === 0) {
+      toast('Pick at least one model, or switch back to “All catalog models”.', 'danger');
+      return;
     }
-    return out.slice(0, 400);
-  }, [providers, providerFilter, query]);
+    setSaving(true);
+    try {
+      const current = settings.providers[providerId];
+      const next: SettingsProviderState = {
+        enabled: current?.enabled ?? true,
+        keys: current?.keys ?? [],
+        keyCount: current?.keyCount ?? 0,
+        servesWholeCatalog: wholeCatalog,
+        models: wholeCatalog ? [] : [...selected],
+      };
+      const fresh = await updateSettings({ providers: { [providerId]: next } });
+      setSettings(fresh);
+      toast(
+        wholeCatalog
+          ? `${providerId} serves every model in its catalog.`
+          : `${providerId} now serves ${selected.size} models.`,
+      );
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : 'The selection could not be saved.', 'danger');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const setDefaultFor = async (mode: ResearchModeId, model: CatalogModel) => {
+    if (!settings) return;
+    try {
+      const fresh = await updateSettings({
+        modelRouting: { [mode]: { primary: { providerId, model: model.id } } },
+      });
+      setSettings(fresh);
+      toast(`${MODE_LABELS[mode]} mode now defaults to ${model.id}.`);
+    } catch (error) {
+      toast(error instanceof ApiError ? error.message : 'The default model could not be saved.', 'danger');
+    }
+  };
+
+  if (settingsError) {
+    return (
+      <Page title="Models" description="What this deployment serves, and what each mode defaults to.">
+        <Card className="p-[32px] text-center">
+          <p className="text-[13px] text-[var(--danger)]">{settingsError}</p>
+          <div className="mt-[14px]">
+            <Button onClick={() => void loadSettings()}>Try again</Button>
+          </div>
+        </Card>
+      </Page>
+    );
+  }
+
+  if (!settings) {
+    return (
+      <Page title="Models" description="What this deployment serves, and what each mode defaults to.">
+        <Card className="p-[48px] flex justify-center">
+          <Spinner label="Loading settings…" />
+        </Card>
+      </Page>
+    );
+  }
 
   return (
     <Page
       title="Models"
-      description="The models.dev catalog with the server's overlay: which models of each provider are configured on this deployment."
-      actions={fetchedAt ? <span className="text-[11px] font-mono text-[var(--gray-500)]">cached {fetchedAt.slice(0, 16).replace('T', ' ')}</span> : undefined}
+      description="Pick which models each provider serves, and which model each research mode starts from."
+      actions={
+        dirty ? (
+          <Button variant="primary" loading={saving} onClick={() => void save()}>
+            Save selection
+          </Button>
+        ) : (
+          <Badge tone="ok">saved</Badge>
+        )
+      }
     >
       <div className="flex flex-wrap items-center gap-[12px]">
+        <Select value={providerId} onChange={(event) => setProviderId(event.target.value)} className="w-[300px]">
+          <optgroup label="Configured providers">
+            {settings.catalog.providers
+              .filter((entry) => entry.configured)
+              .map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name} ({entry.id})
+                </option>
+              ))}
+          </optgroup>
+          <optgroup label="All catalog providers">
+            {settings.catalog.providers
+              .filter((entry) => !entry.configured)
+              .map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name} ({entry.modelCount} models)
+                </option>
+              ))}
+          </optgroup>
+        </Select>
         <Input
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Filter by model id…"
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setVisible(PAGE_SIZE);
+          }}
+          placeholder="Filter by model id or name…"
           className="w-[260px] font-mono text-[12px]"
         />
-        <Select value={providerFilter} onChange={(event) => setProviderFilter(event.target.value)} className="w-[220px]">
-          <option value="">All providers</option>
-          {providers?.map((provider) => (
-            <option key={provider.id} value={provider.id}>
-              {provider.id}
-              {provider.configured_models.length > 0 ? ` (${provider.configured_models.length} configured)` : ''}
-            </option>
-          ))}
-        </Select>
-        <span className="text-[12px] font-mono text-[var(--gray-500)]">{rows.length} models</span>
+        <span className="text-[12px] font-mono text-[var(--gray-500)]">
+          {rows.length} {query ? 'matching' : 'in catalog'}
+        </span>
       </div>
 
-      <Card className="overflow-hidden">
-        {providers === null && <div className="p-[32px] text-center text-[13px] text-[var(--gray-500)]">Loading the catalog…</div>}
-        {providers !== null && rows.length === 0 && (
-          <div className="p-[48px] text-center text-[13px] text-[var(--gray-500)]">No models match the filter.</div>
+      {savedState?.keyCount === 0 && (
+        <Card className="px-[16px] py-[12px] border-[var(--warn)]">
+          <p className="text-[13px] text-[var(--warn)]">
+            <span className="font-medium">{providerId}</span> has no API key yet, so no request will reach it.
+            Add one in Settings → Providers.
+          </p>
+        </Card>
+      )}
+
+      <Card className="px-[16px] py-[14px] flex flex-wrap items-center gap-[20px]">
+        <span className="text-[13px] font-medium text-[var(--gray-700)]">What this provider serves</span>
+        <label className="inline-flex items-center gap-[8px] text-[13px] cursor-pointer">
+          <input
+            type="radio"
+            name="serving-mode"
+            checked={wholeCatalog}
+            onChange={() => setWholeCatalog(true)}
+            className="h-[15px] w-[15px] accent-[var(--accent)]"
+          />
+          All catalog models
+          <span className="text-[var(--gray-500)]">— new models are picked up automatically</span>
+        </label>
+        <label className="inline-flex items-center gap-[8px] text-[13px] cursor-pointer">
+          <input
+            type="radio"
+            name="serving-mode"
+            checked={!wholeCatalog}
+            onChange={() => {
+              if (selected.size === 0 && catalog) setSelected(new Set(catalog.models.map((model) => model.id)));
+              setWholeCatalog(false);
+            }}
+            className="h-[15px] w-[15px] accent-[var(--accent)]"
+          />
+          Only selected models
+          <span className="text-[var(--gray-500)]">— {selected.size} selected</span>
+        </label>
+        {!wholeCatalog && selected.size > 0 && (
+          <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
+            Clear selection
+          </Button>
         )}
-        {rows.length > 0 && (
-          <Table head={['provider', 'model', 'reasoning', 'tools', 'context', 'max out', 'in $/M', 'out $/M']}>
-            {rows.map(({ provider, model, configured }) => (
-              <Tr key={`${provider}/${model.id}`}>
-                <Td mono className="text-[var(--gray-500)]">{provider}</Td>
-                <Td mono className="font-medium">
-                  {model.id}
-                  {configured && (
-                    <span className="ml-[8px]">
-                      <Badge tone="ok">configured</Badge>
-                    </span>
-                  )}
-                </Td>
-                <Td mono>{model.reasoning ? 'yes' : '—'}</Td>
-                <Td mono>{model.tool_call ? 'yes' : '—'}</Td>
-                <Td mono className="text-[var(--gray-600)]">{model.context ? formatCount(model.context) : '—'}</Td>
-                <Td mono className="text-[var(--gray-600)]">{model.max_output ? formatCount(model.max_output) : '—'}</Td>
-                <Td mono className="text-[var(--gray-600)]">{model.cost?.input?.toFixed(2) ?? '—'}</Td>
-                <Td mono className="text-[var(--gray-600)]">{model.cost?.output?.toFixed(2) ?? '—'}</Td>
-              </Tr>
-            ))}
-          </Table>
+      </Card>
+
+      <Card className="overflow-hidden">
+        {catalogError && <div className="p-[32px] text-center text-[13px] text-[var(--danger)]">{catalogError}</div>}
+        {!catalog && !catalogError && (
+          <div className="p-[32px] text-center text-[13px] text-[var(--gray-500)]">Loading the catalog…</div>
+        )}
+        {catalog && rows.length === 0 && (
+          <div className="p-[48px] text-center text-[13px] text-[var(--gray-500)]">
+            {query ? 'No models match the filter.' : 'This provider lists no models in the catalog.'}
+          </div>
+        )}
+        {catalog && shown.length > 0 && (
+          <>
+            <Table head={['serve', 'model', 'reasoning', 'tools', 'context', 'max out', 'in $/M', 'out $/M', 'default for']}>
+              {shown.map((model) => (
+                <Tr key={model.id}>
+                  <Td>
+                    <Checkbox
+                      checked={wholeCatalog || selected.has(model.id)}
+                      disabled={wholeCatalog}
+                      onChange={(checked) => toggleModel(model.id, checked)}
+                      label={<span className="sr-only">{model.id}</span>}
+                    />
+                  </Td>
+                  <Td mono className="font-medium">
+                    {model.id}
+                    {model.default_modes.length > 0 && (
+                      <span className="ml-[8px] inline-flex gap-[4px]">
+                        {model.default_modes.map((mode) => (
+                          <Badge key={mode} tone="ok">
+                            {mode}
+                          </Badge>
+                        ))}
+                      </span>
+                    )}
+                  </Td>
+                  <Td mono>{model.reasoning ? 'yes' : '—'}</Td>
+                  <Td mono>{model.tool_call ? 'yes' : '—'}</Td>
+                  <Td mono className="text-[var(--gray-600)]">{model.context ? formatCount(model.context) : '—'}</Td>
+                  <Td mono className="text-[var(--gray-600)]">{model.max_output ? formatCount(model.max_output) : '—'}</Td>
+                  <Td mono className="text-[var(--gray-600)]">{model.cost?.input?.toFixed(2) ?? '—'}</Td>
+                  <Td mono className="text-[var(--gray-600)]">{model.cost?.output?.toFixed(2) ?? '—'}</Td>
+                  <Td>
+                    <Select
+                      value=""
+                      onChange={(event) => {
+                        if (event.target.value) void setDefaultFor(event.target.value as ResearchModeId, model);
+                      }}
+                      className="w-[124px] h-[30px] text-[12px]"
+                    >
+                      <option value="">Set as default…</option>
+                      {settings.modes.map((mode) => (
+                        <option key={mode} value={mode}>
+                          {MODE_LABELS[mode]} mode
+                        </option>
+                      ))}
+                    </Select>
+                  </Td>
+                </Tr>
+              ))}
+            </Table>
+            {rows.length > shown.length && (
+              <div className="flex items-center justify-between gap-[12px] px-[16px] py-[12px] border-t border-[var(--border)]">
+                <span className="text-[12px] font-mono text-[var(--gray-500)]">
+                  Showing {shown.length} of {rows.length}
+                </span>
+                <Button size="sm" onClick={() => setVisible((current) => current + PAGE_SIZE)}>
+                  Show more
+                </Button>
+              </div>
+            )}
+          </>
         )}
       </Card>
     </Page>
   );
 }
 
+/** The provider to open first: the one the router will reach first, if any. */
+function defaultProvider(settings: OperatorSettings): string {
+  const withKey = settings.providerOrder.find((id) => (settings.providers[id]?.keyCount ?? 0) > 0);
+  return withKey ?? settings.providerOrder[0] ?? settings.catalog.providers[0]?.id ?? '';
+}
+
+function sortedKey(values: Set<string>): string {
+  return [...values].sort().join('\n');
+}
+
 function formatCount(value: number): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (value >= 1_000) return `${Math.round(value / 1000)}K`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)}K`;
   return String(value);
 }
