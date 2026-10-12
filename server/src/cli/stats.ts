@@ -54,6 +54,13 @@ export interface SystemInfo {
   cpuModel: string;
   cpuCores: number;
   loadAverage: [number, number, number];  loadPercent: number;
+  /**
+   * False exactly where the number above is decorated, not measured: Node's
+   * loadavg has no Windows syscall behind it and always reports zeros there,
+   * so a raw 0 would read as an idle machine. Display code must say so
+   * rather than show the fake number.
+   */
+  loadMeaningful: boolean;
   totalMemoryBytes: number;
   freeMemoryBytes: number;
   usedMemoryPercent: number;
@@ -196,9 +203,11 @@ export function readSystemInfo(): SystemInfo {
     cpuModel: cores[0]?.model.trim() ?? 'unknown',
     cpuCores: cores.length,
     loadAverage: [oneMinute, fiveMinutes, fifteenMinutes],
-    /* One-minute load per core, as a percentage. Meaningful on Linux; on other
-       platforms it is a rough indicator, which the CLI labels accordingly. */
+    /* One-minute load per core, as a percentage. Watch `loadMeaningful` before
+       trusting it (see the field comment): zeros are a platform gap, not an
+       idle machine. */
     loadPercent: Math.round((load[0] / coresSafe) * 100),
+    loadMeaningful: process.platform !== 'win32',
     totalMemoryBytes: total,
     freeMemoryBytes: free,
     usedMemoryPercent: total > 0 ? Math.round(((total - free) / total) * 100) : 0,

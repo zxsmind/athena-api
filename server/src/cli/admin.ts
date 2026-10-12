@@ -250,7 +250,9 @@ export async function runStats(options: StatsOptions = {}): Promise<void> {
     section('System');
     kv('Platform', `${sys.platform} (${sys.arch})`);
     kv('CPU', `${sys.cpuModel} × ${sys.cpuCores}`);
-    kv('Load (1m)', `${sys.loadPercent}% of capacity`);
+    kv('Load (1m)', sys.loadMeaningful
+      ? `${sys.loadPercent}% of capacity`
+      : 'not reported on this platform');
     kv('Memory', `${sys.usedMemoryPercent}% used — ${bytes(sys.totalMemoryBytes - sys.freeMemoryBytes)} / ${bytes(sys.totalMemoryBytes)}`);
     kv('Process RSS', bytes(sys.processMemoryBytes));
     kv('Uptime', `${Math.round(sys.uptimeSeconds / 60)} min`);

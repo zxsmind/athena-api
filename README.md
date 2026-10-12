@@ -229,6 +229,28 @@ Unfinished jobs with a checkpoint return `paused` after a restart and need an
 explicit resume. Jobs without one become `failed`. Checkpoints are files in the
 data directory, so a job's state survives a redeploy.
 
+### Two engines
+
+Athena runs one research loop, and the same budgets, ceilings, source
+numbering, checkpointing and billing behind it:
+
+- **Classic (tool-calling) — the default.** The agent calls `web_search` and
+  `fetch_url` one round at a time. Everything described above is this engine.
+- **Code (Pyodide sandbox) — `sandbox.enabled: true` in `config.yaml`.** The
+  agent writes one Python program per round instead of calling tools; only the
+  program's printed text and last expression come back. The sandboxed
+  functions (`search`, `extract`, `read_source`, `plan`, `budget`) answer from
+  the engine side, where budget and source registry live.
+
+**The code engine is not production-ready.** It was written to evaluate the
+approach — to measure whether an agent that codes its own research beats an
+agent that calls tools — and it is deliberately narrower than the classic
+engine: fewer measured paths, rougher edges, and known gaps. Keep
+`sandbox.enabled: false` (the default) unless you are deliberately testing or
+studying it. Any serious use — long runs, citations that have to hold,
+resumable jobs — should use the classic engine. Support for the second engine
+will be extended over time.
+
 ## Technology
 
 - Node.js 24, Express 5, TypeScript 6.0 for the server (Smart Routing core stays on 5.9)

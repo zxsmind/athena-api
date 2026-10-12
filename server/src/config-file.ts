@@ -2,6 +2,20 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname } from 'node:path';
 import { dump, load } from 'js-yaml';
 
+/* How long an atomic write waits out a transient target lock before giving
+   up: Windows (editor, AV, sync client) can hold the destination for a beat,
+   and nothing else in the process needs that beat. */
+const RENAME_ATTEMPTS = 4;
+const RENAME_RETRY_MS = 100;
+
+function sleepSync(ms: number): void {
+  const start = Date.now();
+  while (Date.now() - start < ms) {
+    /* Busy on purpose: the thing being waited on is a lock held elsewhere,
+       and no timer in this process can release it faster. */
+  }
+}
+
 export type StructuredFormat = 'yaml' | 'json';
 
 /** Format by file extension. `.yaml` and `.yml` parse as YAML. */
@@ -41,5 +55,22 @@ export function writeStructuredFile(path: string, value: unknown): void {
      not a recoverable state for that. */
   const temp = `${path}.tmp`;
   writeFileSync(temp, text, 'utf-8');
-  renameSync(temp, path);
+  /* NTFS fails the rename while another process holds the destination open
+     (editor lock, AV scan, sync client); POSIX succeeds there unconditionally.
+     The rename is still atomic wherever it succeeds, so this retries only the
+     transient shape of the failure — a genuine permission or disk problem
+     throws through unchanged after the wait. */
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < RENAME_ATTEMPTS; attempt += 1) {
+    try {
+      renameSync(temp, path);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | null)?.code;
+      if (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES') throw error;
+      lastError = error;
+      sleepSync(RENAME_RETRY_MS * (attempt + 1));
+    }
+  }
+  throw lastError;
 }
