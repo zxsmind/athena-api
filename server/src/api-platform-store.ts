@@ -391,6 +391,27 @@ export class ApiPlatformStore {
     ).run(record.at, record.method, record.route, record.status, record.durationMs, record.apiKeyId);
   }
 
+  /**
+   * Drops request history and daily rollups older than this instant.
+   *
+   * Usage rows are the one persisted thing no retention pass touched, so a
+   * deployment that had been running for a year kept every request it ever
+   * served while its jobs were purged after a day — two different lifetimes for
+   * data the dashboard reports side by side. They now share the one window,
+   * applied here.
+   */
+  pruneOlderThan(cutoffIso: string): { requests: number; usageDays: number } {
+    const requests = Number(
+      this.db.prepare('DELETE FROM api_requests WHERE at < ?').run(cutoffIso).changes,
+    );
+    /* Daily credits are keyed by UTC day, so a day that has not finished yet is
+       kept whole: only whole days behind the cutoff go. */
+    const usageDays = Number(
+      this.db.prepare('DELETE FROM api_key_daily_usage WHERE day < ?').run(cutoffIso.slice(0, 10)).changes,
+    );
+    return { requests, usageDays };
+  }
+
   summarize(days: number): ApiUsageRollup {
     const since = new Date(Date.now() - days * 86_400_000).toISOString();
     const totals = this.db.prepare(

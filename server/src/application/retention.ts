@@ -1,7 +1,8 @@
 import { readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { getConfig } from '../config/load.js';
-import { getDataPath } from '../storage.js';
+import { getDataPath, reclaimDatabaseSpace } from '../storage.js';
+import { loadSettings } from '../settings-store.js';
 import { checkpointFilePath, cleanupStaleCheckpoints, deleteResearchCheckpoint, listResearchCheckpoints } from '../engine/checkpoint.js';
 import {
   cancelStalePausedJobs,
@@ -12,12 +13,16 @@ import {
 import { deleteTrace, pruneOldTraces, traceFileBytes, tracesDirPath } from '../trace.js';
 
 /**
- * Data retention: one hourly pass that enforces the yaml ceilings.
+ * Data retention: one hourly pass that enforces a single window.
  *
  * - Paused jobs past `research.pausedTtlMinutes` are cancelled (record kept).
- * - Terminal jobs past `storage.retentionMinutes` are purged with their
- *   SQLite rows and trace files.
- * - Checkpoints and trace files with no live job are pruned by age.
+ * - Everything persisted — terminal jobs and their events, trace files,
+ *   checkpoints, request history, daily rollups — dies at one age, from
+ *   `api.maxRetentionMinutes`. Splitting them was the visible bug: jobs went
+ *   after a day while the dashboard kept counting requests from a month back,
+ *   so two panels of one product disagreed about what exists.
+ * - Dead pages are handed back afterwards, so the file on disk tracks the data
+ *   it holds instead of carrying every page it ever wrote.
  * - Running jobs, live paused jobs, logs, and settings are never touched;
  *   the log file has its own rotation (`logging.maxFileBytes`, `keepFiles`).
  *
@@ -26,15 +31,31 @@ import { deleteTrace, pruneOldTraces, traceFileBytes, tracesDirPath } from '../t
  * in the same pass.
  */
 
+/** The usage history the sweep ages out. `ApiPlatformStore` satisfies it. */
+export interface UsageHistory {
+  pruneOlderThan(cutoffIso: string): { requests: number; usageDays: number };
+}
+
 export interface RetentionSweep {
   pausedCancelled: string[];
   jobsPurged: string[];
   tracesPruned: string[];
   checkpointsRemoved: number;
   bytesFreed: number;
+  /** Usage rows dropped by the same window: raw requests and daily rollups. */
+  requestsPruned: number;
+  usageDaysPruned: number;
+  /** Dead pages returned to the file system; 0 when there was nothing to reclaim. */
+  pagesReclaimed: number;
 }
 
-export function sweepRetention(pausedTtlMs: number, retentionMs: number, maxDataBytes: number, nowMs: number = Date.now()): RetentionSweep {
+export function sweepRetention(
+  usage: UsageHistory,
+  pausedTtlMs: number,
+  retentionMs: number,
+  maxDataBytes: number,
+  nowMs: number = Date.now(),
+): RetentionSweep {
   const pausedCancelled = cancelStalePausedJobs(pausedTtlMs, nowMs);
   const jobsPurged = purgeOldJobs(retentionMs, nowMs);
   for (const id of jobsPurged) {
@@ -46,7 +67,22 @@ export function sweepRetention(pausedTtlMs: number, retentionMs: number, maxData
   const tracesPruned = pruneOldTraces(retentionMs, liveIds, nowMs);
   const checkpointsRemoved = cleanupStaleCheckpoints(retentionMs, liveIds);
   const bytesFreed = enforceDataBudget(maxDataBytes);
-  return { pausedCancelled, jobsPurged, tracesPruned, checkpointsRemoved, bytesFreed };
+  /* The same cutoff, applied to what the dashboard counts. */
+  const cutoffIso = new Date(nowMs - retentionMs).toISOString();
+  const pruned = usage.pruneOlderThan(cutoffIso);
+  /* Deleting is not the same as shrinking: SQLite keeps the pages until the
+     vacuum runs, which is what made a 569 MB file out of 600 KB of rows. */
+  const pagesReclaimed = reclaimDatabaseSpace();
+  return {
+    pausedCancelled,
+    jobsPurged,
+    tracesPruned,
+    checkpointsRemoved,
+    bytesFreed,
+    requestsPruned: pruned.requests,
+    usageDaysPruned: pruned.usageDays,
+    pagesReclaimed,
+  };
 }
 
 /** Recursive byte size of a directory; missing counts as zero. */
@@ -132,13 +168,27 @@ export function enforceDataBudget(maxBytes: number): number {
 let retentionTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Hourly retention pass; runs in production, stopped in tests. */
-export function startRetentionSweeper(pausedTtlMs: number, retentionMs: number, maxDataBytes: number, intervalMs = 3_600_000): void {
+export function startRetentionSweeper(
+  usage: UsageHistory,
+  pausedTtlMs: number,
+  retentionMs: number,
+  maxDataBytes: number,
+  intervalMs = 3_600_000,
+): void {
   stopRetentionSweeper();
   retentionTimer = setInterval(() => {
     try {
-      const sweep = sweepRetention(pausedTtlMs, retentionMs, maxDataBytes);
-      const total = sweep.pausedCancelled.length + sweep.jobsPurged.length + sweep.tracesPruned.length + sweep.checkpointsRemoved + sweep.bytesFreed;
-      if (total > 0) console.log(`[retention] paused=${sweep.pausedCancelled.length} jobs=${sweep.jobsPurged.length} traces=${sweep.tracesPruned.length} checkpoints=${sweep.checkpointsRemoved} bytes=${sweep.bytesFreed}`);
+      const sweep = sweepRetention(usage, pausedTtlMs, retentionMs, maxDataBytes);
+      const total =
+        sweep.pausedCancelled.length + sweep.jobsPurged.length + sweep.tracesPruned.length +
+        sweep.checkpointsRemoved + sweep.bytesFreed + sweep.requestsPruned + sweep.usageDaysPruned + sweep.pagesReclaimed;
+      if (total > 0) {
+        console.log(
+          `[retention] paused=${sweep.pausedCancelled.length} jobs=${sweep.jobsPurged.length} traces=${sweep.tracesPruned.length} ` +
+          `checkpoints=${sweep.checkpointsRemoved} requests=${sweep.requestsPruned} usageDays=${sweep.usageDaysPruned} ` +
+          `bytes=${sweep.bytesFreed} pages=${sweep.pagesReclaimed}`,
+        );
+      }
     } catch (error) {
       console.error('[retention] sweep failed:', error instanceof Error ? error.message : String(error));
     }
@@ -151,11 +201,20 @@ export function stopRetentionSweeper(): void {
   retentionTimer = null;
 }
 
-/** Resolves the sweep windows from configuration. */
+/**
+ * Resolves the sweep windows from configuration.
+ *
+ * One number decides the age of every kind of record. `settings.yaml` owns it
+ * (the console edits it); `config.yaml`'s `storage.retentionMinutes` — where
+ * `ATHENA_RETENTION_MINUTES` also lands — overrides it when present, so a
+ * deployment can pin a different lifetime without touching settings.
+ */
 export function retentionWindows(): { pausedTtlMs: number; retentionMs: number; maxDataBytes: number } {
+  const config = getConfig();
+  const retentionMinutes = config.storage.retentionMinutes ?? loadSettings().api.maxRetentionMinutes;
   return {
-    pausedTtlMs: getConfig().research.pausedTtlMinutes * 60_000,
-    retentionMs: getConfig().storage.retentionMinutes * 60_000,
-    maxDataBytes: getConfig().storage.maxDataBytes,
+    pausedTtlMs: config.research.pausedTtlMinutes * 60_000,
+    retentionMs: retentionMinutes * 60_000,
+    maxDataBytes: config.storage.maxDataBytes,
   };
 }

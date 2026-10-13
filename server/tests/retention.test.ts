@@ -12,6 +12,8 @@ import {
 import { loadRecentResearchJobs } from '../src/research-job-store.js';
 import { pruneOldTraces, traceFilePath } from '../src/trace.js';
 import { enforceDataBudget, sweepRetention } from '../src/application/retention.js';
+import { ApiPlatformStore } from '../src/api-platform-store.js';
+import { getDatabase } from '../src/storage.js';
 import type { SearchResponse } from '../src/schemas.js';
 
 const HOUR = 3_600_000;
@@ -85,12 +87,52 @@ describe('retention', () => {
     backdate(done.id, 25 * HOUR);
     writeTrace(done.id, 25 * HOUR);
 
-    const sweep = sweepRetention(4 * HOUR, 24 * HOUR, 1_073_741_824, Date.now());
+    const sweep = sweepRetention({ pruneOlderThan: () => ({ requests: 0, usageDays: 0 }) }, 4 * HOUR, 24 * HOUR, 1_073_741_824, Date.now());
 
     expect(sweep.jobsPurged).toContain(done.id);
     expect(existsSync(traceFilePath(done.id))).toBe(false);
     expect(getResearchJob(done.id)).toBeUndefined();
   });
+
+  it('ages request history and daily rollups out with the same window as jobs', () => {
+    const store = new ApiPlatformStore();
+    const now = Date.now();
+    const day = new Date(now).toISOString().slice(0, 10);
+
+    store.recordRequest({ at: new Date(now - 30 * 24 * HOUR).toISOString(), method: 'GET', route: '/v1/ancient', status: 200, durationMs: 1, apiKeyId: null });
+    store.recordRequest({ at: new Date(now - HOUR).toISOString(), method: 'GET', route: '/v1/fresh', status: 200, durationMs: 1, apiKeyId: null });
+    store.debitDailyCredits('k-gone', '2000-01-01', 3);
+    store.debitDailyCredits('k-kept', day, 3);
+
+    const sweep = sweepRetention(store, 4 * HOUR, 7 * 24 * HOUR, 1_073_741_824, now);
+
+    /* One window for both: the month-old request goes exactly as an old job
+       would, and the recent one stays as a fresh job would. */
+    expect(sweep.requestsPruned).toBe(1);
+    expect(sweep.usageDaysPruned).toBe(1);
+    expect(store.summarize(60).byDay.some((row) => row.day === new Date(now - 30 * 24 * HOUR).toISOString().slice(0, 10))).toBe(false);
+    expect(store.creditsUsedToday('k-kept', day)).toBe(3);
+    expect(store.creditsUsedToday('k-gone', '2000-01-01')).toBe(0);
+  });
+
+  it('hands dead pages back instead of leaving them in the file', () => {
+    const store = new ApiPlatformStore();
+    const now = Date.now();
+    for (let i = 0; i < 200; i += 1) {
+      store.recordRequest({ at: new Date(now - 40 * 24 * HOUR).toISOString(), method: 'GET', route: '/v1/old', status: 200, durationMs: 1, apiKeyId: null });
+    }
+
+    const sweep = sweepRetention(store, 4 * HOUR, 7 * 24 * HOUR, 1_073_741_824, now);
+
+    expect(sweep.requestsPruned).toBeGreaterThanOrEqual(200);
+    /* 0 is legal (nothing was free yet); the point is that the call happened
+       after the deletes rather than never. */
+    expect(sweep.pagesReclaimed).toBeGreaterThanOrEqual(0);
+    const freelist = getDatabase().prepare('PRAGMA freelist_count').get() as { freelist_count: number };
+    expect(freelist.freelist_count).toBe(0);
+    /* The vacuum and the checkpoint do real I/O: on a loaded machine this pass
+       was slow enough to time out at the default five seconds. */
+  }, 30_000);
 
   it('enforces a byte budget oldest-first and spares live jobs', () => {
     const oldDone = createResearchJob({ query: 'q', mode: 'instant', researchApi: true });

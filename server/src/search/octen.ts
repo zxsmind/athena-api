@@ -1,4 +1,5 @@
 import { loadSettings } from '../settings-store.js';
+import { defaultSearchCount } from '../settings-store.js';
 import { getConfig } from '../config/load.js';
 import type { SearchResult } from '../schemas.js';
 import { signalWithTimeout } from './http.js';
@@ -21,7 +22,7 @@ async function octenSearch(
   options: WebSearchOptions,
 ): Promise<SearchOutcome> {
   /* Octen accepts 1–100 results per call. */
-  const maxSources = Math.min(Math.max(limit ?? getConfig().search.defaultResultCount, 1), 100);
+  const maxSources = Math.min(Math.max(limit ?? defaultSearchCount(), 1), 100);
   const key = ring.next();
   if (!key) throw new SearchProviderNotConfiguredError();
 

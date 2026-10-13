@@ -1,4 +1,5 @@
 import { loadSettings } from '../settings-store.js';
+import { defaultSearchCount } from '../settings-store.js';
 import { getConfig } from '../config/load.js';
 import type { SearchResult } from '../schemas.js';
 import { signalWithTimeout } from './http.js';
@@ -27,7 +28,7 @@ async function freeserpSearch(
 ): Promise<SearchOutcome> {
   if (!isEnabled()) throw new SearchProviderNotConfiguredError();
   /* FreeSerp Global returns ranked candidates; keep the page small. */
-  const maxSources = Math.min(Math.max(limit ?? getConfig().search.defaultResultCount, 1), 50);
+  const maxSources = Math.min(Math.max(limit ?? defaultSearchCount(), 1), 50);
 
   const base = (loadSettings().searchProviders.freeserp?.url ?? FREESERP_BASE_URL).replace(/\/+$/, '');
   const params = new URLSearchParams({ q: query, index: 'web', num: String(maxSources) });

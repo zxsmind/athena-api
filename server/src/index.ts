@@ -100,14 +100,16 @@ app.use(((error: unknown, _req: Request, res: Response, next: (err?: unknown) =>
   res.status(500).json({ error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred.', retryable: true } });
 }) as express.ErrorRequestHandler);
 
-/* Data retention from config.yaml: one pass at boot, then hourly. Nothing
-   running is ever touched; logs rotate under their own limits. */
-const retention = retentionWindows();
-sweepRetention(retention.pausedTtlMs, retention.retentionMs, retention.maxDataBytes);
-startRetentionSweeper(retention.pausedTtlMs, retention.retentionMs, retention.maxDataBytes);
-
 const apiStore = new ApiPlatformStore();
 const meter = new Meter(apiStore);
+
+/* Data retention: one pass at boot, then hourly. One window covers every kind
+   of record — jobs, traces, checkpoints and the usage history the dashboard
+   counts — so the two never disagree. Nothing running is ever touched; logs
+   rotate under their own limits. */
+const retention = retentionWindows();
+sweepRetention(apiStore, retention.pausedTtlMs, retention.retentionMs, retention.maxDataBytes);
+startRetentionSweeper(apiStore, retention.pausedTtlMs, retention.retentionMs, retention.maxDataBytes);
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });

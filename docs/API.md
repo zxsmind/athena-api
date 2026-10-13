@@ -404,7 +404,8 @@ reading the router uses; `serves_whole_catalog` reports it.
 
 Aggregate spend and usage. `?days=` accepts 1 to 90 and defaults to 7; the
 response echoes it as `window_days` alongside `generated_at` and the totals.
-Needs the admin key (below).
+The window is also clamped to `api.maxRetentionMinutes`, so it never promises a
+horizon the retention sweep has already dropped. Needs the admin key (below).
 
 ---
 
@@ -431,6 +432,14 @@ lock it out for ten minutes.
 The secret is returned once, in the create response, and stored hashed. It cannot
 be retrieved afterwards.
 
+### `GET /settings`
+
+The stored document, with every secret replaced by its mask. Two things in the
+response are not `settings.yaml` fields: `server` (port and host, read-only
+here) and `readiness` — `{ ready, problems, hints }`, which names whatever is
+missing (no key, no search backend) or contradicts itself (a mode pointing at a
+model its provider does not serve). That is the banner the console shows.
+
 ### `PUT /settings`
 
 The body is a patch: only the sections you send are changed, and inside a
@@ -453,6 +462,12 @@ provider id; sending `null` for an id removes it.
 Success returns the stored document as `GET /settings` would, so a client can
 redraw from what was written rather than from what it hoped it wrote. An invalid
 body is `400 SCHEMA_VIOLATION`.
+
+A well-formed body that would leave a mode pointing at a model its provider does
+not serve is refused too: `400 ROUTE_NOT_SERVED`, with one line per offending
+mode under `error.details`. The pair is rejected rather than stored — such a
+route reads fine on screen and only fails when a job runs, which is how the
+models screen and the settings screen came to show opposite halves of the truth.
 
 **Secrets never cross the wire.** `GET /settings` returns each key as its mask,
 `…` plus the last four characters. Send a mask back unchanged and the key it

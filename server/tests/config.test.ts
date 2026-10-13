@@ -102,10 +102,14 @@ describe('environment overrides', () => {
     expect(resolveConfig(configPath()).research.pausedTtlMinutes).toBe(60);
   });
 
-  it('defaults the data retention window and byte budget', () => {
+  it('leaves the retention window unset so settings own it, and honours the override', () => {
     const storage = resolveConfig(configPath()).storage;
-    expect(storage.retentionMinutes).toBe(1440);
+    /* No default here: `api.maxRetentionMinutes` in settings.yaml decides the
+       window, and a number in the defaults would pin it past the console. */
+    expect(storage.retentionMinutes).toBeUndefined();
     expect(storage.maxDataBytes).toBe(1_073_741_824);
+    process.env.ATHENA_RETENTION_MINUTES = '10080';
+    expect(resolveConfig(configPath()).storage.retentionMinutes).toBe(10_080);
     process.env.ATHENA_MAX_DATA_BYTES = '524288000';
     expect(resolveConfig(configPath()).storage.maxDataBytes).toBe(524_288_000);
   });

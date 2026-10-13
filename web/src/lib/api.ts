@@ -304,12 +304,8 @@ export interface OperatorSettings {
     defaultMode: 'default' | 'deep' | 'max';
   };
   general: {
+    /** Results per search when the caller does not name a count. */
     maxSources: number;
-    deepIterations: number;
-    thinkingStripPatterns: string;
-    titleModel: string;
-    showDebugContext: boolean;
-    autocompleteCount: number;
   };
   modes: ResearchModeId[];
   /** Read-only: both take effect when the server binds its socket. */

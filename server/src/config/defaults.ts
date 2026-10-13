@@ -19,7 +19,9 @@ export const defaultConfig: AppConfig = {
     maxActiveBatches: 10,
     maxEventsPerJob: 500,
     maxEventsPerBatch: 500,
-    retentionMinutes: 1440,
+    /* `retentionMinutes` is deliberately absent: it is an optional override of
+       settings.yaml's `api.maxRetentionMinutes`, and a default here would pin
+       every deployment to a number the console could not change. */
     maxDataBytes: 1_073_741_824,
     sqliteBusyTimeoutMs: 5_000,
   },
@@ -42,10 +44,12 @@ export const defaultConfig: AppConfig = {
     refreshIntervalHours: 12,
   },
   search: {
-    baseUrl: 'https://google.serper.dev/search',
-    requestTimeoutMs: 30_000,
-    defaultResultCount: 8,
-    defaultCountry: 'us',
+      baseUrl: 'https://google.serper.dev/search',
+      requestTimeoutMs: 30_000,
+      /* `defaultResultCount` is deliberately absent: it is an optional override
+         of settings.yaml's `general.maxSources`, and a default here would pin
+         every deployment to a number the console could not change. */
+      defaultCountry: 'us',
     defaultLanguage: 'en',
     fullExtractionLimit: 10,
     extractionContextChars: 3_000,

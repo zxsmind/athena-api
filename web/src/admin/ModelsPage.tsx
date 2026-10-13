@@ -121,13 +121,26 @@ export function AdminModels() {
     wholeCatalog !== (savedWhitelist.length === 0) ||
     (!wholeCatalog && sortedKey(selected) !== sortedKey(new Set(savedWhitelist)));
 
-  const toggleModel = (id: string, checked: boolean) => {
+  const toggleModel = (model: CatalogModel, checked: boolean) => {
+    /* The whitelist and the default routes are set in two different places, so
+       unchecking a model some mode starts from is how they end up
+       contradicting each other: the mode would point at something this provider
+       no longer serves, and the server refuses the save. Stop it here instead,
+       naming the mode that is in the way. */
+    if (!checked && model.default_modes.length > 0) {
+      toast(
+        `${model.id} starts ${model.default_modes.join(', ')} mode. Point ${model.default_modes[0]} at another model first — "Set as default…" on that row, or Settings → Default model per mode.`,
+        'danger',
+      );
+      return;
+    }
     setSelected((current) => {
       const next = new Set(current);
-      if (checked) next.add(id);
-      else next.delete(id);
+      if (checked) next.add(model.id);
+      else next.delete(model.id);
       return next;
     });
+    setVisible(PAGE_SIZE);
   };
 
   const save = async () => {
@@ -307,7 +320,7 @@ export function AdminModels() {
                     <Checkbox
                       checked={wholeCatalog || selected.has(model.id)}
                       disabled={wholeCatalog}
-                      onChange={(checked) => toggleModel(model.id, checked)}
+                      onChange={(checked) => toggleModel(model, checked)}
                       label={<span className="sr-only">{model.id}</span>}
                     />
                   </Td>

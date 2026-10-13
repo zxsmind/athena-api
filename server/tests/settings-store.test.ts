@@ -20,7 +20,15 @@ vi.mock('fs', () => ({
   mkdirSync: () => undefined,
 }));
 
-import { loadSettings, saveSettings, resetSettingsCache, type SettingsStore, type ApiSettings } from '../src/settings-store.js';
+import {
+  defaultSearchCount,
+  loadSettings,
+  saveSettings,
+  resetSettingsCache,
+  type SettingsStore,
+  type ApiSettings,
+} from '../src/settings-store.js';
+import { getConfig, setConfig } from '../src/config/load.js';
 
 function makeMinimalV1(): Record<string, unknown> {
   return {
@@ -31,7 +39,7 @@ function makeMinimalV1(): Record<string, unknown> {
     searchProviders: {
       tavily: { keys: ['tvly_1', 'tvly_2'] },
     },
-    general: { maxSources: 5, deepIterations: 2, thinkingStripPatterns: '<think>.*?</think>', titleModel: '' },
+    general: { maxSources: 5 },
   };
 }
 
@@ -61,7 +69,7 @@ describe('normalizeSettings', () => {
     expect(s.api.maxActiveBatches).toBe(50);
     expect(s.api.maxEventsPerJob).toBe(250);
     expect(s.api.maxEventsPerBatch).toBe(300);
-    expect(s.api.maxRetentionMinutes).toBe(1440);
+    expect(s.api.maxRetentionMinutes).toBe(10080);
     expect(s.api.defaultMode).toBe('default');
     expect(s.modelRouting.default.primary.model).toBe('');
   });
@@ -87,13 +95,39 @@ describe('normalizeSettings', () => {
     expect(s.searchProviders.tavily.keys).toEqual(['tvly_1', 'tvly_2']);
     expect(s.searchProviderOrder).toEqual([]);
   });
-
-  it('should read deepIterations from general section', () => {    const raw = makeMinimalV1();
-    raw.general.deepIterations = 7;
+  it('should read maxSources from the general section', () => {
+    const raw = makeMinimalV1();
+    raw.general.maxSources = 14;
     writeSettings(raw);
 
     const s = loadSettings();
-    expect(s.general.deepIterations).toBe(7);
+    expect(s.general.maxSources).toBe(14);
+  });
+
+  it('should bound maxSources to what a search request accepts', () => {
+    /* The API caps a count at 20 and refuses one below 1, so a file carrying
+       anything else is brought into range rather than letting the first search
+       fail on validation. */
+    const raw = makeMinimalV1();
+    raw.general.maxSources = 900;
+    writeSettings(raw);
+    expect(loadSettings().general.maxSources).toBe(20);
+
+    resetSettingsCache();
+    raw.general.maxSources = 0;
+    writeSettings(raw);
+    expect(loadSettings().general.maxSources).toBe(1);
+  });
+
+  it('should drop general fields nothing reads any more', () => {
+    /* These lost their readers in the research-loop rebuild. A file that still
+       carries them should not keep reporting them: settings nothing consults
+       are worse than no setting at all. */
+    const raw = makeMinimalV1();
+    Object.assign(raw.general, { deepIterations: 7, autocompleteCount: 3, titleModel: 'm', showDebugContext: true });
+    writeSettings(raw);
+
+    expect(loadSettings().general).toEqual({ maxSources: 5 });
   });
 
   it('should apply API settings when present', () => {
@@ -128,7 +162,7 @@ describe('normalizeSettings', () => {
     expect(s.api.defaultMaxConcurrent).toBe(4);
     expect(s.api.maxActiveJobs).toBe(50);
     expect(s.api.maxActiveBatches).toBe(50);
-    expect(s.api.maxRetentionMinutes).toBe(1440);
+    expect(s.api.maxRetentionMinutes).toBe(10080);
     expect(s.api.defaultMode).toBe('default');
   });
 
@@ -222,7 +256,7 @@ describe('saveSettings roundtrip', () => {
         max: { primary: { providerId: 'groq', model: 'm4' }, fallback: [] },
       },
       api: customApi,
-      general: { maxSources: 10, deepIterations: 5, thinkingStripPatterns: '', titleModel: '' },
+      general: { maxSources: 10 },
     };
 
     saveSettings(store);
@@ -268,5 +302,48 @@ describe('saveSettings roundtrip', () => {
     const reloaded = loadSettings();
     expect(reloaded.port).toBe(4321);
     expect(reloaded.searchProviders.tavily.keys).toEqual(['tvly_1']);
+  });
+});
+
+describe('defaultSearchCount', () => {
+  beforeEach(() => {
+    storedContent = null;
+    storedWritePath = '';
+    resetSettingsCache();
+  });
+
+  it('takes the number from settings, which is what the console edits', () => {
+    expect(defaultSearchCount()).toBe(8);
+
+    const raw = makeMinimalV1();
+    raw.general.maxSources = 14;
+    writeSettings(raw);
+    resetSettingsCache();
+    expect(defaultSearchCount()).toBe(14);
+  });
+
+  it('lets config pin one, which is where ATHENA_SEARCH_RESULT_COUNT lands', () => {
+    const raw = makeMinimalV1();
+    raw.general.maxSources = 14;
+    writeSettings(raw);
+    resetSettingsCache();
+    expect(defaultSearchCount()).toBe(14);
+
+    const previous = getConfig();
+    try {
+      setConfig({ ...previous, search: { ...previous.search, defaultResultCount: 5 } });
+      expect(defaultSearchCount()).toBe(5);
+    } finally {
+      setConfig(previous);
+    }
+    expect(defaultSearchCount()).toBe(14);
+  });
+
+  it('bounds a number the API would reject', () => {
+    const raw = makeMinimalV1();
+    raw.general.maxSources = 500;
+    writeSettings(raw);
+    resetSettingsCache();
+    expect(defaultSearchCount()).toBe(20);
   });
 });

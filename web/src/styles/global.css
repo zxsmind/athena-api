@@ -8,65 +8,79 @@
    wins over prefers-color-scheme once the user has chosen. */
 @custom-variant dark ([data-theme='dark'] &);
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
+/* Base rules live in Tailwind's base layer on purpose.
+ *
+ * Unlayered declarations outrank every layered one, whatever the specificity.
+ * `button, input, select, textarea { color: inherit }` was written outside a
+ * layer, so it beat `text-[var(--accent-foreground)]` — a primary button kept
+ * its accent background but took the inherited foreground instead, which is the
+ * same colour: black text on a black button in the light theme, and an off-white
+ * button with off-white text in the dark one. Hover recoloured the background
+ * and left the text, so the label stayed invisible there too. Every element
+ * rule below belongs under this layer for the same reason: utilities, which sit
+ * in a later layer, must be able to win.
+ */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
 
-html,
-body,
-#root {
-  height: 100%;
-}
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
 
-body {
-  margin: 0;
-  font-family: var(--font-sans);
-  font-size: 14px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-  background: var(--background);
-  color: var(--foreground);
-}
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    background: var(--background);
+    color: var(--foreground);
+  }
 
-::selection {
-  background: var(--accent);
-  color: var(--accent-foreground);
-}
+  ::selection {
+    background: var(--accent);
+    color: var(--accent-foreground);
+  }
 
-a {
-  color: inherit;
-  text-decoration: none;
-}
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
 
-button,
-input,
-select,
-textarea {
-  font: inherit;
-  color: inherit;
-}
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
 
-:focus-visible {
-  outline: 2px solid var(--live);
-  outline-offset: 2px;
-}
+  :focus-visible {
+    outline: 2px solid var(--live);
+    outline-offset: 2px;
+  }
 
-/* Scrollbars, restrained. */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
-}
+  /* Scrollbars, restrained. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
 
-*::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
 
-*::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-  border-radius: 4px;
+  *::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 4px;
+  }
 }
 
 @keyframes shell-fade {

@@ -1,6 +1,7 @@
 import { existsSync } from 'fs';
 import { getDataPath } from './storage.js';
 import { readStructuredFile, writeStructuredFile } from './config-file.js';
+import { getConfig } from './config/load.js';
 
 const settingsPath = getDataPath('settings.yaml');
 
@@ -119,6 +120,12 @@ export interface ApiSettings {
   maxActiveBatches: number;
   maxEventsPerJob: number;
   maxEventsPerBatch: number;
+  /**
+   * How long every persisted record lives, in minutes — the one window for
+   * jobs, events, traces, checkpoints, request history and daily rollups, so
+   * the dashboard and the job list never disagree about what exists.
+   * Overridable per deployment with `ATHENA_RETENTION_MINUTES`.
+   */
   maxRetentionMinutes: number;
   defaultMode: import('./engine/modes.js').ResearchMode;
 }
@@ -140,12 +147,14 @@ export interface SettingsStore {
   modelRouting: ModelRouting;
   api: ApiSettings;
   general: {
+    /**
+     * Results one search returns when the caller does not ask for a count —
+     * the operator's knob for how much a query brings back. It used to be read
+     * from here, then lost its reader in the research-loop rebuild while the
+     * field and its screen stayed; `defaultSearchCount()` is the single place
+     * it is resolved again.
+     */
     maxSources: number;
-    deepIterations: number;
-    thinkingStripPatterns: string;
-    titleModel: string;
-    showDebugContext: boolean;
-    autocompleteCount: number;
   };
 }
 
@@ -172,7 +181,7 @@ const apiDefaults: ApiSettings = {
   maxActiveBatches: 50,
   maxEventsPerJob: 250,
   maxEventsPerBatch: 300,
-  maxRetentionMinutes: 1440,
+  maxRetentionMinutes: 10080,
   defaultMode: 'default',
 };
 
@@ -191,7 +200,7 @@ const defaults: SettingsStore = {
   research: {},
   modelRouting: createModelRouting(),
   api: { ...apiDefaults },
-  general: { maxSources: 8, deepIterations: 3, thinkingStripPatterns: '', titleModel: '', showDebugContext: false,     autocompleteCount: 5 },
+  general: { maxSources: 8 },
 };
 
 function cloneDefaults(): SettingsStore {
@@ -341,7 +350,6 @@ function normalizeSettings(raw: unknown): SettingsStore {
     merged.providers[id] = normalizeProviderState(id, sourceProviders[id] as Partial<ProviderState> | undefined);
   }
   const general = (r.general && typeof r.general === 'object' ? r.general : {}) as Record<string, unknown>;
-  const titleFallback = typeof general?.titleModel === 'string' ? general.titleModel as string : '';
   merged.version = SETTINGS_VERSION;
   merged.port = typeof r?.port === 'number' ? r.port as number : merged.port;
   merged.host = typeof r?.host === 'string' ? r.host as string : merged.host;
@@ -349,15 +357,19 @@ function normalizeSettings(raw: unknown): SettingsStore {
   merged.searchProviders = normalizeSearchProviders(r);
   merged.searchProviderOrder = normalizeSearchProviderOrder(r?.searchProviderOrder, merged.searchProviders);
   merged.research = (r.research && typeof r.research === 'object' ? { ...r.research } : {});
+  /* `maxSources` is the only general field with a reader. The rest
+     (deepIterations, thinkingStripPatterns, titleModel, showDebugContext,
+     autocompleteCount) lost theirs when the research loop was rebuilt, so they
+     are not read back: a file still carrying them drops them on the next save,
+     which is the point — settings that nothing consults are worse than no
+     setting at all. Bounded to the same 1–20 the API accepts for a count. */
   merged.general = {
-    maxSources: typeof general?.maxSources === 'number' ? general.maxSources as number : merged.general.maxSources,
-    deepIterations: typeof general?.deepIterations === 'number' ? general.deepIterations as number : merged.general.deepIterations,
-    thinkingStripPatterns: typeof general?.thinkingStripPatterns === 'string' ? general.thinkingStripPatterns as string : merged.general.thinkingStripPatterns,
-    titleModel: titleFallback,
-    showDebugContext: typeof general?.showDebugContext === 'boolean' ? general.showDebugContext as boolean : merged.general.showDebugContext,
-    autocompleteCount: typeof general?.autocompleteCount === 'number' ? general.autocompleteCount as number : merged.general.autocompleteCount,
+    maxSources: clampResultCount(typeof general?.maxSources === 'number' ? general.maxSources : merged.general.maxSources),
   };
-  merged.modelRouting = normalizeModelRouting(r?.modelRouting, merged.providerOrder[0] || '', titleFallback);
+  /* The model fallback used to be `general.titleModel`: a title model standing
+     in for a research default. Titles are not generated separately any more,
+     so an unset route simply stays unset. */
+  merged.modelRouting = normalizeModelRouting(r?.modelRouting, merged.providerOrder[0] || '', '');
   const apiRaw = r.api && typeof r.api === 'object' ? r.api as Record<string, unknown> : null;
   merged.api = apiRaw ? {
     defaultMaxConcurrent: typeof apiRaw.defaultMaxConcurrent === 'number' ? apiRaw.defaultMaxConcurrent as number : apiDefaults.defaultMaxConcurrent,
@@ -365,7 +377,12 @@ function normalizeSettings(raw: unknown): SettingsStore {
     maxActiveBatches: typeof apiRaw.maxActiveBatches === 'number' ? apiRaw.maxActiveBatches as number : apiDefaults.maxActiveBatches,
     maxEventsPerJob: typeof apiRaw.maxEventsPerJob === 'number' ? apiRaw.maxEventsPerJob as number : apiDefaults.maxEventsPerJob,
     maxEventsPerBatch: typeof apiRaw.maxEventsPerBatch === 'number' ? apiRaw.maxEventsPerBatch as number : apiDefaults.maxEventsPerBatch,
-    maxRetentionMinutes: typeof apiRaw.maxRetentionMinutes === 'number' ? apiRaw.maxRetentionMinutes as number : apiDefaults.maxRetentionMinutes,
+    /* A non-positive window would purge history on every sweep — including the
+       records the dashboard is about to show — so it falls back instead. */
+    maxRetentionMinutes:
+      typeof apiRaw.maxRetentionMinutes === 'number' && apiRaw.maxRetentionMinutes > 0
+        ? Math.trunc(apiRaw.maxRetentionMinutes)
+        : apiDefaults.maxRetentionMinutes,
     defaultMode: apiRaw.defaultMode === 'default' || apiRaw.defaultMode === 'deep' || apiRaw.defaultMode === 'max' ? apiRaw.defaultMode as import('./engine/modes.js').ResearchMode : apiDefaults.defaultMode,
   } : { ...apiDefaults };
   return merged;
@@ -423,4 +440,25 @@ export function resetSettingsCache(): void {
 export function getEnabledProviders(): string[] {
   const s = loadSettings();
   return s.providerOrder.filter(id => s.providers[id]?.enabled);
+}
+
+/** The bound the API, the backends and the console share for one search. */
+function clampResultCount(value: number): number {
+  if (!Number.isFinite(value)) return 8;
+  return Math.min(20, Math.max(1, Math.trunc(value)));
+}
+
+/**
+ * How many results a search returns when the caller does not ask for a count.
+ *
+ * Settings owns the number, so the console can change it — the field that
+ * carried this was orphaned by the research-loop rebuild, and every backend
+ * fell back to config instead. `search.defaultResultCount` still overrides it
+ * when set (that is also where `ATHENA_SEARCH_RESULT_COUNT` lands), so a
+ * deployment can pin one without touching settings.
+ */
+export function defaultSearchCount(): number {
+  const override = getConfig().search.defaultResultCount;
+  if (typeof override === 'number') return clampResultCount(override);
+  return loadSettings().general.maxSources;
 }

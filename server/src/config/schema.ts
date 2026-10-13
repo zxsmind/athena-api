@@ -16,8 +16,13 @@ export const searchConfigSchema = z.object({
   /** Provider endpoint and per-request deadlines. */
   baseUrl: z.string().url(),
   requestTimeoutMs: positiveInt,
-  /** Default result count when a request omits one. */
-  defaultResultCount: z.number().int().min(1).max(20),
+    /**
+     * Optional override of the default result count, which `settings.yaml`
+     * owns as `general.maxSources` (editable from the console). Presence here
+     * — from this file or from `ATHENA_SEARCH_RESULT_COUNT` — wins, so a
+     * deployment can pin one without touching settings.
+     */
+    defaultResultCount: z.number().int().min(1).max(20).optional(),
   defaultCountry: z.string().length(2),
   defaultLanguage: z.string().min(2).max(3),
   /** How many results `depth: full` extracts before returning. */
@@ -162,8 +167,14 @@ export const storageConfigSchema = z.object({
   maxActiveBatches: positiveInt,
   maxEventsPerJob: positiveInt,
   maxEventsPerBatch: positiveInt,
-  /** Retention applied to persisted job/event rows. */
-  retentionMinutes: positiveInt,
+  /**
+   * Optional override of the retention window that `settings.yaml` owns
+   * (`api.maxRetentionMinutes`, which defaults to seven days and is editable
+   * from the console). Left unset normally: presence here — from this file or
+   * from `ATHENA_RETENTION_MINUTES` — wins, so a deployment can pin a
+   * different lifetime for every kind of record without touching settings.
+   */
+  retentionMinutes: positiveInt.optional(),
   /**
    * Hard ceiling on the data directory in bytes. When the hourly sweep finds
    * the directory over budget, terminal job data goes first (oldest first),

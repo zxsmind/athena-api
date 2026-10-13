@@ -1,4 +1,5 @@
 import { loadSettings } from '../settings-store.js';
+import { defaultSearchCount } from '../settings-store.js';
 import { getConfig } from '../config/load.js';
 import type { SearchResult } from '../schemas.js';
 import { signalWithTimeout } from './http.js';
@@ -22,7 +23,7 @@ async function braveSearch(
   options: WebSearchOptions,
 ): Promise<SearchOutcome> {
   /* Brave accepts at most 20 results per call. */
-  const maxSources = Math.min(limit ?? getConfig().search.defaultResultCount, 20);
+  const maxSources = Math.min(limit ?? defaultSearchCount(), 20);
   const key = ring.next();
   if (!key) throw new SearchProviderNotConfiguredError();
 

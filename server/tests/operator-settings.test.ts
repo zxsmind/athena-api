@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   UpdateSettingsSchema,
+  UnservedRouteError,
   applySettingsPatch,
   catalogModelsOf,
   defaultModesOf,
   describeSettings,
   maskSecret,
   reconcileSecrets,
+  unservedRoutes,
 } from '../src/operator-settings.js';
 import { loadSettings, resetSettingsCache, saveSettings, type SettingsStore } from '../src/settings-store.js';
 
@@ -19,6 +21,18 @@ const SECRET_B = 'tavily-test-key-bravo-2222';
 
 function seed(partial: Partial<SettingsStore>): SettingsStore {
   const store = { ...loadSettings(), ...partial };
+  /* Routes are not inert: when the file omits them, normalize fills them from
+     `providerOrder[0]` and `general.titleModel`, so one test's leftovers can
+     decide whether another's save validates. A test that cares about routing
+     says so; everything else starts from an unset route. */
+  if (!partial.modelRouting) {
+    store.modelRouting = {
+      instant: { primary: { providerId: '', model: '' }, fallback: [] },
+      default: { primary: { providerId: '', model: '' }, fallback: [] },
+      deep: { primary: { providerId: '', model: '' }, fallback: [] },
+      max: { primary: { providerId: '', model: '' }, fallback: [] },
+    };
+  }
   saveSettings(store);
   return loadSettings();
 }
@@ -210,13 +224,12 @@ describe('applySettingsPatch', () => {
     expect(loadSettings().providerOrder).toEqual(['openrouter']);
   });
 
-  it('merges one general field and keeps the rest', () => {
-    seed({ general: { ...loadSettings().general, maxSources: 8, autocompleteCount: 5, titleModel: 'm1' } });
+  it('writes the general section without inventing fields', () => {
+    /* `general` holds one value now: the rest lost their readers in the
+       research-loop rebuild and are not read back. */
+    seed({ general: { maxSources: 8 } });
     applySettingsPatch({ general: { maxSources: 20 } });
-    const general = loadSettings().general;
-    expect(general.maxSources).toBe(20);
-    expect(general.autocompleteCount).toBe(5);
-    expect(general.titleModel).toBe('m1');
+    expect(loadSettings().general).toEqual({ maxSources: 20 });
   });
 
   it('merges one api field and keeps the rest', () => {
@@ -230,6 +243,12 @@ describe('applySettingsPatch', () => {
 
   it('points one mode at a model without moving the others', () => {
     seed({
+      /* Both providers have to be able to serve what the routes name, or the
+         save is refused for a reason this test is not about. */
+      providers: {
+        openrouter: { enabled: true, keys: [SECRET_A], models: ['m1'] },
+        anthropic: { enabled: true, keys: [SECRET_B], models: ['sonnet'] },
+      },
       modelRouting: {
         instant: { primary: { providerId: 'openrouter', model: 'm1' }, fallback: [] },
         default: { primary: { providerId: 'openrouter', model: 'm1' }, fallback: [] },
@@ -296,5 +315,86 @@ describe('UpdateSettingsSchema', () => {
   it('rejects a count outside its range', () => {
     expect(UpdateSettingsSchema.safeParse({ general: { maxSources: 0 } }).success).toBe(false);
     expect(UpdateSettingsSchema.safeParse({ general: { maxSources: 500 } }).success).toBe(false);
+  });
+});
+
+/** All four modes pointed at one provider and model. */
+const routeTo = (providerId: string, model: string) => ({
+  instant: { primary: { providerId, model }, fallback: [] },
+  default: { primary: { providerId, model }, fallback: [] },
+  deep: { primary: { providerId, model }, fallback: [] },
+  max: { primary: { providerId, model }, fallback: [] },
+});
+
+describe('a route naming a model the provider does not serve', () => {
+  it('accepts a mode that points at a served model', () => {
+    seed({
+      providers: { openrouter: { enabled: true, keys: [SECRET_A], models: ['m-served'] } },
+      modelRouting: routeTo('openrouter', 'm-served'),
+    });
+    expect(unservedRoutes(loadSettings())).toEqual([]);
+  });
+
+  it('accepts an empty whitelist, which means the whole catalog', () => {
+    seed({
+      providers: { openrouter: { enabled: true, keys: [SECRET_A], models: [] } },
+      modelRouting: routeTo('openrouter', 'anything-at-all'),
+    });
+    expect(unservedRoutes(loadSettings())).toEqual([]);
+  });
+
+  it('names every mode left pointing at a model the provider dropped', () => {
+    seed({
+      providers: { openrouter: { enabled: true, keys: [SECRET_A], models: ['m-kept'] } },
+      modelRouting: routeTo('openrouter', 'm-gone'),
+    });
+    const problems = unservedRoutes(loadSettings());
+    expect(problems).toHaveLength(4);
+    expect(problems[0]).toContain('openrouter does not serve');
+    expect(problems[0]).toContain('m-gone');
+  });
+
+  it('reports a mode pointing at a provider that is not enabled', () => {
+    seed({
+      providers: { openrouter: { enabled: false, keys: [], models: [] } },
+      modelRouting: routeTo('openrouter', 'm'),
+    });
+    expect(unservedRoutes(loadSettings())[0]).toContain('not enabled');
+  });
+
+  it('puts the contradiction in readiness, where the settings screen reads it', () => {
+    seed({
+      providers: { openrouter: { enabled: true, keys: [SECRET_A], models: ['m-kept'] } },
+      modelRouting: routeTo('openrouter', 'm-gone'),
+    });
+    const view = describeSettings();
+    expect(view.readiness.ready).toBe(false);
+    expect(view.readiness.problems.join(' | ')).toContain('does not serve');
+  });
+
+  it('refuses the save that would drop the model a mode starts from', () => {
+    seed({
+      providers: { openrouter: { enabled: true, keys: [SECRET_A], models: ['m-first', 'm-second'] } },
+      modelRouting: routeTo('openrouter', 'm-first'),
+    });
+
+    expect(() => applySettingsPatch({ providers: { openrouter: { models: ['m-second'] } } })).toThrow(UnservedRouteError);
+
+    /* Refused means untouched — the store still holds both models, so nothing
+       was half-written on the way to the error. */
+    expect(loadSettings().providers.openrouter.models).toEqual(['m-first', 'm-second']);
+  });
+
+  it('accepts the same change once every mode has been moved first', () => {
+    seed({
+      providers: { openrouter: { enabled: true, keys: [SECRET_A], models: ['m-first', 'm-second'] } },
+      modelRouting: routeTo('openrouter', 'm-first'),
+    });
+
+    applySettingsPatch({ modelRouting: routeTo('openrouter', 'm-second') });
+    applySettingsPatch({ providers: { openrouter: { models: ['m-second'] } } });
+
+    expect(loadSettings().providers.openrouter.models).toEqual(['m-second']);
+    expect(unservedRoutes(loadSettings())).toEqual([]);
   });
 });

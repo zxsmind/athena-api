@@ -1,4 +1,4 @@
-import { loadSettings } from '../settings-store.js';
+import { defaultSearchCount, loadSettings } from '../settings-store.js';
 import { serperProvider } from './serper.js';
 import { youcomProvider } from './youcom.js';
 import { serpapiProvider } from './serpapi.js';
@@ -98,10 +98,14 @@ export async function searchResults(
 ): Promise<SearchOutcome> {
   const configured = listSearchProviders();
   if (configured.length === 0) throw new SearchProviderNotConfiguredError();
+  /* Resolved once, here: a caller that does not ask for a count gets the
+     operator's default, and every backend — including one added later — follows
+     it instead of keeping its own fallback to config. */
+  const resolved = limit ?? defaultSearchCount();
   let lastError: unknown = null;
   for (const provider of configured) {
     try {
-      const outcome = await provider.search(query, type, signal, limit, options);
+      const outcome = await provider.search(query, type, signal, resolved, options);
       const processed = await applyDepth(outcome, options, signal);
       return { ...processed, provider: provider.id };
     } catch (err: unknown) {

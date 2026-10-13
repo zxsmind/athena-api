@@ -12,7 +12,6 @@ import {
   Input,
   Select,
   Spinner,
-  Textarea,
   useToast,
 } from '../components/ui';
 import {
@@ -681,6 +680,16 @@ function RoutingSection({
     for (const id of providerKey.split(',').filter(Boolean)) void ensureCatalog(id);
   }, [providerKey, ensureCatalog]);
 
+  /* Only models this provider actually serves. An empty whitelist means the
+     whole catalog, so the catalog is the list in that case; offering an
+     unserved model here is how a route gets set to something the router will
+     refuse. */
+  const servedModels = (providerId: string): string[] => {
+    const state = draft.providers[providerId];
+    if (!state) return [];
+    return state.models.length > 0 ? state.models : (catalogs[providerId] ?? []);
+  };
+
   const setPrimary = (mode: ResearchModeId, providerId: string, model: string) => {
     edit((next) => {
       next.modelRouting[mode] = { primary: { providerId, model }, fallback: next.modelRouting[mode].fallback };
@@ -708,7 +717,7 @@ function RoutingSection({
                 <Select
                   value={route.primary.providerId}
                   onChange={(event) =>
-                    setPrimary(mode, event.target.value, pickFirstModel(catalogs[event.target.value], route.primary.model))
+                    setPrimary(mode, event.target.value, pickFirstModel(servedModels(event.target.value), route.primary.model))
                   }
                   className="h-[36px] text-[13px]"
                 >
@@ -731,7 +740,7 @@ function RoutingSection({
                   disabled={!route.primary.providerId}
                 />
                 <datalist id={listId}>
-                  {(catalogs[route.primary.providerId] ?? []).map((modelId) => (
+                  {servedModels(route.primary.providerId).map((modelId) => (
                     <option key={modelId} value={modelId} />
                   ))}
                 </datalist>
@@ -768,68 +777,21 @@ function GeneralSection({
 
   return (
     <Card>
-      <CardHeader title="Research" description="How much the engine gathers, and what it is allowed to show." />
-      <div className="px-[20px] py-[16px] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-[16px]">
-        <NumberField
-          label="Max sources"
-          hint="Cited per answer."
-          min={1}
-          max={50}
-          value={draft.general.maxSources}
-          onCommit={(value) => set('maxSources', value)}
-        />
-        <NumberField
-          label="Deep iterations"
-          hint="Rounds a deep run may spend."
-          min={1}
-          max={20}
-          value={draft.general.deepIterations}
-          onCommit={(value) => set('deepIterations', value)}
-        />
-        <NumberField
-          label="Autocomplete count"
-          hint="Suggestions per keystroke."
-          min={0}
-          max={25}
-          value={draft.general.autocompleteCount}
-          onCommit={(value) => set('autocompleteCount', value)}
-        />
-        <div className="sm:col-span-2 lg:col-span-3">
-          <Field label="Title model" hint="Model used for section titles. Empty means the mode default.">
-            {(id) => (
-              <Input
-                id={id}
-                value={draft.general.titleModel}
-                onChange={(event) => set('titleModel', event.target.value)}
-                placeholder="leave empty for the default"
-                className="font-mono text-[13px]"
-                spellCheck={false}
-              />
-            )}
-          </Field>
-        </div>
-        <div className="sm:col-span-2 lg:col-span-3">
-          <Field label="Thinking strip patterns" hint="Regexes removed from provider output before the answer is shown.">
-            {(id) => (
-              <Textarea
-                id={id}
-                value={draft.general.thinkingStripPatterns}
-                onChange={(event) => set('thinkingStripPatterns', event.target.value)}
-                placeholder="one pattern per line"
-                className="min-h-[64px] font-mono text-[12px]"
-              />
-            )}
-          </Field>
-        </div>
-        <label className="inline-flex items-center gap-[8px] text-[13px] cursor-pointer">
-          <input
-            type="checkbox"
-            checked={draft.general.showDebugContext}
-            onChange={(event) => set('showDebugContext', event.target.checked)}
-            className="h-[15px] w-[15px] accent-[var(--accent)]"
+      <CardHeader
+        title="Research"
+        description="How much one query brings back when the caller does not ask for a number of its own."
+      />
+      <div className="px-[20px] py-[16px] flex flex-col gap-[16px]">
+        <div className="max-w-[320px]">
+          <NumberField
+            label="Max sources"
+            hint="Results returned per search, 1 to 20. Research rounds that name their own count keep it."
+            min={1}
+            max={20}
+            value={draft.general.maxSources}
+            onCommit={(value) => set('maxSources', value)}
           />
-          Show debug context
-        </label>
+        </div>
       </div>
     </Card>
   );
@@ -869,7 +831,7 @@ function ApiSection({
         />
         <NumberField
           label="Retention"
-          hint="Minutes before job data is swept."
+          hint="How long every record lives — jobs, traces, checkpoints, request history and daily totals. The dashboard never shows more than this."
           min={1}
           max={525600}
           value={draft.api.maxRetentionMinutes}

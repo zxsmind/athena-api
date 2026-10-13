@@ -9,6 +9,7 @@ import { clientAddress, isLocalManagementRequest, isLoopbackRequest } from './ac
 import { adminAttemptLocked, isAdminKey, recordAdminFailure, recordAdminSuccess } from './admin-auth.js';
 import { ApiPlatformStore, publicApiKey, type KeyPlan } from './api-platform-store.js';
 import { Meter } from './application/meter.js';
+import { retentionWindows } from './application/retention.js';
 import {
   cancelResearchJob,
   createResearchJob,
@@ -23,6 +24,7 @@ import { extractPageContent, searchResults, isSearchProviderConfigured, SearchPr
 import { loadSettings } from './settings-store.js';
 import {
   UpdateSettingsSchema,
+  UnservedRouteError,
   applySettingsPatch,
   catalogModelsOf,
   defaultModesOf,
@@ -44,7 +46,9 @@ import { getModelsDevSnapshot, listConfiguredModelsDevProviders, type ModelsDevM
 const SearchSchema = z.object({
   query: z.string().trim().min(1).max(2000),
   type: z.enum(['search', 'news', 'images', 'videos', 'places', 'shopping', 'scholar', 'patents']).default('search'),
-  count: z.number().int().min(1).max(20).default(8),
+  /* Optional on purpose: an absent count is not the API's default but the
+     operator's (`general.maxSources`), resolved once in the search registry. */
+  count: z.number().int().min(1).max(20).optional(),
   country: z.string().trim().regex(/^[a-z]{2}$/i).optional(),
   language: z.string().trim().regex(/^[a-z]{2,3}$/i).optional(),
   time_range: z.enum(['day', 'week', 'month', 'year']).nullable().default(null),
@@ -684,7 +688,11 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
   });
 
   router.get('/analytics', (req, res) => {
-    const days = Math.max(1, Math.min(90, Math.trunc(Number(req.query.days) || 7)));
+    /* Never advertise a horizon the retention sweep has already dropped: on a
+       seven-day deployment, asking for 90 days would report a window the query
+       cannot see past. */
+    const retainedDays = Math.max(1, Math.floor(retentionWindows().retentionMs / 86_400_000));
+    const days = Math.max(1, Math.min(90, retainedDays, Math.trunc(Number(req.query.days) || 7)));
     res.json({ window_days: days, generated_at: new Date().toISOString(), ...store.summarize(days) });
   });
 
@@ -763,6 +771,12 @@ export function createApiV1Router({ store, startResearchJob, meter }: ApiV1Depen
          written rather than from what it hoped it wrote. */
       res.json(describeSettings());
     } catch (error) {
+      if (error instanceof UnservedRouteError) {
+        /* 400, not 500: the body is well-formed, the request is not, because it
+           leaves a mode pointing at a model this provider does not serve. */
+        sendError(res, 400, 'ROUTE_NOT_SERVED', 'A route names a model that is not served.', error.problems);
+        return;
+      }
       console.error('[settings] save failed:', error instanceof Error ? error.message : String(error));
       sendError(res, 500, 'SETTINGS_SAVE_FAILED', 'Settings could not be written.');
     }

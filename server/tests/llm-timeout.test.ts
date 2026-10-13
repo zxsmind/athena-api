@@ -109,14 +109,23 @@ describe('call deadlines come from the job budget', () => {
   });
 
   it('keeps the answer window out of a research round', () => {
-    const preset = resolveResearchPreset('default');
-    const state = createBudgetState();
-    const reserve = answerReserveMs(preset, 'long');
-    expect(reserve).toBe(FINAL_ANSWER_TIMEOUT_MS.long);
-    /* The answer is the last call, so it gets everything that is left; a round
-       gets what is left once the reserve is set aside. */
-    expect(callDeadlineMs(state, preset, 'long', true)).toBe(preset.maxWallClockMs);
-    expect(callDeadlineMs(state, preset, 'long', false)).toBe(preset.maxWallClockMs - reserve);
+    /* The clock is pinned because the assertions are exact: reading Date.now()
+       twice across a millisecond boundary returns 1199999 where the check asks
+       for 1200000. That is a tick, not a defect — it made this test fail
+       roughly one run in three under load. */
+    vi.useFakeTimers();
+    try {
+      const preset = resolveResearchPreset('default');
+      const state = createBudgetState();
+      const reserve = answerReserveMs(preset, 'long');
+      expect(reserve).toBe(FINAL_ANSWER_TIMEOUT_MS.long);
+      /* The answer is the last call, so it gets everything that is left; a round
+         gets what is left once the reserve is set aside. */
+      expect(callDeadlineMs(state, preset, 'long', true)).toBe(preset.maxWallClockMs);
+      expect(callDeadlineMs(state, preset, 'long', false)).toBe(preset.maxWallClockMs - reserve);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never reserves more than half of what the mode promised', () => {

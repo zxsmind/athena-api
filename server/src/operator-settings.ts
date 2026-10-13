@@ -175,6 +175,50 @@ export type UpdateSettings = z.infer<typeof UpdateSettingsSchema>;
 
 /* ── Read ────────────────────────────────────────────────────────────────── */
 
+/**
+ * A route that names a model the provider does not serve.
+ *
+ * These are two independent knobs — which models a provider serves, and which
+ * model a mode starts from — so one can be changed without the other and the
+ * pair stops agreeing: uncheck the model every mode defaults to and the
+ * default points at something the router will refuse. Nothing reported it, so
+ * the settings screen and the models screen showed two halves of a contradiction.
+ */
+export function unservedRoutes(store: SettingsStore): string[] {
+  const problems: string[] = [];
+  for (const mode of Object.keys(store.modelRouting) as Array<keyof SettingsStore['modelRouting']>) {
+    const route = store.modelRouting[mode];
+    const refs: Array<{ label: string; ref: ModelReference }> = [
+      { label: '', ref: route.primary },
+      ...route.fallback.map((ref, index) => ({ label: ` fallback ${index + 1} of`, ref })),
+    ];
+    for (const { label, ref } of refs) {
+      const { providerId, model } = ref;
+      if (!providerId || !model) continue;
+      const state = store.providers[providerId];
+      if (!state?.enabled) {
+        problems.push(`${mode} mode${label} points at ${model} on ${providerId}, which is not enabled.`);
+        continue;
+      }
+      if (state.models.length > 0 && !state.models.includes(model)) {
+        problems.push(
+          `${mode} mode${label} points at ${model}, which ${providerId} does not serve. ` +
+          `Add it under Models, or point the mode at a model that is served.`,
+        );
+      }
+    }
+  }
+  return problems;
+}
+
+/** Thrown by a patch that would leave a route naming an unserved model. */
+export class UnservedRouteError extends Error {
+  constructor(readonly problems: string[]) {
+    super(problems.join(' '));
+    this.name = 'UnservedRouteError';
+  }
+}
+
 export interface PublicProviderState extends Omit<ProviderState, 'keys'> {
   keys: string[];
   /** How many secrets are stored, which is not the same as `keys.length` to an outsider. */
@@ -236,6 +280,12 @@ function publicSearch(state: SearchProviderState): PublicSearchProviderState {
 export function describeSettings(store: SettingsStore = loadSettings()): OperatorSettings {
   const catalogIds = listCachedModelsDevProviderIds();
   const configured = new Set(Object.keys(store.providers));
+  /* Readiness is one report: what is missing (keys, backends) and what
+     contradicts itself (a route naming a model nobody serves). The console
+     shows both in the same banner, so a state that cannot work is visible on
+     the screen that caused it rather than only when a request fails. */
+  const base = readiness(store);
+  const unserved = unservedRoutes(store);
   return {
     providers: Object.fromEntries(
       Object.entries(store.providers).map(([id, state]) => [id, publicProvider(state)]),
@@ -271,7 +321,11 @@ export function describeSettings(store: SettingsStore = loadSettings()): Operato
         keyless: backend.keyless === true,
       })),
     },
-    readiness: readiness(store),
+    readiness: {
+      ready: base.problems.length === 0 && unserved.length === 0,
+      problems: [...base.problems, ...unserved],
+      hints: base.hints,
+    },
   };
 }
 
@@ -381,6 +435,13 @@ export function applySettingsPatch(patch: UpdateSettings): SettingsStore {
 
   if (patch.api) next.api = { ...next.api, ...stripUndefined(patch.api) };
   if (patch.general) next.general = { ...next.general, ...stripUndefined(patch.general) };
+
+  /* Refuse the patch instead of storing it. A route naming a model the
+     provider does not serve reads fine on screen and only fails when a job
+     runs, and every later save would carry the contradiction forward — which
+     is how two screens ended up showing opposite halves of the truth. */
+  const unserved = unservedRoutes(next);
+  if (unserved.length > 0) throw new UnservedRouteError(unserved);
 
   saveSettings(next);
   return loadSettings();

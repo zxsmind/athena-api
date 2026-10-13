@@ -230,12 +230,19 @@ is used; otherwise the platform convention applies.
 
 A read-only checkout, a container and a notebook runtime all work unchanged.
 
-Growth is capped from `config.yaml`: an hourly sweep cancels paused jobs past
-`research.pausedTtlMinutes` (default 240) and purges terminal jobs, traces and
-checkpoints past `storage.retentionMinutes` (default 1440). On top of those age
-ceilings, `storage.maxDataBytes` (default 1 GB, `ATHENA_MAX_DATA_BYTES`) is a hard
+Growth is capped by one window. An hourly sweep cancels paused jobs past
+`research.pausedTtlMinutes` (default 240) from `config.yaml`, then drops every
+kind of record older than `api.maxRetentionMinutes` in `settings.yaml` (default
+10080 — seven days, editable from the console): terminal jobs and their events,
+trace files, checkpoints, request history and the daily usage rollups the
+dashboard counts. They share one number so the dashboard and the job list cannot
+disagree about what exists; `storage.retentionMinutes` or
+`ATHENA_RETENTION_MINUTES` overrides it when either is set. On top of that age
+ceiling, `storage.maxDataBytes` (default 1 GB, `ATHENA_MAX_DATA_BYTES`) is a hard
 disk guard that spends the oldest terminal data first. Running jobs are never
 touched. The log file rotates under `logging.maxFileBytes` × `logging.keepFiles`.
+The same sweep runs the incremental vacuum, so the database hands dead pages back
+instead of carrying every page it ever wrote.
 
 ## Research behaviour
 

@@ -4,7 +4,7 @@ import { ApiPlatformStore } from '../src/api-platform-store.js';
 import { Meter } from '../src/application/meter.js';
 import { createApiV1Router } from '../src/api-v1.js';
 import { getAdminKey, resetAdminKeyCache, resetAdminLockout } from '../src/admin-auth.js';
-import { resetSettingsCache } from '../src/settings-store.js';
+import { loadSettings, resetSettingsCache, saveSettings } from '../src/settings-store.js';
 import { publicJob, publicProgress, publicResult, publicSources } from '../src/api-v1.js';
 import type { ResearchJobRecord } from '../src/research-jobs.js';
 import { appendResearchJobEvent, createResearchJob } from '../src/research-jobs.js';
@@ -292,6 +292,54 @@ describe('management route admin key', () => {
     } finally {
       await h.close();
       resetSettingsCache();
+    }
+  });
+
+  it('never advertises a history window the retention sweep already dropped', async () => {
+    const h = await startHarness('free');
+    try {
+      const res = await fetch(`${h.url}/analytics?days=90`, { headers: adminHeader(ADMIN) });
+      expect(res.status).toBe(200);
+      const body = await res.json() as { window_days: number };
+      /* Retention decides what exists, so the dashboard cannot promise more
+         than that: a 90-day ask on a 7-day deployment reports 7. */
+      expect(body.window_days).toBeLessThanOrEqual(7);
+      expect(body.window_days).toBeGreaterThanOrEqual(1);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('refuses a save that leaves a mode pointing at an unserved model', async () => {
+    const h = await startHarness('free');
+    const stored = loadSettings();
+    try {
+      const seeded = structuredClone(stored);
+      seeded.providers.openrouter = { enabled: true, keys: ['k-test'], models: ['m-served'] };
+      seeded.modelRouting = {
+        instant: { primary: { providerId: 'openrouter', model: 'm-served' }, fallback: [] },
+        default: { primary: { providerId: 'openrouter', model: 'm-served' }, fallback: [] },
+        deep: { primary: { providerId: 'openrouter', model: 'm-served' }, fallback: [] },
+        max: { primary: { providerId: 'openrouter', model: 'm-served' }, fallback: [] },
+      };
+      saveSettings(seeded);
+
+      const res = await fetch(`${h.url}/settings`, {
+        method: 'PUT',
+        headers: { ...adminHeader(ADMIN), 'content-type': 'application/json' },
+        body: JSON.stringify({ providers: { openrouter: { models: ['m-other'] } } }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = await res.json() as { error: { code: string; details?: string[] } };
+      expect(body.error.code).toBe('ROUTE_NOT_SERVED');
+      expect((body.error.details ?? []).join(' ')).toContain('does not serve');
+      /* Refused means untouched: the stored list is still the served one. */
+      expect(loadSettings().providers.openrouter.models).toEqual(['m-served']);
+    } finally {
+      saveSettings(stored);
+      resetSettingsCache();
+      await h.close();
     }
   });
 });

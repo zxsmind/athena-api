@@ -1,4 +1,5 @@
 import { loadSettings } from '../settings-store.js';
+import { defaultSearchCount } from '../settings-store.js';
 import { getConfig } from '../config/load.js';
 import type { SearchResult } from '../schemas.js';
 import { signalWithTimeout } from './http.js';
@@ -24,7 +25,7 @@ async function brightdataSearch(
   limit: number | undefined,
   options: WebSearchOptions,
 ): Promise<SearchOutcome> {
-  const maxSources = limit ?? getConfig().search.defaultResultCount;
+  const maxSources = limit ?? defaultSearchCount();
   const key = ring.next();
   const entry = loadSettings().searchProviders.brightdata;
   if (!key || !entry?.zone) throw new SearchProviderNotConfiguredError();
