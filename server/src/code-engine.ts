@@ -37,13 +37,14 @@ import {
   CODE_FETCH_RETIRED_MESSAGE,
   CODE_SEARCH_RETIRED_MESSAGE,
   ANSWER_WINDOW_MESSAGE,
-  answerWindowReserved,
   callDeadlineMs,
+  researchBudgetFits,
   createBudgetState,
   DEFAULT_RESEARCH_MODE,
   DEFAULT_RESPONSE_LENGTH,
   reasoningEffortForMode,
   resolveResearchPreset,
+  responseLengthForMode,
   modeBehaviorBlock,
   shouldWrapUp,
   WRAP_UP_MESSAGE,
@@ -77,6 +78,9 @@ export async function runCodeResearchStream(
   options: ResearchRunOptions = {},
 ): Promise<void> {
   const preset = options.preset ?? resolveResearchPreset(mode);
+  /* instant carries no length setting: the mode decides it, so every path into
+     the engine — API request, stored job, chat, test — resolves the same pair. */
+  const responseLength = responseLengthForMode(preset.mode, options.responseLength ?? DEFAULT_RESPONSE_LENGTH);
   const reasoningEffort: ReasoningEffort = reasoningEffortForMode(preset.mode);
   const start = performance.now();
   const traceId = options.jobId;
@@ -88,8 +92,8 @@ export async function runCodeResearchStream(
       engine: 'code',
       mode: preset.mode,
       reasoning_effort: reasoningEffort,
-      verbosity: options.verbosity ?? null,
-      response_length: options.responseLength ?? null,
+        verbosity: options.verbosity ?? null,
+        response_length: responseLength,
       research_api: Boolean(options.researchApi),
       ceilings: {
         max_steps: preset.maxSteps, max_billable_tokens: preset.maxBillableTokens,
@@ -150,7 +154,7 @@ export async function runCodeResearchStream(
     : '';
   const stableSystemPrompt = getCodeSystemPrompt()
     + `\n\n**Today's date:** ${today}.`
-    + responseLengthBlock(options.responseLength ?? DEFAULT_RESPONSE_LENGTH)
+    + responseLengthBlock(responseLength)
     + resumeBlock
     + modeBehaviorBlock(preset, 'extract', options.planningEnabled !== false);
   /* The provider serves a repeated system prompt from its prompt cache, and a
@@ -162,7 +166,7 @@ export async function runCodeResearchStream(
      so the rest of the run can cache. */
   const coldStartBlock = startRound === 0 ? `<!-- request ${sandboxKey} -->\n\n` : '';
   const systemPrompt = coldStartBlock + stableSystemPrompt;
-  if (traceId) traceEvent(traceId, 'prompt.assembled', { engine: 'code', system_prompt: systemPrompt, response_length: options.responseLength ?? DEFAULT_RESPONSE_LENGTH }, 0);
+  if (traceId) traceEvent(traceId, 'prompt.assembled', { engine: 'code', system_prompt: systemPrompt, response_length: responseLength }, 0);
 
   const messages: LLMMessage[] = [{ role: 'system', content: systemPrompt }];
   const sanitizedHistory = sanitizeHistory(history, query);
@@ -234,18 +238,19 @@ export async function runCodeResearchStream(
       }
     }
 
-    const forceAnswer = budget.exhaustedBy !== null || totalToolCalls >= preset.forceAnswerToolCalls;
-    /* Same rule as the classic loop: once what is left of the wall clock is the
-       answer's window, stop researching rather than discover at the deadline
-       that there is no time left to write. */
-    const answerWindow = !forceAnswer
-      && answerWindowReserved(budget, preset, options.responseLength ?? DEFAULT_RESPONSE_LENGTH);
+    /* Every path out of research lands in the answer: a ceiling, the tool-call
+       limit, or the answer's share of the promise arriving. Nothing recovers
+       from a mid-round failure, because a round is only started while its own
+       share is intact — it is not cut while it is still producing. */
+    const answerWindow = !researchBudgetFits(budget, preset, responseLength);
+    const toolLimitReached = totalToolCalls >= preset.forceAnswerToolCalls;
+    const forceAnswer = budget.exhaustedBy !== null || toolLimitReached || answerWindow;
     if (answerWindow && !answerWindowAnnounced) {
       answerWindowAnnounced = true;
       messages.push({ role: 'user', content: ANSWER_WINDOW_MESSAGE });
       if (traceId) traceEvent(traceId, 'note', { answer_window: true }, round);
     }
-    if (forceAnswer && budget.exhaustedBy === null) {
+    if (toolLimitReached && budget.exhaustedBy === null) {
       messages.push({
         role: 'user',
         content: 'The research tool-call limit has been reached. Write the final answer to the original request using the evidence already gathered, with inline [N] citations and explicit unresolved gaps.',
@@ -281,16 +286,21 @@ export async function runCodeResearchStream(
         role: activeRole,
         signal: options.signal,
         reasoningEffort,
-        responseLength: options.responseLength ?? DEFAULT_RESPONSE_LENGTH,
+        responseLength: responseLength,
         finalAnswer: forceAnswer,
         /* The job's remaining promise, minus the answer's window. The transport
            adds nothing of its own except the idle timer, which watches silence. */
-        deadlineMs: callDeadlineMs(budget, preset, options.responseLength ?? DEFAULT_RESPONSE_LENGTH, forceAnswer),
+        deadlineMs: callDeadlineMs(budget, preset, responseLength, forceAnswer),
         traceId,
         traceRound: round,
         label: `code-round-${round}`,
       });
     } catch (error) {
+      /* A round reaches here only when the provider itself failed: rounds are
+         not ended by elapsed time any more (they start while the answer's
+         share is intact, and a healthy stream runs until it finishes or goes
+         silent). So there is nothing to hand the run over to here — reporting
+         it is the honest outcome. */
       onEvent({ type: 'error', message: error instanceof Error ? error.message : 'No available model responded' });
       return;
     }

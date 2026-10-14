@@ -45,9 +45,10 @@ describe('the assembled system prompt is recorded once per run', () => {
     expect(ENGINE).toMatch(/system_prompt: systemPrompt/);
   });
 
-  it('names the response length, so a run can be matched to the spec it was given', () => {
-    expect(ENGINE).toMatch(/response_length: options\.responseLength \?\? DEFAULT_RESPONSE_LENGTH/);
-    expect(ENGINE).toMatch(/response_length: options\.responseLength \?\? null/);
+  it('names the response length, so a run can be matched to the spec it followed', () => {
+    /* The resolved length rather than the request: instant is answered at
+       `short` whatever it was sent, and a trace has to record what ran. */
+    expect(ENGINE).toMatch(/response_length: responseLength/);
   });
 
   it('writes the prompt after it is assembled rather than before', () => {

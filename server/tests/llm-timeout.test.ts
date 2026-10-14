@@ -11,7 +11,9 @@ import {
   createBudgetState,
   FINAL_ANSWER_TIMEOUT_MS,
   MIN_CALL_DEADLINE_MS,
+  researchBudgetFits,
   resolveResearchPreset,
+  responseLengthForMode,
   elapsedMs,
 } from '../src/engine/modes.js';
 
@@ -98,54 +100,84 @@ describe('llm timeouts', () => {
 });
 
 describe('call deadlines come from the job budget', () => {
-  it('spends the mode promise across the run instead of a fixed per-round limit', () => {
-    const deep = resolveResearchPreset('deep');
-    const state = createBudgetState();
-    /* A deep run promises 90 minutes. The first round must not be cut at the
-       ~120s that used to be a constant, and it must leave room to write. */
-    const firstRound = callDeadlineMs(state, deep, 'long', false);
-    expect(firstRound).toBe(deep.maxWallClockMs - answerReserveMs(deep, 'long'));
-    expect(firstRound).toBeGreaterThan(4_000_000);
-  });
-
-  it('keeps the answer window out of a research round', () => {
-    /* The clock is pinned because the assertions are exact: reading Date.now()
-       twice across a millisecond boundary returns 1199999 where the check asks
-       for 1200000. That is a tick, not a defect — it made this test fail
-       roughly one run in three under load. */
+  it('gives a research round the whole promise, not what is left after the answer share', () => {
+    /* The clock is pinned for the reason the sibling test documents: the state
+       and the call each read Date.now(), and a tick between them returns
+       wall-1 where the assertion asks for wall. It failed about one run in
+       three under load. */
     vi.useFakeTimers();
     try {
-      const preset = resolveResearchPreset('default');
+      const deep = resolveResearchPreset('deep');
       const state = createBudgetState();
-      const reserve = answerReserveMs(preset, 'long');
-      expect(reserve).toBe(FINAL_ANSWER_TIMEOUT_MS.long);
-      /* The answer is the last call, so it gets everything that is left; a round
-         gets what is left once the reserve is set aside. */
-      expect(callDeadlineMs(state, preset, 'long', true)).toBe(preset.maxWallClockMs);
-      expect(callDeadlineMs(state, preset, 'long', false)).toBe(preset.maxWallClockMs - reserve);
+      /* A deep run promises 90 minutes and the round runs against that promise.
+         It used to be given the promise minus the answer's share, and that
+         remainder is what cut a round while it was still producing. */
+      expect(callDeadlineMs(state, deep, 'long', false)).toBe(deep.maxWallClockMs);
+      expect(callDeadlineMs(state, deep, 'long', false)).toBeGreaterThan(4_000_000);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('never reserves more than half of what the mode promised', () => {
-    /* An instant run promises five minutes in total. Reserving the four or nine
-       minutes a long or exhaustive report asks for would leave nothing to
-       research with, so even a short answer is capped at half the promise. */
-    const instant = resolveResearchPreset('instant');
-    expect(answerReserveMs(instant, 'exhaustive')).toBe(Math.floor(instant.maxWallClockMs / 2));
-    expect(answerReserveMs(instant, 'short')).toBe(Math.floor(instant.maxWallClockMs / 2));
-    /* A mode with room to spare still reserves what its answer needs. */
-    const max = resolveResearchPreset('max');
-    expect(answerReserveMs(max, 'exhaustive')).toBe(FINAL_ANSWER_TIMEOUT_MS.exhaustive);
+  it('shrinks a round deadline as the promise is spent, but never past it', () => {
+    vi.useFakeTimers();
+    try {
+      const preset = resolveResearchPreset('max');
+      const state = createBudgetState();
+      state.startedAt = Date.now() - (preset.maxWallClockMs - 60_000);
+      const deadline = callDeadlineMs(state, preset, 'exhaustive', false);
+      expect(deadline).toBe(60_000);
+      expect(deadline).toBeLessThanOrEqual(preset.maxWallClockMs);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds the answer by what the report needs, whatever the mode has left', () => {
+    vi.useFakeTimers();
+    try {
+      const preset = resolveResearchPreset('default');
+      const state = createBudgetState();
+      /* One table, every mode: the answer no longer inherits whatever research
+         left behind. That inheritance is what cut a stream that was still
+         producing (job `j-xp0pLJqGQB4O`: 149.9s of uninterrupted output,
+         `deadline reached`) against a share instant capped at half its promise. */
+      expect(callDeadlineMs(state, preset, 'long', true)).toBe(FINAL_ANSWER_TIMEOUT_MS.long);
+      state.startedAt = Date.now() - (preset.maxWallClockMs - 60_000);
+      expect(callDeadlineMs(state, preset, 'long', true)).toBe(FINAL_ANSWER_TIMEOUT_MS.long);
+      expect(callDeadlineMs(createBudgetState(), resolveResearchPreset('instant'), 'short', true))
+        .toBe(FINAL_ANSWER_TIMEOUT_MS.short);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('funds the answer out of the promise outright, with no share cap', () => {
+    /* The old rule capped the reserve at half the promise, which is exactly how
+       instant came to set aside 150s for an answer this same table puts at
+       540s: two numbers that could never agree. */
+    expect(answerReserveMs('short')).toBe(FINAL_ANSWER_TIMEOUT_MS.short);
+    expect(answerReserveMs('long')).toBe(FINAL_ANSWER_TIMEOUT_MS.long);
+    expect(answerReserveMs('exhaustive')).toBe(FINAL_ANSWER_TIMEOUT_MS.exhaustive);
+  });
+
+  it('fixes instant to a short answer, so the pair it cannot honour is not offered', () => {
+    /* instant promises five minutes in total; long and exhaustive need more of
+       it than is left for research, so the mode answers at one length. */
+    expect(responseLengthForMode('instant', 'long')).toBe('short');
+    expect(responseLengthForMode('instant', 'exhaustive')).toBe('short');
+    expect(responseLengthForMode('instant', 'short')).toBe('short');
+    expect(responseLengthForMode('default', 'long')).toBe('long');
+    expect(responseLengthForMode('deep', 'exhaustive')).toBe('exhaustive');
   });
 
   it('announces the answer window before the wall clock is actually spent', () => {
     const preset = resolveResearchPreset('default');
     const state = createBudgetState();
     expect(answerWindowReserved(state, preset, 'long')).toBe(false);
-    /* Time left equals the reserve: research stops, the answer still gets room. */
-    state.startedAt = Date.now() - (preset.maxWallClockMs - answerReserveMs(preset, 'long'));
+    /* Time left equals the answer's share: research stops, the answer still
+       gets all of it. */
+    state.startedAt = Date.now() - (preset.maxWallClockMs - answerReserveMs('long'));
     expect(answerWindowReserved(state, preset, 'long')).toBe(true);
     expect(callDeadlineMs(state, preset, 'long', true)).toBeGreaterThan(0);
   });
@@ -157,19 +189,64 @@ describe('call deadlines come from the job budget', () => {
     expect(elapsedMs(state)).toBeGreaterThan(preset.maxWallClockMs);
     /* A call with no time left would abort before the provider was asked, which
        loses an answer the evidence already supports. */
-    expect(callDeadlineMs(state, preset, 'short', true)).toBe(MIN_CALL_DEADLINE_MS);
     expect(callDeadlineMs(state, preset, 'short', false)).toBe(MIN_CALL_DEADLINE_MS);
+    /* The answer is bounded by what the report needs, not by what the promise
+       has left to give: the promise was spent on research, and answering late
+       still beats returning nothing for it. */
+    expect(callDeadlineMs(state, preset, 'short', true)).toBe(FINAL_ANSWER_TIMEOUT_MS.short);
   });
 
-  it('runs out of round time before the job promise, not after', () => {
-    const preset = resolveResearchPreset('max');
-    const state = createBudgetState();
-    const reserve = answerReserveMs(preset, 'exhaustive');
-    state.startedAt = Date.now() - (preset.maxWallClockMs - reserve - 60_000);
-    const deadline = callDeadlineMs(state, preset, 'exhaustive', false);
-    expect(deadline).toBeLessThanOrEqual(60_000 + MIN_CALL_DEADLINE_MS);
-    /* The round stops before the reserve is touched, so the answer's window is
-       still intact when the forced answer runs. */
-    expect(deadline + reserve).toBeLessThanOrEqual(preset.maxWallClockMs);
+  it('leaves no research share for the pair instant cannot honour', () => {
+    /* Why instant answers at one length: a long report is owed 540s out of a
+       300s promise, so there would be nothing left to research with. The engine
+       never sees the pair — responseLengthForMode fixes it — but the split is
+       well defined either way. */
+    vi.useFakeTimers();
+    try {
+      const instant = resolveResearchPreset('instant');
+      const state = createBudgetState();
+      expect(researchBudgetFits(state, instant, 'long')).toBe(false);
+      expect(researchBudgetFits(state, instant, 'short')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops research when its share cannot pay for a round at the floor', () => {
+    /* The failure this pins: an instant run had 19s of research time left
+       against the 30s floor, round 6 was started anyway, and it was killed at
+       the floor while the answer's time sat untouched. A round is only started
+       while its share still covers the floor. */
+    vi.useFakeTimers();
+    try {
+      const preset = resolveResearchPreset('instant');
+      const state = createBudgetState();
+      const reserve = answerReserveMs('short');
+      expect(researchBudgetFits(state, preset, 'short')).toBe(true);
+
+      state.startedAt = Date.now() - (preset.maxWallClockMs - reserve - MIN_CALL_DEADLINE_MS);
+      expect(researchBudgetFits(state, preset, 'short')).toBe(true);
+
+      state.startedAt = Date.now() - (preset.maxWallClockMs - reserve - MIN_CALL_DEADLINE_MS + 1);
+      expect(researchBudgetFits(state, preset, 'short')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends research before the answer share is touched', () => {
+    vi.useFakeTimers();
+    try {
+      const preset = resolveResearchPreset('instant');
+      const state = createBudgetState();
+      const reserve = answerReserveMs('short');
+      state.startedAt = Date.now() - (preset.maxWallClockMs - reserve);
+      /* Research is over here; the answer still gets all of its share instead
+         of inheriting whatever a late round left behind. */
+      expect(researchBudgetFits(state, preset, 'short')).toBe(false);
+      expect(callDeadlineMs(state, preset, 'short', true)).toBeGreaterThanOrEqual(reserve);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

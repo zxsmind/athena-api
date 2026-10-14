@@ -9,6 +9,7 @@ import { clientAddress, isLocalManagementRequest, isLoopbackRequest } from './ac
 import { adminAttemptLocked, isAdminKey, recordAdminFailure, recordAdminSuccess } from './admin-auth.js';
 import { ApiPlatformStore, publicApiKey, type KeyPlan } from './api-platform-store.js';
 import { Meter } from './application/meter.js';
+import { researchCharge, roundCredits } from './engine/metering.js';
 import { retentionWindows } from './application/retention.js';
 import {
   cancelResearchJob,
@@ -38,10 +39,11 @@ import {
   DEFAULT_RESPONSE_LENGTH,
   RESEARCH_VERBOSITIES,
   RESPONSE_LENGTHS,
+  responseLengthForMode,
   resolveResearchPreset,
   reasoningEffortForMode,
 } from './engine/modes.js';
-import { getModelsDevSnapshot, listConfiguredModelsDevProviders, type ModelsDevModel } from './models-dev.js';
+import { getCachedModelTokenPrice, getModelsDevSnapshot, listConfiguredModelsDevProviders, type ModelsDevModel } from './models-dev.js';
 
 const SearchSchema = z.object({
   query: z.string().trim().min(1).max(2000),
@@ -166,6 +168,30 @@ export function publicProgress(runtime: ResearchJobRecord['runtime']): unknown {
   put('used_tokens', pick('used_tokens', 'usedTokens'));
   put('token_limit', pick('token_limit'));
   put('elapsed_ms', pick('elapsed_ms'));
+  /* Live cost in USD: provider-reported when available, otherwise the catalog
+     price times provider-reported tokens; search/fetch counts and CPU seconds
+     priced from config. Null when any component cannot be priced. */
+  const tokenLedger = (budget.token_ledger ?? budget.tokenLedger ?? {}) as Record<string, unknown>;
+  const reportedTokens = Object.keys(tokenLedger).length > 0;
+  const snapshot = {
+    used_search_calls: pick('used_search_calls', 'usedSearchCalls') ?? 0,
+    search_calls_limit: pick('search_calls_limit') ?? 0,
+    used_fetch_calls: pick('used_fetch_calls', 'usedFetchCalls') ?? 0,
+    fetch_calls_limit: pick('fetch_calls_limit') ?? 0,
+    used_cpu_seconds: (pick('used_cpu_seconds', 'usedCpuMs') ?? 0) / 1000,
+    used_tokens: pick('used_tokens', 'usedTokens') ?? 0,
+    token_limit: pick('token_limit') ?? 0,
+    used_total_tokens: pick('used_total_tokens', 'usedTotalTokens') ?? 0,
+    elapsed_ms: pick('elapsed_ms') ?? 0,
+    wall_clock_limit_ms: pick('wall_clock_limit_ms', 'maxWallClockMs') ?? 0,
+    used_steps: pick('used_steps', 'usedSteps') ?? 0,
+    step_limit: pick('step_limit', 'maxSteps') ?? 0,
+    exhausted_by: null,
+    token_ledger: tokenLedger,
+  } as unknown as Parameters<typeof researchCharge>[1];
+  const charge = researchCharge(getConfig().pricing, snapshot, reportedTokens, (providerId, modelId) => getCachedModelTokenPrice(providerId, modelId));
+  const cost = charge.unpriced.length === 0 ? roundCredits(charge.total) : null;
+  put('cost_usd', cost);
   return out;
 }
 
@@ -360,7 +386,7 @@ function startApiResearch(input: ResearchInput, context: ResearchContext) {
       mode: input.mode,
       preset: resolveResearchPreset(input.mode),
       reasoningEffort,
-      responseLength: input.response_length,
+      responseLength: responseLengthForMode(input.mode, input.response_length),
       verbosity: input.verbosity,
       researchApi: true,
       apiKeyId: context.apiKeyId ?? undefined,
@@ -379,7 +405,9 @@ function researchAccepted(input: ResearchInput, job: ResearchJobRecord, reasonin
     status: 'queued',
     mode: input.mode,
     reasoning_effort: reasoningEffort,
-    response_length: input.response_length,
+    /* The length the job will actually answer at, so a caller sending instant
+       + long sees the pair it is getting rather than what it asked for. */
+    response_length: responseLengthForMode(input.mode, input.response_length),
     verbosity: input.verbosity,
     streams: { snapshot: `/v1/jobs/${job.id}`, events: `/v1/jobs/${job.id}/events` },
   };

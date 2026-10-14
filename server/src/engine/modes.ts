@@ -109,6 +109,10 @@ export interface TokenUsageByModel {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   requests: number;
+  /** Monotonic count of calls that reported a cost (or not). */
+  costCalls: number;
+  costReportedCalls: number;
+  reportedCostUsd: number;
   /** Why the call was made. Absent for research calls. */
   purpose?: string;
 }
@@ -187,15 +191,28 @@ export const FINAL_ANSWER_TIMEOUT_MS = {
 export const MIN_CALL_DEADLINE_MS = 30_000;
 
 /**
- * Wall clock held back from research rounds so the final answer can be written.
+ * Wall clock the final answer is owed, by requested length.
  *
- * An instant job promises five minutes in total, so reserving the nine minutes
- * an exhaustive report asks for would leave nothing to research with. The
- * reserve therefore never exceeds half of what the mode promised: a structural
- * split of the promise, not a guess about latency.
+ * Funded first, out of the mode's promise: research spends whatever the
+ * promise has left after this. It used to be capped at half the promise, which
+ * put instant at 150s for a long answer this same table puts at 540s — two
+ * numbers that could never agree, so the share either starved the answer or
+ * the job overran its own promise. One number decides now, and it belongs to
+ * the requested length rather than to the mode.
  */
-export function answerReserveMs(preset: ResearchPreset, responseLength: ResponseLength): number {
-  return Math.min(FINAL_ANSWER_TIMEOUT_MS[responseLength], Math.floor(preset.maxWallClockMs / 2));
+export function answerReserveMs(responseLength: ResponseLength): number {
+  return FINAL_ANSWER_TIMEOUT_MS[responseLength];
+}
+
+/**
+ * The length a mode actually answers at.
+ *
+ * instant carries no length setting: its promise is five minutes in total, and
+ * every length in the table but `short` needs more of it than is left over for
+ * research, so the pair could never be honoured together.
+ */
+export function responseLengthForMode(mode: ResearchMode, responseLength: ResponseLength): ResponseLength {
+  return mode === 'instant' ? 'short' : responseLength;
 }
 
 /**
@@ -208,17 +225,21 @@ export function answerWindowReserved(
   responseLength: ResponseLength,
   now: number = Date.now(),
 ): boolean {
-  return remainingWallClockMs(state, preset, now) <= answerReserveMs(preset, responseLength);
+  return remainingWallClockMs(state, preset, now) <= answerReserveMs(responseLength);
 }
 
 /**
  * Deadline for one model call in a research run.
  *
- * The caller's job budget is the only bound: the mode already promised the API
- * caller a wall clock, and a per-round constant contradicted it (a deep run was
- * killed at two minutes against a ninety-minute promise). Streaming calls add
- * the idle timer on top, which is liveness rather than a prediction, because
- * every chunk resets it.
+ * Two kinds of call, two bounds, neither of them a guess about latency:
+ *
+ * - a research round runs until the promise runs out. It only ever starts
+ *   while the answer's share is still intact (`researchBudgetFits`), so the
+ *   bound is generous in practice and a round is not cut while it is still
+ *   producing; silence is the idle timer's job, not this one's.
+ * - the answer is bounded by what the report needs, which is the same number
+ *   in every mode because it belongs to the requested length. It no longer
+ *   depends on what research left behind.
  */
 export function callDeadlineMs(
   state: BudgetState,
@@ -227,11 +248,27 @@ export function callDeadlineMs(
   finalAnswer: boolean,
   now: number = Date.now(),
 ): number {
-  const remaining = remainingWallClockMs(state, preset, now);
-  /* The forced answer is the last call a job makes, so it gets everything that
-     is left. A research round leaves the answer's window alone. */
-  const usable = finalAnswer ? remaining : remaining - answerReserveMs(preset, responseLength);
-  return Math.max(MIN_CALL_DEADLINE_MS, usable);
+  if (finalAnswer) return Math.max(MIN_CALL_DEADLINE_MS, answerReserveMs(responseLength));
+  return Math.max(MIN_CALL_DEADLINE_MS, remainingWallClockMs(state, preset, now));
+}
+
+/**
+ * True while research may still start a round of its own.
+ *
+ * The promise is split once: the answer is owed its length budget outright and
+ * research may spend the rest. Research stops when less than the floor remains
+ * of that rest, because the answer is what the run still owes and the run has
+ * already paid for the evidence it has. `ANSWER_WINDOW_MESSAGE` used to be the
+ * only thing saying so, and it never stopped the model — the research tool was
+ * still in its hands.
+ */
+export function researchBudgetFits(
+  state: BudgetState,
+  preset: ResearchPreset,
+  responseLength: ResponseLength,
+  now: number = Date.now(),
+): boolean {
+  return remainingWallClockMs(state, preset, now) - answerReserveMs(responseLength) >= MIN_CALL_DEADLINE_MS;
 }
 
 /** The first ceiling reached, or null while the job may continue. */
@@ -302,6 +339,7 @@ export interface UsageCharge {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  costUsd: number | null;
 }
 
 /**
@@ -321,6 +359,7 @@ export function chargeUsage(state: BudgetState, usage: UsageCharge, providerId: 
     outputTokens: usage.outputTokens,
     cacheReadTokens: usage.cacheReadTokens,
     cacheWriteTokens: usage.cacheWriteTokens,
+    costUsd: usage.costUsd,
   });
 }
 
@@ -420,6 +459,7 @@ export function recordTokenUsage(
     outputTokens: number;
     cacheReadTokens: number;
     cacheWriteTokens: number;
+    costUsd?: number | null;
     purpose?: string;
   },
 ): void {
@@ -431,11 +471,28 @@ export function recordTokenUsage(
     existing.cacheReadTokens += usage.cacheReadTokens;
     existing.cacheWriteTokens += usage.cacheWriteTokens;
     existing.requests += 1;
+    existing.costCalls += 1;
+    if (usage.costUsd !== null && usage.costUsd !== undefined) {
+      existing.costReportedCalls += 1;
+      existing.reportedCostUsd += usage.costUsd;
+    }
     return;
   }
-  state.tokenLedger[key] = { ...usage, requests: 1 };
+  const costCalls = 1;
+  const reported = usage.costUsd !== null && usage.costUsd !== undefined;
+  state.tokenLedger[key] = {
+    providerId: usage.providerId,
+    modelId: usage.modelId,
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+    requests: 1,
+    costCalls,
+    costReportedCalls: reported ? 1 : 0,
+    reportedCostUsd: reported ? usage.costUsd! : 0,
+  };
 }
-
 export interface BudgetSnapshot {
   used_search_calls: number;
   search_calls_limit: number;

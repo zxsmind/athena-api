@@ -183,7 +183,7 @@ export function ResearchPage() {
     setNotes([]);
     setTokenCount(0);
     try {
-      const accepted = await startResearch({ query: query.trim(), mode, response_length: length, verbosity });
+      const accepted = await startResearch({ query: query.trim(), mode, response_length: mode === 'instant' ? 'short' : length, verbosity });
       setJobId(accepted.job_id);
       /* The snapshot poll fills the rest within a beat; the optimistic echo
          keeps the panel from flashing empty before the first poll lands. */
@@ -262,17 +262,19 @@ export function ResearchPage() {
                 { id: 'max', label: 'max' },
               ]} />
             </div>
-            <div className="w-[160px]">
-              <Field label="Answer length">
-                {(id) => (
-                  <Select id={id} value={length} onChange={(event) => setLength(event.target.value as Length)}>
-                    <option value="short">short</option>
-                    <option value="long">long</option>
-                    <option value="exhaustive">exhaustive</option>
-                  </Select>
-                )}
-              </Field>
-            </div>
+            {mode !== 'instant' && (
+              <div className="w-[160px]">
+                <Field label="Answer length">
+                  {(id) => (
+                    <Select id={id} value={length} onChange={(event) => setLength(event.target.value as Length)}>
+                      <option value="short">short</option>
+                      <option value="long">long</option>
+                      <option value="exhaustive">exhaustive</option>
+                    </Select>
+                  )}
+                </Field>
+              </div>
+            )}
             <div className="w-[160px]">
               <Field label="Visibility">
                 {(id) => (
@@ -322,7 +324,12 @@ export function ResearchPage() {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-[12px] pt-[4px]">
                   <Gauge used={progress?.used_search_calls ?? null} limit={progress?.search_calls_limit ?? null} label="Searches" />
                   <Gauge used={progress?.used_fetch_calls ?? null} limit={progress?.fetch_calls_limit ?? null} label="Page reads" />
-                  <Gauge used={progress?.used_tokens ?? null} limit={progress?.token_limit ?? null} label="Tokens (billable)" />
+                  <div className="flex flex-col gap-[5px] min-w-0">
+    <span className="text-[12px] text-[var(--gray-600)]">Cost (USD)</span>
+    <span className="font-mono tabular-nums text-[12px] text-[var(--gray-700)]">
+      {progress?.cost_usd != null ? progress.cost_usd.toFixed(6) : '—'}
+    </span>
+  </div>
                   <Gauge
                     used={progress?.elapsed_ms ? Math.round(progress.elapsed_ms / 1000) : null}
                     limit={null}

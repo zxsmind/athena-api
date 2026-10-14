@@ -130,6 +130,7 @@ export interface JobProgress {
   used_turns: number | null;
   used_tokens: number;
   token_limit: number;
+  cost_usd: number | null;
   elapsed_ms: number | null;
 }
 

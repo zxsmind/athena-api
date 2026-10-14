@@ -104,7 +104,12 @@ export function AdminJobs() {
               <div className="grid grid-cols-2 gap-[10px]">
                 <Gauge used={detail.progress?.used_search_calls ?? null} limit={detail.progress?.search_calls_limit ?? null} label="Searches" />
                 <Gauge used={detail.progress?.used_fetch_calls ?? null} limit={detail.progress?.fetch_calls_limit ?? null} label="Page reads" />
-                <Gauge used={detail.progress?.used_tokens ?? null} limit={detail.progress?.token_limit ?? null} label="Tokens" />
+                <div className="flex flex-col gap-[5px] min-w-0">
+                  <span className="text-[12px] text-[var(--gray-600)]">Cost (USD)</span>
+                  <span className="font-mono tabular-nums text-[12px] text-[var(--gray-700)]">
+                    {detail.progress?.cost_usd != null ? detail.progress.cost_usd.toFixed(6) : '—'}
+                  </span>
+                </div>
                 <Gauge
                   used={detail.progress?.elapsed_ms ? Math.round(detail.progress.elapsed_ms / 1000) : null}
                   limit={null}

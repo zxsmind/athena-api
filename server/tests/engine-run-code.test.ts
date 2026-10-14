@@ -1,19 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultConfig } from '../src/config/defaults.js';
 import { resetConfigForTests, setConfig } from '../src/config/load.js';
-import { RESEARCH_MODES, modeBehaviorBlock, resolveResearchPreset, type BudgetState } from '../src/engine/modes.js';
+import { RESEARCH_MODES, FINAL_ANSWER_TIMEOUT_MS, modeBehaviorBlock, resolveResearchPreset, type BudgetState } from '../src/engine/modes.js';
 import { closeAllSandboxes, setSandboxFactoryForTests } from '../src/sandbox/manager.js';
 import type { SandboxHandlers } from '../src/sandbox/types.js';
 
 interface LLMCall {
   label?: string;
-  tools?: { function?: { name?: string } }[];
+  finalAnswer?: boolean;
+  deadlineMs?: number;
+  tools?: { function?: { name: string } }[];
   messages: { role: string; content?: string | null; tool_call_id?: string; tool_calls?: { function: { name: string } }[] }[];
 }
 
 const llmCalls: LLMCall[] = [];
 const systemAtCall: string[] = [];
-let script: Array<{ content?: string; tool_calls?: unknown[] }> = [];
+let script: Array<{ content?: string; tool_calls?: unknown[]; throws?: Error }> = [];
 
 vi.mock('../src/llm.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/llm.js')>();
@@ -23,6 +25,7 @@ vi.mock('../src/llm.js', async (importOriginal) => {
     llmCalls.push({ ...options, messages: structuredClone(options.messages) });
     systemAtCall.push(String(options.messages[0]?.content ?? ''));
     const step = script.shift() ?? { content: 'fallback answer' };
+    if (step.throws) throw step.throws;
     return {
       data: { choices: [{ message: { role: 'assistant', content: step.content ?? null, tool_calls: step.tool_calls } }] },
       model: 'mock-model',
@@ -434,6 +437,56 @@ describe('run_code in the engine', () => {
     expect(llmCalls.length).toBe(2);
     const done = events.find((event) => event.type === 'done') as { response?: { answer?: string } } | undefined;
     expect(done?.response?.answer).toContain('Classic answer');
+  });
+
+  it.each([false, true])('bounds a research round by the promise and the answer by its own table (code=%s)', async (code) => {
+    setConfig({ ...defaultConfig, sandbox: { ...defaultConfig.sandbox, enabled: code } });
+    /* Floor zeroed so the run reaches the answer on the tool-call limit. */
+    const preset = { ...resolveResearchPreset('default'), minFetchCalls: 0, minSearchCalls: 0, forceAnswerToolCalls: 1, wrapUpToolCalls: 1 };
+    const call = { tool_calls: [{
+      id: 'call_1',
+      function: code
+        ? { name: 'run_code', arguments: JSON.stringify({ code: 'program', label: 'probe' }) }
+        : { name: 'web_search', arguments: JSON.stringify({ queries: ['query'] }) },
+    }] };
+    script = [call, { content: 'Answer [1]' }];
+    const events: EngineEvent[] = [];
+
+    await agenticResearchStream('question', undefined, (event) => events.push(event), 'default', { jobId, preset });
+
+    expect(events.find((event) => event.type === 'error')).toBeUndefined();
+    /* A round is given the job's whole promise, not what is left once the
+       answer's share is set aside — that remainder is what used to cut a round
+       while it was still producing. */
+    expect(llmCalls[0].deadlineMs).toBeGreaterThan(preset.maxWallClockMs - 5_000);
+    expect(llmCalls[0].deadlineMs).toBeLessThanOrEqual(preset.maxWallClockMs);
+    /* The answer is bounded by what the report needs: one table, every mode. */
+    const answer = llmCalls.at(-1);
+    expect(answer?.finalAnswer).toBe(true);
+    expect(answer?.deadlineMs).toBe(FINAL_ANSWER_TIMEOUT_MS.long);
+    expect(answer?.tools).toBeUndefined();
+    const done = events.find((event) => event.type === 'done') as { response?: { answer?: string } } | undefined;
+    expect(done?.response?.answer).toContain('Answer [1]');
+  });
+
+  it.each([false, true])('stops research when the promise is already split past the floor (code=%s)', async (code) => {
+    setConfig({ ...defaultConfig, sandbox: { ...defaultConfig.sandbox, enabled: code } });
+    /* Eight seconds of promise against a long answer this table puts at 540s:
+       the answer is owed more than the whole promise, so no research share
+       exists and the first round is already the answer. */
+    const preset = { ...resolveResearchPreset('default'), maxWallClockMs: 8_000, minFetchCalls: 0, minSearchCalls: 0 };
+    script = [{ content: 'Answer [1]' }];
+    const events: EngineEvent[] = [];
+
+    await agenticResearchStream('question', undefined, (event) => events.push(event), 'default', { jobId, preset });
+
+    expect(llmCalls[0].tools).toBeUndefined();
+    expect(llmCalls[0].finalAnswer).toBe(true);
+    expect(events.find((event) => event.type === 'error')).toBeUndefined();
+    const done = events.find((event) => event.type === 'done') as { response?: { answer?: string } } | undefined;
+    /* No sources were gathered, so the citation is stripped and only the answer
+       itself is left to assert. */
+    expect(done?.response?.answer).toContain('Answer');
   });
 
 });

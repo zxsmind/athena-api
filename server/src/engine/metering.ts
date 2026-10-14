@@ -95,11 +95,12 @@ export function researchCharge(
     for (const [key, usage] of Object.entries(ledger)) {
       tokenUnits += usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
       const price = priceOf?.(usage.providerId, usage.modelId) ?? null;
-      if (!price) {
+      const tokenCost = tokenCreditsFor(usage, price);
+      if (tokenCost === null) {
         unpricedModels.push(key);
         continue;
       }
-      tokenCredits += tokenCreditsFor(usage, price);
+      tokenCredits += tokenCost;
     }
   }
 
@@ -122,7 +123,16 @@ export function researchCharge(
 const TOKENS_PER_PRICE_UNIT = 1_000_000;
 
 /** Credits for one model's usage. Prices are per million tokens. */
-export function tokenCreditsFor(usage: TokenUsageByModel, price: ModelTokenPrice): number {
+export function tokenCreditsFor(usage: TokenUsageByModel, price: ModelTokenPrice | null): number | null {
+  /* Provider-reported cost wins over the catalog estimate when every call
+     for this model reported one. Mixing unreported calls would understate the
+     total, so the catalog price then covers the whole model instead. */
+  const calls = usage.costCalls ?? 0;
+  const reported = usage.costReportedCalls ?? 0;
+  if (calls > 0 && reported === calls) {
+    return usage.reportedCostUsd ?? 0;
+  }
+  if (!price) return null;
   return (
     usage.inputTokens * price.input
     + usage.outputTokens * price.output

@@ -16,7 +16,7 @@ import { usesInlineToolCalls } from './provider-registry.js';
 import { deleteResearchCheckpoint, loadResearchCheckpoint, saveResearchCheckpoint } from './engine/checkpoint.js';
 import {
   modeBehaviorBlock,
-  answerWindowReserved,
+  researchBudgetFits,
   budgetSnapshot,
   callDeadlineMs,
   chargeFetchCalls,
@@ -34,6 +34,7 @@ import {
   remainingWallClockMs,
   reasoningEffortForMode,
   resolveResearchPreset,
+  responseLengthForMode,
   shouldWrapUp,
   WRAP_UP_MESSAGE,
   SEARCH_RETIRED_MESSAGE,
@@ -130,7 +131,9 @@ type RoundResult =
   | { kind: 'tools'; researchToolCalls: number }
   | { kind: 'answer' }
   | { kind: 'declined'; reason: string }
-  | { kind: 'error' };
+  /* `message` is present only for a real failure; an abort returns it bare,
+     because an aborted run is not a failure to report. */
+  | { kind: 'error'; message?: string; finalContext?: string };
 
 /* ── Core tool-calling round ── */
 async function toolCallingRound(
@@ -314,9 +317,13 @@ async function toolCallingRound(
         if (traceId) traceEvent(traceId, 'note', { empty_completion_retry: true, error: failure }, round);
         continue;
       }
-      onEvent({ type: 'context', finalContext: makeFinalContextJson(messages) });
-      onEvent({ type: 'error', message: (err as Error).message || 'No available model responded' });
-      return { kind: 'error' };
+      /* Reported by the loop, not here: this round may still be recoverable,
+         and an error event marks the job failed for good the moment it lands. */
+      return {
+        kind: 'error',
+        message: (err as Error).message || 'No available model responded',
+        finalContext: makeFinalContextJson(messages),
+      };
     }
   }
 
@@ -1121,6 +1128,9 @@ async function runAgenticResearchStream(
   options: ResearchRunOptions = {},
 ): Promise<void> {
   const preset = options.preset ?? resolveResearchPreset(mode);
+  /* instant carries no length setting: the mode decides it, so every path into
+     the engine — API request, stored job, chat, test — resolves the same pair. */
+  const responseLength = responseLengthForMode(preset.mode, options.responseLength ?? DEFAULT_RESPONSE_LENGTH);
   /* Effort follows the mode. A legacy chat caller with no mode still gets the
      default mode's level rather than being left without one. */
   const reasoningEffort = reasoningEffortForMode(preset.mode);
@@ -1133,8 +1143,8 @@ async function runAgenticResearchStream(
       query,
       mode: preset.mode,
       reasoning_effort: reasoningEffort,
-      verbosity: options.verbosity ?? null,
-      response_length: options.responseLength ?? null,
+        verbosity: options.verbosity ?? null,
+        response_length: responseLength,
       research_api: Boolean(options.researchApi),
       ceilings: {
         max_steps: preset.maxSteps, max_billable_tokens: preset.maxBillableTokens,
@@ -1184,7 +1194,7 @@ async function runAgenticResearchStream(
     : getDeepSystemPrompt(options.planningEnabled !== false);
   /* The prompt defines what each length means; this line only names the one
      this run was asked for. */
-  const lengthBlock = responseLengthBlock(options.responseLength ?? DEFAULT_RESPONSE_LENGTH);
+  const lengthBlock = responseLengthBlock(responseLength);
   const planningEnabled = options.planningEnabled !== false;
   const systemPrompt = `${basePrompt}\n\n**Today's date:** ${today}.`
     + lengthBlock + resumeBlock + modeBehaviorBlock(preset, 'fetch_url', planningEnabled);
@@ -1193,7 +1203,7 @@ async function runAgenticResearchStream(
      vary with the mode, the response length and the date. A
      trace carrying only the query could not say which of those produced a given
      behaviour, so the whole thing is recorded once, here. */
-  if (traceId) traceEvent(traceId, 'prompt.assembled', { system_prompt: systemPrompt, response_length: options.responseLength ?? DEFAULT_RESPONSE_LENGTH }, 0);
+  if (traceId) traceEvent(traceId, 'prompt.assembled', { system_prompt: systemPrompt, response_length: responseLength }, 0);
   const messages: LLMMessage[] = [{ role: 'system', content: systemPrompt }];
   const sanitizedHistory = sanitizeHistory(history, query);
   if (sanitizedHistory.length > 0) messages.push(...sanitizedHistory.map(h => ({ role: h.role, content: h.content })));
@@ -1272,13 +1282,12 @@ async function runAgenticResearchStream(
       }
     }
 
-    const forceAnswer = budget.exhaustedBy !== null || totalToolCalls >= FORCE_ANSWER_THRESHOLD;
-    /* What is left of the wall clock can become the answer's window before the
-       ceiling itself is reached. Rounds leave that window alone, so the run
-       stops researching here instead of spending the time it needs to write. */
-    const answerWindow = !forceAnswer
-      && answerWindowReserved(budget, preset, options.responseLength ?? DEFAULT_RESPONSE_LENGTH);
-    if (answerWindow && !answerWindowAnnounced) {
+    /* What is left of the promise belongs to the answer before the ceiling
+       itself is reached. Research ends here rather than spending the time the
+       run still owes to writing — the ceiling already said so when it fired. */
+    const answerWindow = !researchBudgetFits(budget, preset, responseLength);
+    const forceAnswer = budget.exhaustedBy !== null || totalToolCalls >= FORCE_ANSWER_THRESHOLD || answerWindow;
+    if (answerWindow && !answerWindowAnnounced && budget.exhaustedBy === null) {
       answerWindowAnnounced = true;
       messages.push({ role: 'user', content: ANSWER_WINDOW_MESSAGE });
       if (traceId) traceEvent(traceId, 'note', { answer_window: true, remaining_ms: remainingWallClockMs(budget, preset) }, round);
@@ -1289,8 +1298,19 @@ async function runAgenticResearchStream(
       wrapUpWarned = true;
     }
 
-    const result = await toolCallingRound(messages, allSources, steps, round, onEvent, budget, preset, () => publishProgress(round), options.signal, activeRole, deepState, forceAnswer, options.planningEnabled !== false, researchPlanRef, reasoningEffort, options.researchApi, traceId, options.verbosity, totalTurns, options.responseLength ?? DEFAULT_RESPONSE_LENGTH);
-    if (result.kind === 'error') { hadError = true; break; }
+    const result = await toolCallingRound(messages, allSources, steps, round, onEvent, budget, preset, () => publishProgress(round), options.signal, activeRole, deepState, forceAnswer, options.planningEnabled !== false, researchPlanRef, reasoningEffort, options.researchApi, traceId, options.verbosity, totalTurns, responseLength);
+    if (result.kind === 'error') {
+      /* A round is not ended by elapsed time: it starts while the answer's
+         share is intact and runs until it finishes or goes silent. So what
+         reaches here is the provider failing, and there is no research left to
+         write an answer from on a path that already lost its model. An abort
+         carries no message and reports nothing — a cancelled run is not a
+         failure. */
+      if (result.finalContext !== undefined) onEvent({ type: 'context', finalContext: result.finalContext });
+      if (result.message !== undefined) onEvent({ type: 'error', message: result.message });
+      hadError = true;
+      break;
+    }
     if (result.kind === 'declined') {
       onEvent({ type: 'declined', reason: result.reason });
       if (traceId) {

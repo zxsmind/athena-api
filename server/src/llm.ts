@@ -79,6 +79,8 @@ export interface LLMUsage {
   cacheWriteTokens: number;
   totalTokens: number;
   requests: number;
+  /** Provider-reported monetary cost when available (USD). */
+  costUsd: number | null;
   /** False when the provider returned no usage data; the call is then unpriced. */
   reported: boolean;
 }
@@ -553,6 +555,7 @@ function toTokenUsage(value: unknown): LLMUsage {
     cacheWriteTokens,
     totalTokens: toUsageTokens(usage),
     requests: 1,
+    costUsd: null,
     reported: toUsageTokens(usage) > 0,
   };
 }
@@ -703,9 +706,17 @@ async function callSelectedTarget(
 
   for (const { key: apiKey } of resolution.provider.apiKeys) {
     let responseHeaders: Headers | null = null;
+    let reportedCost: number | null = null;
+    let costReady: Promise<void> = Promise.resolve();
     const trackedFetch: typeof fetch = async (input, init) => {
       const response = await fetch(input, init);
       responseHeaders = response.headers;
+      const clone = response.clone();
+      costReady = clone.json().then((json) => {
+        const u = asRecord(asRecord(json).usage);
+        const c = u.cost;
+        reportedCost = typeof c === 'number' && Number.isFinite(c) ? c : null;
+      }).catch(() => { reportedCost = null; });
       return response;
     };
     const created = createLanguageModel(target.id, target.model, provider, trackedFetch, apiKey);
@@ -767,12 +778,15 @@ async function callSelectedTarget(
           result.totalUsage,
           result.reasoningText,
         ]));
+        await costReady;
+        const tokenUsage = toTokenUsage(usage);
+        tokenUsage.costUsd = reportedCost;
         const toolCalls = toolCallsFrom(content);
         return {
           ok: true,
           data: engineResponse(text, toolCalls, finishReason, target.model, usage, reasoningText),
           fullContent: text,
-          usage: toTokenUsage(usage),
+          usage: tokenUsage,
           observations: responseHeadersToObservations(responseHeaders, scopeId),
           durationMs: Date.now() - startedAt,
           ...(wireEffort ? { reasoningEffort: wireEffort } : {}),
@@ -780,11 +794,14 @@ async function callSelectedTarget(
       }
 
       const result = await generateText(common);
+      await costReady;
+      const tokenUsage = toTokenUsage(result.totalUsage);
+      tokenUsage.costUsd = reportedCost;
       const toolCalls = toolCallsFrom(result.content);
       return {
         ok: true,
         data: engineResponse(result.text, toolCalls, result.finishReason, target.model, result.totalUsage, result.reasoningText),
-        usage: toTokenUsage(result.totalUsage),
+        usage: tokenUsage,
         observations: responseHeadersToObservations(responseHeaders, scopeId),
         durationMs: Date.now() - startedAt,
         ...(wireEffort ? { reasoningEffort: wireEffort } : {}),
@@ -923,6 +940,11 @@ async function runLLM(options: LLMOptions, streaming: boolean): Promise<LLMResul
         stream: streaming,
         temperature: options.temperature ?? 0.7,
         reasoning_effort: options.reasoningEffort ?? null,
+        /* The bound this call actually runs under, and which kind of call it
+           is. Without these the only way to answer "which clock ended this
+           job" is to reconstruct the arithmetic from the mode preset. */
+        deadline_ms: options.deadlineMs ?? null,
+        final_answer: options.finalAnswer ?? false,
         tools: (options.tools ?? []).map((t) => {
           const fn = (t as { function?: { name?: string } }).function;
           return fn?.name ?? 'unknown';
