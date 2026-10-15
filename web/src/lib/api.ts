@@ -144,6 +144,7 @@ export interface PublicJob {
   started_at: string | null;
   finished_at: string | null;
   progress: JobProgress;
+  progress_notes: Array<{ headline: string; body: string; at: string | null }>;
   result: { answer: string; sources: Array<{ index: number; title: string | null; url: string }> } | null;
   note: { headline: string; body: string; round?: number } | undefined;
   error: string | undefined;
@@ -312,7 +313,9 @@ export interface OperatorSettings {
   /** Read-only: both take effect when the server binds its socket. */
   server: { port: number; host: string };
   catalog: {
-    providers: Array<{ id: string; name: string; npm: string; modelCount: number; configured: boolean; enabled: boolean }>;
+    providers: Array<{ id: string; name: string; npm: string; api: string; modelCount: number; configured: boolean; enabled: boolean }>;
+    /** Runtime packages this build can run, for the provider form's picker. */
+    runtimePackages: string[];
     search: Array<{ id: string; name: string; needsZone: boolean; keyless: boolean }>;
   };
   readiness: { ready: boolean; problems: string[]; hints: string[] };

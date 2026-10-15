@@ -3,10 +3,12 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
+import { createGateway } from '@ai-sdk/gateway';
 import type { LanguageModel } from 'ai';
 import { getCachedModelsDevProvider } from './models-dev.js';
 import { catalogModelsOf } from './operator-settings.js';
 import type { ProviderState } from './settings-store.js';
+import { runtimePackageFor } from './provider-runtime.js';
 
 /**
  * The provider system. There is deliberately no provider name in this file.
@@ -65,14 +67,13 @@ function firstNonEmptyEnv(names: readonly string[] | undefined): ApiKeySource | 
  * rotate), then the first non-empty catalog-declared environment variable.
  */
 export function resolveProvider(providerId: string, state?: ProviderState): ProviderResolution {
-  const catalog = getCachedModelsDevProvider(providerId);
-  const npm = state?.npm ?? catalog?.npm;
+  const npm = runtimePackageFor(providerId, state);
   if (!npm) {
     return {
       ok: false,
       error: {
         id: providerId,
-        reason: `provider "${providerId}" is not in the model catalog and settings declare no runtime package (npm) for it`,
+        reason: `provider "${providerId}" is not in the model catalog and settings declare no runtime package (npm) for it — set one in Settings → Providers`,
       },
     };
   }
@@ -85,6 +86,7 @@ export function resolveProvider(providerId: string, state?: ProviderState): Prov
       },
     };
   }
+  const catalog = getCachedModelsDevProvider(providerId);
   const apiKeys: ApiKeySource[] = (state?.keys ?? [])
     .filter((key): key is string => typeof key === 'string' && key.length > 0)
     .map((key) => ({ key, source: 'settings' as const }));
@@ -158,6 +160,22 @@ const SUPPORTED_PACKAGES: Record<string, PackageFactory> = {
   '@openrouter/ai-sdk-provider': {
     createModel: (resolved, apiKey, modelId, fetch) =>
       createOpenRouter({ apiKey, baseURL: resolved.baseURL, fetch: fetch as typeof fetch }).languageModel(modelId),
+  },
+  /* Vercel AI Gateway speaks its own dialect: model ids are resolved server
+     side across many upstream providers, and the SDK package is the only client
+     that knows how. An operator pointing at the gateway from the console
+     declared exactly this package, and the build refused it as unsupported. */
+  '@ai-sdk/gateway': {
+    createModel: (resolved, apiKey, modelId, fetch) =>
+      createGateway({
+        apiKey,
+        /* The gateway has its own default endpoint (`…/v1/ai`). Only an
+           explicit override replaces it; the generic `state.url` is left off,
+           because a gateway user filling in the OpenAI-shaped URL is describing
+           the provider it fronts, not the gateway itself. */
+        ...(resolved.headers ? { headers: resolved.headers } : {}),
+        fetch: fetch as typeof fetch,
+      }).languageModel(modelId),
   },
 };
 

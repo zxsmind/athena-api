@@ -102,7 +102,7 @@ export interface LLMResult {
   reasoningEffort?: ReasoningEffort;
 }
 
-type FailureReason = 'auth' | 'request' | 'rate-limit' | 'transient';
+type FailureReason = 'auth' | 'request' | 'rate-limit' | 'transient' | 'unconfigured';
 type AttemptResult =
   | { ok: true; data: unknown; fullContent?: string; usage: LLMUsage; observations?: CapacityObservation[]; durationMs: number; reasoningEffort?: ReasoningEffort }
   | { ok: false; reason: FailureReason; observations?: CapacityObservation[]; detail?: string; durationMs?: number };
@@ -696,7 +696,12 @@ async function callSelectedTarget(
   const provider = settings.providers[target.id];
   if (!provider?.enabled) return null;
   const resolution = resolveProvider(target.id, provider);
-  if (!resolution.ok) return null;
+  if (!resolution.ok) {
+    /* Returning null here reported "no enabled keys", which sent the reader
+       looking for a key that was already stored. The provider is unusable for a
+       reason the operator can act on, so the reason travels with the skip. */
+    return { ok: false, reason: 'unconfigured', detail: resolution.error.reason, durationMs: 0 };
+  }
   const scopeId = `${target.id}/${target.model}`;
   const wireEffort = resolvedWireEffort(provider, target.model, options.reasoningEffort);
   const startedAt = Date.now();
@@ -1073,7 +1078,7 @@ messages: summarizeMessages(options.messages),
       tried.push(`${selection.target.id}/${selection.target.model} -> no enabled keys`);
       smartRouting.recordOutcome(selection.leaseId, 'transient-failure', { detail: 'Model skipped (no enabled key)' });
     } else {
-      if (result.reason === 'auth' || result.reason === 'request') excludedRoutes.add(selection.routeId);
+      if (result.reason === 'auth' || result.reason === 'request' || result.reason === 'unconfigured') excludedRoutes.add(selection.routeId);
       const kind = result.reason === 'auth' ? 'auth-failure' : result.reason === 'rate-limit' ? 'rate-limit' : 'transient-failure';
       tried.push(`${selection.target.id}/${selection.target.model} -> ${result.reason}${result.detail ? `: ${result.detail}` : ''}`);
       smartRouting.recordOutcome(selection.leaseId, kind, {
@@ -1089,7 +1094,11 @@ messages: summarizeMessages(options.messages),
         target: `${selection.target.id}/${selection.target.model}`,
         reason: !attempt.ok
           ? (attempt.error ?? 'failed after retries')
-          : result === null ? 'no enabled keys' : result.reason,
+          : result === null
+            ? 'no enabled keys'
+            : result.reason === 'unconfigured'
+              ? `unconfigured: ${result.detail ?? result.reason}`
+              : result.reason,
         tried_so_far: tried,
         observations: result && 'observations' in result ? result.observations : [],
       }, options.traceRound);

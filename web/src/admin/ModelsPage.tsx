@@ -143,6 +143,18 @@ export function AdminModels() {
     setVisible(PAGE_SIZE);
   };
 
+  /** Adds or removes every model the current filter matches, in one step. */
+const selectMatching = (checked: boolean) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      for (const model of rows) {
+        if (checked) next.add(model.id);
+        else next.delete(model.id);
+      }
+      return next;
+    });
+  };
+
   const save = async () => {
     if (!settings || !providerId) return;
     if (!wholeCatalog && selected.size === 0) {
@@ -286,7 +298,23 @@ export function AdminModels() {
             name="serving-mode"
             checked={!wholeCatalog}
             onChange={() => {
-              if (selected.size === 0 && catalog) setSelected(new Set(catalog.models.map((model) => model.id)));
+              /* Not the whole catalog. Arriving from "All catalog models" with
+                 three hundred models ticked is not a choice, it is a chore with
+                 a checkbox on every row; and the useful default is the short
+                 list an operator can trim. The models a mode actually starts
+                 from are ticked, because dropping one of those is refused
+                 anyway — a run pointed at a model this provider stopped serving
+                 fails every call. */
+              if (selected.size === 0) {
+                const inUse = new Set<string>();
+                for (const route of Object.values(settings.modelRouting)) {
+                  if (route.primary.providerId === providerId) inUse.add(route.primary.model);
+                  for (const fallback of route.fallback) {
+                    if (fallback.providerId === providerId) inUse.add(fallback.model);
+                  }
+                }
+                setSelected(new Set([...inUse].filter((id) => (catalog?.models ?? []).some((model) => model.id === id))));
+              }
               setWholeCatalog(false);
             }}
             className="h-[15px] w-[15px] accent-[var(--accent)]"
@@ -298,6 +326,24 @@ export function AdminModels() {
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
             Clear selection
           </Button>
+        )}
+        {!wholeCatalog && (
+          <>
+            {/* Bulk actions follow the filter. The catalog is far too long to
+                settle by clicking rows one at a time, and the filter is how an
+                operator narrows it to the handful they are choosing between. */}
+            <Button size="sm" variant="ghost" disabled={rows.length === 0} onClick={() => selectMatching(true)}>
+              Select {query.trim() ? 'matching' : 'all'}
+            </Button>
+            <Button size="sm" variant="ghost" disabled={rows.length === 0} onClick={() => selectMatching(false)}>
+              Clear {query.trim() ? 'matching' : 'all'}
+            </Button>
+          </>
+        )}
+        {wholeCatalog && (
+          <span className="text-[12px] text-[var(--gray-500)]">
+            Every model is served, so there is nothing to tick. Switch to “Only selected models” to narrow it.
+          </span>
         )}
       </Card>
 

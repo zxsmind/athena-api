@@ -8,6 +8,7 @@ import {
   describeSettings,
   maskSecret,
   reconcileSecrets,
+  unusableProviders,
   unservedRoutes,
 } from '../src/operator-settings.js';
 import { loadSettings, resetSettingsCache, saveSettings, type SettingsStore } from '../src/settings-store.js';
@@ -396,5 +397,60 @@ describe('a route naming a model the provider does not serve', () => {
 
     expect(loadSettings().providers.openrouter.models).toEqual(['m-second']);
     expect(unservedRoutes(loadSettings())).toEqual([]);
+  });
+});
+
+describe('a provider that cannot run is reported before anything is asked of it', () => {
+  const gateway = {
+    enabled: true,
+    keys: ['vck_test_gateway_key_3333'],
+    models: ['xiaomi/mimo-v2.6-flash'],
+  };
+
+  it('names the missing runtime package, because that is the field the console fills', () => {
+    /* The failure this pins: a provider outside the model catalog, enabled,
+       keyed and routed to, and answering every request with "no enabled
+       keys" � which sent the reader looking for a key that was already there.
+       The readiness banner exists so this is visible on the screen that caused
+       it, and the message has to name what to fill in. */
+    const store = { ...loadSettings(), providers: { gateway: { ...gateway } } };
+    const problems = unusableProviders(store);
+
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain('gateway');
+    expect(problems[0]).toContain('runtime package');
+  });
+
+  it('accepts the same provider once the console supplies npm and a base URL', () => {
+    const store = {
+      ...loadSettings(),
+      providers: { gateway: { ...gateway, npm: '@ai-sdk/openai-compatible', url: 'https://ai-gateway.vercel.sh/v1' } },
+    };
+
+    expect(unusableProviders(store)).toEqual([]);
+  });
+
+  it('still reports one that has a runtime but no endpoint', () => {
+    const store = {
+      ...loadSettings(),
+      providers: { gateway: { ...gateway, npm: '@ai-sdk/openai-compatible' } },
+    };
+
+    expect(unusableProviders(store)[0]).toContain('no endpoint');
+  });
+
+  it('rejects a runtime package this build cannot run', () => {
+    const store = {
+      ...loadSettings(),
+      providers: { gateway: { ...gateway, npm: 'not-a-real-sdk', url: 'https://example.com/v1' } },
+    };
+
+    expect(unusableProviders(store)[0]).toContain('cannot run');
+  });
+
+  it('leaves a disabled provider alone, because nothing will call it', () => {
+    const store = { ...loadSettings(), providers: { gateway: { ...gateway, enabled: false } } };
+
+    expect(unusableProviders(store)).toEqual([]);
   });
 });

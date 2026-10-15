@@ -22,8 +22,10 @@ import {
   type OperatorSettings,
   type ResearchModeId,
   type SettingsPatch,
+  type CatalogModel,
   type SettingsProviderState,
 } from '../lib/api';
+import { ModelCombobox, toModelOptions } from './ModelCombobox';
 
 const MODE_LABELS: Record<ResearchModeId, string> = {
   instant: 'instant',
@@ -188,16 +190,26 @@ function ProvidersSection({
   const catalogIds = draft.providerOrder.filter((id) => draft.providers[id]);
   const available = settings.catalog.providers.filter((entry) => !draft.providers[entry.id]);
   const [adding, setAdding] = useState('');
+  const [asking, setAsking] = useState(false);
   const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
 
-  const add = () => {
-    const id = adding || available[0]?.id;
+  const add = (presetId: string, npm: string, url: string) => {
+    const id = presetId;
     if (!id || draft.providers[id]) return;
     edit((next) => {
-      next.providers[id] = { enabled: true, keys: [], keyCount: 0, servesWholeCatalog: true, models: [] };
+      next.providers[id] = {
+        enabled: true,
+        keys: [],
+        keyCount: 0,
+        servesWholeCatalog: true,
+        models: [],
+        ...(npm ? { npm } : {}),
+        ...(url ? { url } : {}),
+      };
       next.providerOrder = [...next.providerOrder, id];
     });
     setAdding('');
+    setAsking(false);
   };
 
   const remove = (id: string) => {
@@ -224,7 +236,7 @@ function ProvidersSection({
                   </option>
                 ))}
               </Select>
-              <Button size="sm" onClick={add}>
+              <Button size="sm" onClick={() => setAsking(true)}>
                 <Plus size={13} />
                 Add
               </Button>
@@ -243,12 +255,23 @@ function ProvidersSection({
             key={id}
             id={id}
             provider={draft.providers[id]}
+            runtimePackages={settings.catalog.runtimePackages}
+            inCatalog={settings.catalog.providers.some((entry) => entry.id === id)}
             edited={JSON.stringify(draft.providers[id]) !== JSON.stringify(settings.providers[id])}
             edit={edit}
             onRemove={() => setPendingRemoval(id)}
           />
         ))}
       </div>
+
+      <AddProviderDialog
+        open={asking}
+        selected={adding || available[0]?.id || ''}
+        available={available}
+        runtimePackages={settings.catalog.runtimePackages}
+        onClose={() => setAsking(false)}
+        onAdd={add}
+      />
 
       <Dialog
         open={pendingRemoval !== null}
@@ -273,18 +296,169 @@ function ProvidersSection({
   );
 }
 
+/**
+ * Adding a provider asks how it should run.
+ *
+ * A provider the catalog knows needs nothing: its runtime and endpoint come
+ * from there. One it does not know — a gateway, a proxy, a self-hosted endpoint
+ * — needs both declared, and the console used to have nowhere to declare them.
+ * The result was a provider that could be enabled, keyed and routed to, and
+ * still answered every request with "no enabled keys". So the form is asked for
+ * them here, in the same gesture that adds the provider, and the catalog is used
+ * as the default wherever it can be.
+ */
+function AddProviderDialog({
+  open,
+  selected,
+  available,
+  runtimePackages,
+  onClose,
+  onAdd,
+}: {
+  open: boolean;
+  selected: string;
+  available: OperatorSettings['catalog']['providers'];
+  runtimePackages: string[];
+  onClose: () => void;
+  onAdd: (id: string, npm: string, url: string) => void;
+}) {
+  const [id, setId] = useState(selected);
+  const [npm, setNpm] = useState('');
+  const [url, setUrl] = useState('');
+  const [customId, setCustomId] = useState(false);
+
+  /* Choosing a catalog provider fills the runtime and endpoint from the
+     catalog. Switching to a custom id clears both, because a different endpoint
+     has different ones and a stale value would save a working-looking provider
+     that calls somewhere else. */
+  const choose = (value: string) => {
+    setId(value);
+    const entry = available.find((item) => item.id === value);
+    setNpm(entry?.npm ?? '');
+    setUrl(entry?.api ?? '');
+  };
+
+  useEffect(() => {
+    if (open) choose(selected);
+  }, [open, selected]);
+
+  const entry = available.find((item) => item.id === id);
+  const finalId = customId ? id.trim() : id;
+  const needsRuntime = customId || !entry;
+  const canAdd = finalId.length > 0 && (!needsRuntime || npm.trim().length > 0);
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="Add a provider"
+      description="A provider the catalog knows arrives ready to run. Any other endpoint — a gateway, a proxy, your own server — needs its runtime package and base URL, or the server cannot call it."
+    >
+      <div className="flex flex-col gap-[12px]">
+        {!customId ? (
+          <>
+            <Field label="Provider">
+              {(inputId) => (
+                <Select id={inputId} value={id} onChange={(event) => choose(event.target.value)} className="h-[34px] text-[13px]">
+                  {available.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name} ({item.id})
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+            {entry && (
+              <p className="text-[12px] text-[var(--gray-500)] font-mono">
+                runtime {entry.npm || '—'} · {entry.api || 'catalog endpoint'} · {entry.modelCount} models
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setCustomId(true);
+                setId('');
+                setNpm('@ai-sdk/openai-compatible');
+                setUrl('');
+              }}
+              className="text-[12px] text-[var(--accent)] hover:underline self-start"
+            >
+              My endpoint is not in the list →
+              </button>
+          </>
+        ) : (
+          <>
+            <Field label="Provider id" hint="Lowercase, used in routes and in settings.yaml.">
+              {(inputId) => (
+                <Input
+                  id={inputId}
+                  value={id}
+                  onChange={(event) => setId(event.target.value)}
+                  placeholder="vercel-ai-gateway"
+                  className="h-[34px] text-[12px] font-mono"
+                  spellCheck={false}
+                />
+              )}
+            </Field>
+            <Field label="Runtime package" hint="How this server calls that endpoint. Most gateways are OpenAI-compatible.">
+              {(inputId) => (
+                <Select id={inputId} value={npm} onChange={(event) => setNpm(event.target.value)} className="h-[34px] text-[12px] font-mono">
+                  {runtimePackages.map((pkg) => (
+                    <option key={pkg} value={pkg}>
+                      {pkg}
+                    </option>
+                  ))}
+                </Select>
+              )}
+            </Field>
+            <Field label="Base URL" hint="For example https://ai-gateway.vercel.sh/v1">
+              {(inputId) => (
+                <Input
+                  id={inputId}
+                  value={url}
+                  onChange={(event) => setUrl(event.target.value)}
+                  placeholder="https://example.com/v1"
+                  className="h-[34px] text-[12px] font-mono"
+                  spellCheck={false}
+                />
+              )}
+            </Field>
+          </>
+        )}
+        <div className="flex justify-end gap-[8px] pt-[4px]">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant="primary"
+            disabled={!canAdd}
+            onClick={() => {
+              onAdd(finalId, npm.trim(), url.trim());
+              setCustomId(false);
+            }}
+          >
+            Add provider
+          </Button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 function ProviderRow({
   id,
   provider,
   edited,
   edit,
   onRemove,
+  runtimePackages,
+  inCatalog,
 }: {
   id: string;
   provider: SettingsProviderState;
   edited: boolean;
   edit: (mutate: (next: OperatorSettings) => void) => void;
   onRemove: () => void;
+  runtimePackages: string[];
+  inCatalog: boolean;
 }) {
   const [newKey, setNewKey] = useState('');
   const [pendingKey, setPendingKey] = useState<number | null>(null);
@@ -318,6 +492,12 @@ function ProviderRow({
           {provider.keyCount === 0 && <Badge tone="warn">no key</Badge>}
           {provider.keyCount > 1 && <Badge>{provider.keyCount} keys</Badge>}
           {!provider.enabled && <Badge tone="danger">disabled</Badge>}
+          {/* A provider outside the catalog runs only if it declares both a
+              runtime package and an endpoint. Both are editable right here, so
+              a provider that cannot run is one field away from running rather
+              than an SSH session away. */}
+          {!inCatalog && !provider.npm && <Badge tone="danger">no runtime package</Badge>}
+          {!inCatalog && provider.npm && !provider.url && <Badge tone="warn">no base URL</Badge>}
           {edited && <Badge tone="warn">edited</Badge>}
         </div>
         <div className="flex items-center gap-[8px]">
@@ -383,6 +563,26 @@ function ProviderRow({
                 className="h-[34px] text-[12px] font-mono"
                 spellCheck={false}
               />
+            )}
+          </Field>
+        </div>
+        <div className="w-[260px]">
+          <Field label="Runtime package" hint="How this server calls the endpoint. Only for providers outside the catalog.">
+            {(inputId) => (
+              <Select
+                id={inputId}
+                value={provider.npm ?? ''}
+                onChange={(event) => edit((next) => { const p = next.providers[id]; if (p) p.npm = event.target.value || undefined; })}
+                className="h-[34px] text-[12px] font-mono"
+                disabled={inCatalog}
+              >
+                <option value="">{inCatalog ? 'from catalog' : 'not set'}</option>
+                {runtimePackages.map((pkg) => (
+                  <option key={pkg} value={pkg}>
+                    {pkg}
+                  </option>
+                ))}
+              </Select>
             )}
           </Field>
         </div>
@@ -657,7 +857,7 @@ function RoutingSection({
   edit: (mutate: (next: OperatorSettings) => void) => void;
 }) {
   const readyProviders = draft.providerOrder.filter((id) => draft.providers[id]);
-  const [catalogs, setCatalogs] = useState<Record<string, string[]>>({});
+  const [catalogs, setCatalogs] = useState<Record<string, CatalogModel[]>>({});
   const requested = useRef<Set<string>>(new Set());
 
   const ensureCatalog = useCallback(async (id: string) => {
@@ -665,7 +865,7 @@ function RoutingSection({
     requested.current.add(id);
     try {
       const response = await models(id);
-      setCatalogs((current) => ({ ...current, [id]: response.providers[0]?.models.map((model) => model.id) ?? [] }));
+      setCatalogs((current) => ({ ...current, [id]: response.providers[0]?.models ?? [] }));
     } catch {
       /* Suggestions only: a missing catalog must not stop an operator from
          typing a model id by hand. */
@@ -687,7 +887,15 @@ function RoutingSection({
   const servedModels = (providerId: string): string[] => {
     const state = draft.providers[providerId];
     if (!state) return [];
-    return state.models.length > 0 ? state.models : (catalogs[providerId] ?? []);
+    return state.models.length > 0 ? state.models : (catalogs[providerId] ?? []).map((model) => model.id);
+  };
+
+  /** The same list, with what the catalog knows about each entry. */
+  const servedOptions = (providerId: string) => {
+    const state = draft.providers[providerId];
+    if (!state) return [];
+    const byId = new Map((catalogs[providerId] ?? []).map((model) => [model.id, model]));
+    return servedModels(providerId).map((id) => toModelOptions([byId.get(id) ?? { id } as CatalogModel])[0]);
   };
 
   const setPrimary = (mode: ResearchModeId, providerId: string, model: string) => {
@@ -705,7 +913,6 @@ function RoutingSection({
       <div className="px-[20px] py-[16px] flex flex-col gap-[14px]">
         {settings.modes.map((mode) => {
           const route = draft.modelRouting[mode];
-          const listId = `models-for-${mode}`;
           return (
             <div key={mode} className="flex flex-wrap items-end gap-[10px]">
               <div className="w-[110px]">
@@ -730,20 +937,15 @@ function RoutingSection({
                 </Select>
               </div>
               <div className="flex-1 min-w-[220px]">
-                <Input
-                  list={listId}
+                <ModelCombobox
+                  label={`${mode} mode model`}
                   value={route.primary.model}
-                  onChange={(event) => setPrimary(mode, route.primary.providerId, event.target.value)}
-                  placeholder="model id"
-                  className="h-[36px] text-[13px] font-mono"
-                  spellCheck={false}
                   disabled={!route.primary.providerId}
+                  placeholder={route.primary.providerId ? 'search models…' : 'pick a provider first'}
+                  options={servedOptions(route.primary.providerId)}
+                  emptyNote={`${route.primary.providerId || 'this provider'} does not list this model — it will still save, but the route may be refused.`}
+                  onChange={(model) => setPrimary(mode, route.primary.providerId, model)}
                 />
-                <datalist id={listId}>
-                  {servedModels(route.primary.providerId).map((modelId) => (
-                    <option key={modelId} value={modelId} />
-                  ))}
-                </datalist>
               </div>
               {!route.primary.providerId && (
                 <span className="text-[12px] text-[var(--gray-500)] pb-[9px]">falls back to catalog selection</span>

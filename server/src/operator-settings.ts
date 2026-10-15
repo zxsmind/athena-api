@@ -2,6 +2,8 @@ import { z } from 'zod';
 import { RESEARCH_MODES } from './engine/modes.js';
 import { getCachedModelsDevProvider, listCachedModelsDevProviderIds } from './models-dev.js';
 import { readiness } from './cli/config-edit.js';
+import { isPackageSupported, listSupportedPackages } from './provider-registry.js';
+import { providerResolutionProblem } from './provider-runtime.js';
 import { SEARCH_BACKEND_CHOICES } from './search/catalog.js';
 import {
   loadSettings,
@@ -184,6 +186,26 @@ export type UpdateSettings = z.infer<typeof UpdateSettingsSchema>;
  * default points at something the router will refuse. Nothing reported it, so
  * the settings screen and the models screen showed two halves of a contradiction.
  */
+/**
+ * Enabled providers that cannot run, whatever else is configured.
+ *
+ * A provider with a key and a model still fails every request when nothing says
+ * how to execute it: an endpoint the catalog has never seen needs a runtime
+ * package declared in settings, and the console had nowhere to declare one. The
+ * request that found this out answered "no enabled keys", which is both wrong
+ * and unactionable. This reports it on the settings screen instead, next to
+ * the provider it belongs to.
+ */
+export function unusableProviders(store: SettingsStore): string[] {
+  const problems: string[] = [];
+  for (const [id, state] of Object.entries(store.providers)) {
+    if (!state.enabled) continue;
+    const problem = providerResolutionProblem(id, state, isPackageSupported, listSupportedPackages());
+    if (problem) problems.push(problem);
+  }
+  return problems;
+}
+
 export function unservedRoutes(store: SettingsStore): string[] {
   const problems: string[] = [];
   for (const mode of Object.keys(store.modelRouting) as Array<keyof SettingsStore['modelRouting']>) {
@@ -236,6 +258,8 @@ export interface CatalogProviderSummary {
   id: string;
   name: string;
   npm: string;
+  /** Endpoint the catalog publishes, so the console can prefill a custom entry. */
+  api: string;
   modelCount: number;
   configured: boolean;
   enabled: boolean;
@@ -254,6 +278,8 @@ export interface OperatorSettings {
   server: { port: number; host: string };
   catalog: {
     providers: CatalogProviderSummary[];
+    /** Runtime packages this build can run, for the console's runtime picker. */
+    runtimePackages: string[];
     search: Array<{ id: string; name: string; needsZone: boolean; keyless: boolean }>;
   };
   readiness: ReturnType<typeof readiness>;
@@ -286,6 +312,7 @@ export function describeSettings(store: SettingsStore = loadSettings()): Operato
      the screen that caused it rather than only when a request fails. */
   const base = readiness(store);
   const unserved = unservedRoutes(store);
+  const unusable = unusableProviders(store);
   return {
     providers: Object.fromEntries(
       Object.entries(store.providers).map(([id, state]) => [id, publicProvider(state)]),
@@ -309,11 +336,13 @@ export function describeSettings(store: SettingsStore = loadSettings()): Operato
             id,
             name: provider?.name ?? id,
             npm: provider?.npm ?? '',
+            api: typeof provider?.api === 'string' ? provider.api : '',
             modelCount: Object.keys(provider?.models ?? {}).length,
             configured: configured.has(id),
             enabled: store.providers[id]?.enabled ?? false,
           };
         }),
+      runtimePackages: listSupportedPackages(),
       search: SEARCH_BACKEND_CHOICES.map((backend) => ({
         id: backend.id,
         name: backend.label,
@@ -322,8 +351,8 @@ export function describeSettings(store: SettingsStore = loadSettings()): Operato
       })),
     },
     readiness: {
-      ready: base.problems.length === 0 && unserved.length === 0,
-      problems: [...base.problems, ...unserved],
+      ready: base.problems.length === 0 && unserved.length === 0 && unusable.length === 0,
+      problems: [...base.problems, ...unserved, ...unusable],
       hints: base.hints,
     },
   };
