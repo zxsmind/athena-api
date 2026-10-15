@@ -117,6 +117,18 @@ export function AdminJobs() {
                 />
               </div>
 
+              {(detail.progress_notes?.length ?? 0) > 0 && (
+                <div className="flex flex-col gap-[8px]">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--gray-500)]">Run notes</p>
+                  {detail.progress_notes.map((note, i) => (
+                    <div key={`${note.at ?? i}-${i}`} className="border-l-2 border-[var(--border)] pl-[10px]">
+                      <p className="text-[12px] font-medium text-[var(--gray-700)]">{note.headline}</p>
+                      <p className="text-[12px] text-[var(--gray-600)] whitespace-pre-wrap">{note.body}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {detail.error && (
                 <p className="text-[12px] text-[var(--danger)] border border-[var(--danger)] rounded-[var(--radius-1)] px-[10px] py-[8px]">
                   {detail.error}

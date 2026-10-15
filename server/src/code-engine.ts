@@ -17,6 +17,7 @@ import { callLLMStream, stripThinkingTags, type LLMRole } from './llm.js';
 import { getCodeSystemPrompt } from './agent/code-prompt.js';
 import { responseLengthBlock } from './agent/prompts.js';
 import { RUN_CODE_TOOL, type EngineEvent, type ResearchRunOptions, type SourceWithIndex } from './engine/types.js';
+import { REPORT_PROGRESS_RESULT, REPORT_PROGRESS_TOOL, REPORT_PROGRESS_TOOL_NAME, progressNoteFrom } from './engine/progress.js';
 import { createSandboxHandlers } from './engine/sandbox-handlers.js';
 import { exportSandboxState, hydrateSandbox, runInSandbox } from './sandbox/manager.js';
 import { deleteResearchCheckpoint, loadResearchCheckpoint, saveResearchCheckpoint } from './engine/checkpoint.js';
@@ -261,13 +262,13 @@ export async function runCodeResearchStream(
       wrapUpWarned = true;
     }
 
-    const tools = forceAnswer ? undefined : [RUN_CODE_TOOL];
+    const tools = forceAnswer ? undefined : [RUN_CODE_TOOL, REPORT_PROGRESS_TOOL];
     if (traceId) {
       traceEvent(traceId, 'round.start', {
         engine: 'code',
         turn: totalTurns,
         force_answer: forceAnswer,
-        tools: tools ? ['run_code'] : [],
+        tools: tools ? ['run_code', REPORT_PROGRESS_TOOL_NAME] : [],
         budget: {
           used_steps: budget.usedSteps, used_tokens: budget.usedTokens,
           used_search: budget.usedSearchCalls, used_fetch: budget.usedFetchCalls,
@@ -369,14 +370,35 @@ export async function runCodeResearchStream(
       planRef: codePlanRef, declinedRef,
     });
 
+    let publishedProgress = false;
+    let ranProgram = false;
     for (const toolCall of normalizedToolCalls) {
       const callId = toolCall.id;
       if (declinedRef.reason) {
         messages.push({ role: 'tool', tool_call_id: callId, content: 'Request declined; program skipped.' });
         continue;
       }
+      /* The status note the user reads while the run works. It is a tool call in
+         both engines for the measured reason in engine/progress.ts: prose in
+         the model's own text was published on one turn in seventeen. It rides
+         the same response as run_code, so it costs no round, no tool call and
+         no credit — a note is not work. */
+      if (toolCall.function.name === REPORT_PROGRESS_TOOL_NAME) {
+        let noteArgs: unknown = null;
+        try { noteArgs = JSON.parse(toolCall.function.arguments) as unknown; } catch { noteArgs = null; }
+        const note = progressNoteFrom(noteArgs, round);
+        if (note) {
+          publishedProgress = true;
+          onEvent({ type: 'progress', data: note });
+          if (traceId) traceEvent(traceId, 'progress', { headline: note.headline, chars: note.body.length, call_id: callId }, round);
+        } else if (traceId) {
+          traceEvent(traceId, 'progress', { dropped: 'empty note', call_id: callId }, round);
+        }
+        messages.push({ role: 'tool', tool_call_id: callId, content: REPORT_PROGRESS_RESULT });
+        continue;
+      }
       if (toolCall.function.name !== 'run_code') {
-        messages.push({ role: 'tool', tool_call_id: callId, content: `Unknown tool ${toolCall.function.name}. run_code is the only available tool.` });
+        messages.push({ role: 'tool', tool_call_id: callId, content: `Unknown tool ${toolCall.function.name}. run_code and report_progress are the only available tools.` });
         continue;
       }
       let args: Record<string, unknown>;
@@ -399,6 +421,7 @@ export async function runCodeResearchStream(
       onEvent({ type: 'step', data: step });
       const startedCode = performance.now();
       const result = await runInSandbox(sandboxKey, handlers, code, options.signal);
+      ranProgram = true;
       step.duration_ms = Math.round(performance.now() - startedCode);
       /* Execution time is metered wall-clock per program (D6). A timed-out run
          still burned the interpreter until the kill. */
@@ -446,8 +469,14 @@ export async function runCodeResearchStream(
     }
 
     round++;
-    totalTurns++;
-    budget.usedSteps++;
+    /* A round whose only tool call was a status note did no research. It stays
+       out of the step and turn counters for the same reason the classic loop
+       keeps it out: a note is something the run shows the user, not work the
+       run did, and charging it would let narration eat the research budget. */
+    if (ranProgram || !publishedProgress) {
+      totalTurns++;
+      budget.usedSteps++;
+    }
     publishSources();
     publishProgress();
 

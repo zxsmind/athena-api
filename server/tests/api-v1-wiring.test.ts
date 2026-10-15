@@ -401,7 +401,12 @@ describe('public job payload', () => {
       used_search_calls: 4,
       used_fetch_calls: 5,
       used_turns: 7,
+      used_steps: 8,
       used_tokens: 100,
+      /* The one line every surface shows for this job. Counters with no limit
+         read as plain counts, because a count without its ceiling is still a
+         fact while a fraction of nothing is not. */
+      progress_message: 'round 3 · 4 searches · 5 page reads',
     });
     expect(JSON.stringify(progress)).not.toContain('tokenLedger');
     expect(JSON.stringify(progress)).not.toContain('startedAt');

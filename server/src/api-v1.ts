@@ -9,6 +9,7 @@ import { clientAddress, isLocalManagementRequest, isLoopbackRequest } from './ac
 import { adminAttemptLocked, isAdminKey, recordAdminFailure, recordAdminSuccess } from './admin-auth.js';
 import { ApiPlatformStore, publicApiKey, type KeyPlan } from './api-platform-store.js';
 import { Meter } from './application/meter.js';
+import { describeJobProgress, type ProgressCounters } from './job-progress.js';
 import { researchCharge, roundCredits } from './engine/metering.js';
 import { retentionWindows } from './application/retention.js';
 import {
@@ -40,8 +41,9 @@ import {
   RESEARCH_VERBOSITIES,
   RESPONSE_LENGTHS,
   responseLengthForMode,
-  resolveResearchPreset,
+resolveResearchPreset,
   reasoningEffortForMode,
+  type ResearchMode,
 } from './engine/modes.js';
 import { getCachedModelTokenPrice, getModelsDevSnapshot, listConfiguredModelsDevProviders, type ModelsDevModel } from './models-dev.js';
 
@@ -155,7 +157,7 @@ export function publicProgress(runtime: ResearchJobRecord['runtime']): unknown {
     }
     return null;
   };
-  const out: Record<string, number> = {};
+  const out: Record<string, number | string> = {};
   const put = (key: string, value: number | null): void => {
     if (value !== null) out[key] = key === 'used_cpu_seconds' ? Math.round(value / 100) / 10 : value;
   };
@@ -165,6 +167,8 @@ export function publicProgress(runtime: ResearchJobRecord['runtime']): unknown {
   put('used_fetch_calls', pick('used_fetch_calls', 'usedFetchCalls'));
   put('fetch_calls_limit', pick('fetch_calls_limit'));
   put('used_turns', pick('usedTurns'));
+  put('used_steps', pick('used_steps', 'usedSteps'));
+  put('step_limit', pick('step_limit'));
   put('used_tokens', pick('used_tokens', 'usedTokens'));
   put('token_limit', pick('token_limit'));
   put('elapsed_ms', pick('elapsed_ms'));
@@ -192,6 +196,10 @@ export function publicProgress(runtime: ResearchJobRecord['runtime']): unknown {
   const charge = researchCharge(getConfig().pricing, snapshot, reportedTokens, (providerId, modelId) => getCachedModelTokenPrice(providerId, modelId));
   const cost = charge.unpriced.length === 0 ? roundCredits(charge.total) : null;
   put('cost_usd', cost);
+  /* The one line every surface shows for this job: the REST snapshot and the
+     SSE consumer read it from here, and the MCP progress notifications
+     render the same text rather than wording a second one. */
+  out.progress_message = describeJobProgress(out as ProgressCounters).message;
   return out;
 }
 
@@ -205,6 +213,30 @@ export function publicResult(result: ResearchJobRecord['result']): unknown {
   };
 }
 
+/**
+ * The status notes the run published, oldest first.
+ *
+ * They are stored as events and were only ever delivered on the event stream,
+ * which meant the agent's own account of the run was invisible to anyone
+ * reading a job back afterwards: the admin job page and every MCP client saw
+ * counters and an answer but never a word of what happened in between. The
+ * notes are carried on the job itself so every surface reads the same ones.
+ */
+export function publicProgressNotes(job: ResearchJobRecord): Array<{ headline: string; body: string; at: string | null }> {
+  const notes: Array<{ headline: string; body: string; at: string | null }> = [];
+  for (const event of job.events ?? []) {
+    if (event.type !== 'progress_note') continue;
+    const data = (event as { data?: unknown }).data;
+    if (!data || typeof data !== 'object') continue;
+    const record = data as Record<string, unknown>;
+    const headline = typeof record.headline === 'string' ? record.headline : '';
+    const body = typeof record.body === 'string' ? record.body : '';
+    if (!headline && !body) continue;
+    notes.push({ headline, body, at: typeof event.timestamp === 'string' ? event.timestamp : null });
+  }
+  return notes;
+}
+
 export function publicJob(job: ResearchJobRecord) {
   return {
     job_id: job.id,
@@ -216,6 +248,7 @@ export function publicJob(job: ResearchJobRecord) {
     started_at: job.startedAt,
     finished_at: job.finishedAt,
     progress: publicProgress(job.runtime),
+    progress_notes: publicProgressNotes(job),
     result: publicResult(job.result),
     note: job.note,
     error: job.error,
@@ -492,6 +525,59 @@ export function createAthenaMcpServer(context: AthenaMcpDependencies): McpServer
       startResearchJob: context.startResearchJob,
     };
     const jobSchema = z.object({ job_id: z.string().trim().min(1).max(128) });
+
+    /**
+     * Waits for a job and reports it while it runs.
+     *
+     * A research job takes minutes, and an agent that gets only a job_id has
+     * nothing to report between the call and the answer: it either sits silent
+     * or polls a snapshot it cannot see changing. This is the same wait the
+     * REST snapshot and the SSE stream already provide, read through the one
+     * projection they share (`job-progress`), delivered as MCP progress
+     * notifications. A client that sent no progress token gets the same wait
+     * without the updates, which is what the spec asks for.
+     */
+    const waitForJob = async (
+      jobId: string,
+      ctx: { mcpReq: { signal: AbortSignal; _meta?: { progressToken?: unknown } | undefined; notify: (notification: { method: string; params?: Record<string, unknown> }) => Promise<void> } },
+      apiKeyId: string | null,
+      timeoutMs: number,
+    ): Promise<unknown> => {
+      const progressToken = ctx.mcpReq._meta?.progressToken;
+      const deadline = Date.now() + timeoutMs;
+      let reported = '';
+      for (;;) {
+        const job = getPublicApiResearchJob(jobId, apiKeyId);
+        if (!job) throw new ApiOperationError(404, 'NOT_FOUND', 'Research job was not found.');
+        const description = describeJobProgress((publicProgress(job.runtime) ?? {}) as ProgressCounters);
+        if (description.message !== reported) {
+          reported = description.message;
+          if (progressToken !== undefined) {
+            await ctx.mcpReq.notify({
+              method: 'notifications/progress',
+              params: {
+                progressToken,
+                ...(description.progress !== null ? { progress: description.progress } : {}),
+                ...(description.total !== null ? { total: description.total } : {}),
+                message: description.message,
+              },
+            });
+          }
+        }
+        if (['completed', 'failed', 'cancelled', 'paused', 'declined'].includes(job.status)) return publicJob(job);
+        if (ctx.mcpReq.signal.aborted) throw new Error('cancelled');
+        if (Date.now() >= deadline) throw new ApiOperationError(504, 'JOB_WAIT_TIMEOUT', `Job ${jobId} did not finish within the wait window.`, { job_id: jobId, status: job.status });
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, Math.max(50, deadline - Date.now()))));
+      }
+    };
+
+    /** A wait long enough for the mode's own promise, and no longer. */
+    const waitBudgetMs = (mode: string, requested: number | undefined): number => {
+      let ceiling = 30 * 60_000;
+      try { ceiling = resolveResearchPreset(RESEARCH_MODES.includes(mode as ResearchMode) ? (mode as ResearchMode) : 'default').maxWallClockMs + 30_000; } catch { /* unknown mode: default ceiling */ }
+      return Math.max(1_000, Math.min(requested ?? ceiling, ceiling));
+    };
+
     server.registerTool('athena_search', {
       description: 'Search the web with Athena and return ranked results with provider metadata.',
       inputSchema: SearchSchema,
@@ -508,15 +594,34 @@ export function createAthenaMcpServer(context: AthenaMcpDependencies): McpServer
       try { return mcpSuccess(await runContents(input, ctx.mcpReq.signal, context.usage, context.apiKeyId)); }
       catch (error: unknown) { return mcpFailure(error, 'CONTENTS_PROVIDER_ERROR'); }
     });
-    server.registerTool('athena_start_research', {
-      description: 'Start an Athena research job and return its job_id.',
-      inputSchema: ResearchSchema,
+server.registerTool('athena_start_research', {
+      description: 'Start an Athena research job and return its job_id. Set wait_for_result to follow the run to its answer.',
+      inputSchema: ResearchSchema.extend({
+        wait_for_result: z.boolean().default(false),
+        timeout_ms: z.number().int().min(1_000).max(24 * 3_600_000).optional(),
+      }),
       annotations: { openWorldHint: true },
-    }, async (input) => {
+    }, async (input, ctx) => {
       try {
         const { job, reasoningEffort } = startApiResearch(input, researchContext);
+        if (input.wait_for_result) {
+          return mcpSuccess(await waitForJob(job.id, ctx, context.apiKeyId, waitBudgetMs(job.mode, input.timeout_ms)));
+        }
         return mcpSuccess(researchAccepted(input, job, reasoningEffort));
       } catch (error: unknown) { return mcpFailure(error, 'JOB_CREATE_FAILED'); }
+    });
+    server.registerTool('athena_wait_job', {
+      description: 'Wait for a research job to finish, reporting live progress (round, searches, page reads, cost) while it runs.',
+      inputSchema: jobSchema.extend({
+        timeout_ms: z.number().int().min(1_000).max(24 * 3_600_000).optional(),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    }, async ({ job_id, timeout_ms }, ctx) => {
+      try {
+        const job = getPublicApiResearchJob(job_id, context.apiKeyId);
+        if (!job) return mcpFailure(new ApiOperationError(404, 'NOT_FOUND', 'Research job was not found.'), 'NOT_FOUND');
+        return mcpSuccess(await waitForJob(job_id, ctx, context.apiKeyId, waitBudgetMs(job.mode, timeout_ms)));
+      } catch (error: unknown) { return mcpFailure(error, 'JOB_WAIT_FAILED'); }
     });
     server.registerTool('athena_list_jobs', {
       description: 'List recent Athena research jobs available to this API key.',

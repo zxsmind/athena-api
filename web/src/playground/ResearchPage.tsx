@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   Activity,
@@ -51,6 +51,66 @@ const stepIcon = (type: string) => {
   if (type === 'answer') return Sparkles;
   return Activity;
 };
+
+/** One line in the event log, already reduced to something readable. */
+interface LogEntry {
+  key: number;
+  /** The event's own type, as the engine published it. */
+  type: string;
+  /** What happened, in one phrase. */
+  summary: string;
+  /** The rest of the line: a query, a note body, an error message. */
+  detail?: string;
+  /** A note from the agent is not a machine event and is styled as one. */
+  note?: boolean;
+}
+
+/**
+ * One event as one readable row.
+ *
+ * Every event the run publishes is listed, not only the tool calls: the notes
+ * the agent writes are the part a person watching actually wants, and they used
+ * to appear nowhere in this panel. Tokens are the exception — one row per
+ * streamed chunk would bury everything else, so they stay a counter.
+ */
+function describeEvent(type: string, payload: Record<string, unknown>): LogEntry | null {
+  const text = (value: unknown): string | undefined => (typeof value === 'string' && value.length > 0 ? value : undefined);
+  switch (type) {
+    case 'step': {
+      const step = payload as unknown as StepEvent;
+      const what = step.type === 'webpage' ? 'page read' : step.type === 'answer' ? 'answer' : step.type;
+      const bits: string[] = [];
+      if (step.result_count !== undefined) bits.push(`${step.result_count} results`);
+      if (step.duration_ms !== undefined) bits.push(`${step.duration_ms}ms`);
+      return {
+        key: 0,
+        type: what,
+        summary: [what, ...bits].join(' · '),
+        detail: step.note ?? step.query ?? step.model,
+      };
+    }
+    case 'progress_note': {
+      const note = payload as unknown as ProgressNote;
+      return { key: 0, type: 'note', summary: text(note.headline) ?? 'progress note', detail: text(note.body), note: true };
+    }
+    case 'sources': {
+      const sources = Array.isArray(payload) ? payload : [];
+      return { key: 0, type: 'sources', summary: `${sources.length} sources collected` };
+    }
+    case 'progress':
+      return { key: 0, type: 'progress', summary: 'budget updated' };
+    case 'status':
+      return { key: 0, type: 'status', summary: text(payload.status) ?? 'status' };
+    case 'done':
+      return { key: 0, type: 'done', summary: 'answer ready' };
+    case 'error':
+      return { key: 0, type: 'error', summary: text(payload.message) ?? 'error' };
+    case 'token':
+      return null;
+    default:
+      return { key: 0, type, summary: type };
+  }
+}
 
 function statusTone(status: JobStatus): 'neutral' | 'live' | 'ok' | 'warn' | 'danger' {
   if (status === 'running' || status === 'searching' || status === 'planning' || status === 'reviewing' || status === 'synthesizing') return 'live';
@@ -116,10 +176,25 @@ export function ResearchPage() {
   const [job, setJob] = useState<PublicJob | null>(null);
   const [steps, setSteps] = useState<StepEvent[]>([]);
   const [notes, setNotes] = useState<ProgressNote[]>([]);
+  /* One row per event, in the order they arrived, of every kind the run
+     publishes. The panel is called an event stream, so it shows the stream:
+     the notes the agent wrote, the sources it found, the budget it spent —
+     not one row per tool call with the rest of the run missing. */
+  const [log, setLog] = useState<LogEntry[]>([]);
   const [tokenCount, setTokenCount] = useState(0);
   const [streamError, setStreamError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+
+  /* One entry per event, in arrival order. A ref holds the counter so the
+     recorder never closes over a stale one. */
+  const logKey = useRef(0);
+  const record = useCallback((type: string, payload: Record<string, unknown>) => {
+    const entry = describeEvent(type, payload);
+    if (!entry) return;
+    entry.key = ++logKey.current;
+    setLog((current) => [...current, entry]);
+  }, []);
 
   /* Snapshot poll: gauges and terminal status even after the stream ends. */
   useEffect(() => {
@@ -154,15 +229,21 @@ export function ResearchPage() {
     void streamEvents(`/jobs/${jobId}/events`, {
       signal: controller.signal,
       onEvent: (event) => {
-        const data = event.data as Record<string, unknown>;
+        /* The stream sends the stored event, not the payload: every `data:`
+           frame is `{ type, data, timestamp }`. Reading the envelope as if it
+           were the payload is what made every row say "step" with nothing in
+           it, and the progress notes render as empty cards. */
+        const envelope = event.data as { data?: unknown } | null;
+        const payload = (envelope && typeof envelope === 'object' && 'data' in envelope ? envelope.data : envelope) as Record<string, unknown>;
+        record(event.event, payload);
         if (event.event === 'step') {
-          setSteps((current) => [...current, data as unknown as StepEvent]);
+          setSteps((current) => [...current, payload as unknown as StepEvent]);
         } else if (event.event === 'progress_note') {
-          setNotes((current) => [...current, data as unknown as ProgressNote]);
+          setNotes((current) => [...current, payload as unknown as ProgressNote]);
         } else if (event.event === 'token') {
           setTokenCount((current) => current + 1);
         } else if (event.event === 'error') {
-          setStreamError(typeof data.message === 'string' ? data.message : 'The stream reported an error.');
+          setStreamError(typeof payload.message === 'string' ? payload.message : 'The stream reported an error.');
         } else if (event.event === 'done') {
           void getJob(jobId).then(setJob).catch(() => undefined);
         }
@@ -181,6 +262,7 @@ export function ResearchPage() {
     setJob(null);
     setSteps([]);
     setNotes([]);
+    setLog([]);
     setTokenCount(0);
     try {
       const accepted = await startResearch({ query: query.trim(), mode, response_length: mode === 'instant' ? 'short' : length, verbosity });
@@ -401,35 +483,35 @@ export function ResearchPage() {
               <Card className="p-[14px] flex flex-col gap-[10px]">
                 <div className="flex items-center justify-between">
                   <h3 className="text-[13px] font-semibold tracking-tight">Event stream</h3>
-                  <span className="text-[11px] font-mono text-[var(--gray-500)]">{steps.length} steps · {tokenCount} chunks</span>
+                  <span className="text-[11px] font-mono text-[var(--gray-500)]">
+                    {log.length} events · {tokenCount} chunks
+                  </span>
                 </div>
                 <div className="flex flex-col max-h-[480px] overflow-y-auto">
                   <AnimatePresence initial={false}>
-                    {steps.length === 0 && (
+                    {log.length === 0 && (
                       <p className="text-[12px] text-[var(--gray-500)] py-[12px]">Waiting for the first engine event…</p>
                     )}
-                    {steps.map((step, index) => {
-                      const Icon = stepIcon(step.type);
+                    {log.map((entry) => {
+                      const Icon = entry.note ? Sparkles : stepIcon(entry.type);
                       return (
                         <motion.div
-                          key={index}
+                          key={entry.key}
                           layout
                           initial={{ opacity: 0, x: -8 }}
                           animate={{ opacity: 1, x: 0 }}
                           transition={{ duration: 0.18 }}
                           className="flex items-start gap-[8px] py-[8px] border-b border-[var(--border)] last:border-0"
                         >
-                          <Icon size={13} className="mt-[2px] shrink-0 text-[var(--gray-500)]" />
+                          <Icon
+                            size={13}
+                            className={`mt-[2px] shrink-0 ${entry.note ? 'text-[var(--live)]' : entry.type === 'error' ? 'text-[var(--danger)]' : 'text-[var(--gray-500)]'}`}
+                          />
                           <div className="min-w-0 flex-1">
-                            <p className="text-[12px] font-mono text-[var(--gray-600)]">
-                              {step.type}
-                              {step.duration_ms !== undefined && ` · ${step.duration_ms}ms`}
-                              {step.result_count !== undefined && ` · ${step.result_count} results`}
-                            </p>
-                            {(step.note || step.query) && (
-                              <p className="text-[12px] text-[var(--gray-700)] truncate">{step.note ?? step.query}</p>
+                            <p className="text-[12px] font-mono text-[var(--gray-600)]">{entry.summary}</p>
+                            {entry.detail && (
+                              <p className={`text-[12px] text-[var(--gray-700)] ${entry.note ? '' : 'truncate'}`}>{entry.detail}</p>
                             )}
-                            {step.model && <p className="text-[11px] font-mono text-[var(--gray-500)] truncate">{step.model}</p>}
                           </div>
                         </motion.div>
                       );
@@ -442,7 +524,7 @@ export function ResearchPage() {
                 <div className="flex items-center gap-[8px] text-[var(--gray-600)]">
                   <Hourglass size={13} />
                   <span>
-                    {lastStep ? 'Streaming live' : 'Connecting'} · {sourceCount} provider calls
+                    {lastStep ? 'Streaming live' : 'Connecting'} · {sourceCount} provider calls · {notes.length} notes
                   </span>
                 </div>
                 <p className="text-[var(--gray-500)]">

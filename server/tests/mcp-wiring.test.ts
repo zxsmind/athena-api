@@ -89,7 +89,7 @@ async function listTools(harness: Harness) {
 }
 
 describe('MCP over Streamable HTTP', () => {
-  it('advertises exactly the eight Athena tools over tools/list', async () => {
+  it('advertises exactly the nine Athena tools over tools/list', async () => {
     /* Renaming or dropping a tool silently breaks every configured client, so
        the catalog itself is pinned rather than left to individual assertions. */
     const h = await startHarness();
@@ -99,6 +99,7 @@ describe('MCP over Streamable HTTP', () => {
         'athena_search',
         'athena_read_contents',
         'athena_start_research',
+        'athena_wait_job',
         'athena_list_jobs',
         'athena_get_job',
         'athena_cancel_job',

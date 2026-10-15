@@ -507,11 +507,21 @@ describe('code engine prompt', () => {
   it('names run_code and never a classic tool, because the engines do not share a prompt', () => {
     /* Two engines, two prompts. The classic body speaks web_search/fetch_url;
        this one speaks programs. A hybrid prompt is how the two architectures
-       fight inside one loop. */
+       fight inside one loop. `report_progress` is deliberately not on the
+       banned list any more: it used to be a classic-only tool, so naming it
+       here would have sent the model after a call this engine does not offer.
+       It is now registered in both engines, so it is shared vocabulary rather
+       than a hybrid one, and a prompt that never mentions it produces zero
+       notes (see engine/progress.ts). */
     expect(codeBody).toContain(RUN_CODE_TOOL_NAME);
     expect(RUN_CODE_TOOL.function.name).toBe(RUN_CODE_TOOL_NAME);
-    expect(codeBody).not.toMatch(/web_search|fetch_url|recall_source|report_progress|read_budget/);
+    expect(codeBody).not.toMatch(/web_search|fetch_url|recall_source|read_budget/);
     expect(body).not.toContain('run_code');
+  });
+
+  it('names report_progress, because a tool the prompt never mentions is never called', () => {
+    expect(codeBody).toContain('report_progress');
+    expect(REPORT_PROGRESS_TOOL.function.name).toBe('report_progress');
   });
 
   it('states the print budget and bans paging a page through slices', () => {
@@ -531,7 +541,7 @@ describe('code engine prompt', () => {
     expect(codeBody).toMatch(/await plan_update\(/);
     expect(codeBody).toMatch(/await budget\(\)/);
     expect(codeBody).toMatch(/await decline\(/);
-    expect(codeBody).not.toMatch(/web_search|fetch_url|recall_source|report_progress|read_budget|create_plan|edit_plan|read_plan|decline_request/);
+    expect(codeBody).not.toMatch(/web_search|fetch_url|recall_source|read_budget|create_plan|edit_plan|read_plan|decline_request/);
   });
 
   it('keeps raw page text in the sandbox and names read_source and state', () => {

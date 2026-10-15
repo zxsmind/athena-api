@@ -97,7 +97,7 @@ describe('run_code in the engine', () => {
     const system = systemAtCall[0];
     expect(system).toContain(modeBehaviorBlock(resolveResearchPreset(mode), 'extract'));
     expect(system).toContain(`Research mode: ${mode.toUpperCase()}`);
-    expect(system).not.toMatch(/web_search|fetch_url|read_plan|report_progress|read_budget/);
+    expect(system).not.toMatch(/web_search|fetch_url|read_plan|read_budget/);
   });
 
   it('counts research tool calls within a response without charging plan or progress calls', async () => {
@@ -193,7 +193,7 @@ describe('run_code in the engine', () => {
 
     await agenticResearchStream('question', undefined, (event) => events.push(event), 'default', { jobId, preset });
 
-    expect(llmCalls[0].tools?.map((tool) => tool.function?.name)).toEqual(['run_code']);
+    expect(llmCalls[0].tools?.map((tool) => tool.function?.name)).toEqual(['run_code', 'report_progress']);
     const toolMessages = (llmCalls[1].messages ?? []).filter((message) => message.role === 'tool');
     expect(toolMessages.length).toBe(1);
     expect(toolMessages[0].content).toContain('https://example.com');
@@ -203,6 +203,33 @@ describe('run_code in the engine', () => {
     const done = events.find((event) => event.type === 'done') as { response?: { answer?: string } } | undefined;
     expect(done?.response?.answer).toBe('Answer [1]');
     expect(closed).toBe(true);
+  });
+
+  it('publishes a status note without spending a step on it', async () => {
+    /* The failure this pins: report_progress existed only in the classic loop,
+       so the engine that actually runs (code) could never publish one, and a
+       run looked like a hang from the outside. The note has to reach the caller
+       as an event, and a round whose only call was a note must not be charged
+       as work — otherwise narration eats the research budget. */
+    const preset = { ...resolveResearchPreset('default'), minFetchCalls: 0, minSearchCalls: 0 };
+    script = [
+      { tool_calls: [{ id: 'note_1', function: { name: 'report_progress', arguments: JSON.stringify({ headline: 'Comparing rate paths', body: 'Two central-bank projections disagree on the peak.' }) } }] },
+      { tool_calls: [{ id: 'code_1', function: { name: 'run_code', arguments: JSON.stringify({ code: 'program', label: 'probe' }) } }] },
+      { content: 'Answer [1]' },
+    ];
+    const events: EngineEvent[] = [];
+
+    await agenticResearchStream('question', undefined, (event) => events.push(event), 'default', { jobId, preset });
+
+    const note = events.find((event) => event.type === 'progress') as { data?: { headline?: string; body?: string } } | undefined;
+    expect(note?.data?.headline).toBe('Comparing rate paths');
+    expect(note?.data?.body).toContain('disagree');
+    /* The note is acknowledged as a tool result so the conversation stays valid. */
+    const noteReply = (llmCalls[1].messages ?? []).find((message) => message.tool_call_id === 'note_1');
+    expect(noteReply?.content).toBe('ok');
+    /* Two rounds did work: the program round. The note round was free. */
+    const done = events.find((event) => event.type === 'done') as { response?: { research_budget?: { used_steps?: number } } } | undefined;
+    expect(done?.response?.research_budget?.used_steps).toBe(1);
   });
 
   it('publishes budget progress so the runner can bill code runs', async () => {
@@ -356,7 +383,7 @@ describe('run_code in the engine', () => {
   it('selects the code engine when enabled and the classic engine when disabled', async () => {
     script = [{ content: 'no tools needed' }];
     await agenticResearchStream('question', undefined, () => undefined, 'default', { jobId });
-    expect(llmCalls[0].tools?.map((tool) => tool.function?.name)).toEqual(['run_code']);
+    expect(llmCalls[0].tools?.map((tool) => tool.function?.name)).toEqual(['run_code', 'report_progress']);
     expect(llmCalls[0].messages[0].content).toContain('Working in the sandbox');
     expect(llmCalls[0].messages[0].content).not.toContain('web_search');
 
