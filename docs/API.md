@@ -80,6 +80,8 @@ The MCP tool catalog maps to Athena's existing API operations:
 - `athena_read_contents` — same inputs and results as `POST /contents`.
 - `athena_start_research` — same asynchronous start response as `POST /research`,
   including the existing `job_id`.
+- `athena_wait_job` — waits for a job to finish and returns the completed job,
+  reporting progress while it runs.
 - `athena_list_jobs`, `athena_get_job`, `athena_cancel_job`,
   `athena_pause_job`, and `athena_resume_job` — the corresponding job operations.
 
@@ -227,7 +229,9 @@ the source number the answer should cite it as.
 ### `POST /research`
 
 Starts an agentic research run. Returns immediately with a job id; the work
-happens in the background.
+happens in the background. Every job is stateless: it sees only the `query` it
+was started with — earlier jobs, their results and any chat history are not
+visible to it, so the query must carry any context the run needs.
 
 **Request.** Only `query` is required.
 

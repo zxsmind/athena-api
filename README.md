@@ -153,6 +153,7 @@ argument `mcp`.
 | `athena_search` | `POST /v1/search` |
 | `athena_read_contents` | `POST /v1/contents` |
 | `athena_start_research` | `POST /v1/research` |
+| `athena_wait_job` | `GET /v1/jobs/:id` — follows the job until it finishes |
 | `athena_list_jobs` | `GET /v1/jobs` |
 | `athena_get_job` | `GET /v1/jobs/:id` |
 | `athena_cancel_job` | `POST /v1/jobs/:id/cancel` |
@@ -161,7 +162,11 @@ argument `mcp`.
 
 Tool results carry the API response as JSON text. Failures are tool errors
 carrying the same `code`, `message`, `details` and `retryable` fields. An API key
-can list and operate only on jobs it created.
+can list and operate only on jobs it created. A research start that is not told
+to wait returns a `next` hint pointing at `athena_wait_job`, and the server's
+`instructions` tell the client model which tool to reach for and when. Research
+jobs are stateless: each one sees only the query it was started with, never
+earlier searches, jobs or conversation, so context must travel in the query.
 
 The `mcpAllowedHosts` list (`server` block in `config.yaml`) gates the Host and
 Origin headers, because DNS rebinding is the realistic attack against a local

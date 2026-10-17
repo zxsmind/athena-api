@@ -48,30 +48,43 @@ resolveResearchPreset,
 import { getCachedModelTokenPrice, getModelsDevSnapshot, listConfiguredModelsDevProviders, type ModelsDevModel } from './models-dev.js';
 
 const SearchSchema = z.object({
-  query: z.string().trim().min(1).max(2000),
-  type: z.enum(['search', 'news', 'images', 'videos', 'places', 'shopping', 'scholar', 'patents']).default('search'),
+  query: z.string().trim().min(1).max(2000)
+    .describe('What to search for. Natural language or keywords both work.'),
+  type: z.enum(['search', 'news', 'images', 'videos', 'places', 'shopping', 'scholar', 'patents']).default('search')
+    .describe('What kind of results you need: web pages, news, images, videos, places, shopping offers, scholarly papers or patents.'),
   /* Optional on purpose: an absent count is not the API's default but the
      operator's (`general.maxSources`), resolved once in the search registry. */
-  count: z.number().int().min(1).max(20).optional(),
-  country: z.string().trim().regex(/^[a-z]{2}$/i).optional(),
-  language: z.string().trim().regex(/^[a-z]{2,3}$/i).optional(),
-  time_range: z.enum(['day', 'week', 'month', 'year']).nullable().default(null),
-  depth: z.enum(['links', 'passages', 'full']).default('passages'),
-  include_domains: z.array(z.string().trim().min(1).max(253)).max(30).default([]),
-  exclude_domains: z.array(z.string().trim().min(1).max(253)).max(30).default([]),
+  count: z.number().int().min(1).max(20).optional()
+    .describe("How many results you want. Omit it to use the operator's configured default."),
+  country: z.string().trim().regex(/^[a-z]{2}$/i).optional()
+    .describe('Two-letter country code to bias results, e.g. "us" or "tr".'),
+  language: z.string().trim().regex(/^[a-z]{2,3}$/i).optional()
+    .describe('Language of the results, as a two- or three-letter code, e.g. "en" or "deu".'),
+  time_range: z.enum(['day', 'week', 'month', 'year']).nullable().default(null)
+    .describe('Only return results from the last day, week, month or year. Null leaves results unrestricted in time.'),
+  depth: z.enum(['links', 'passages', 'full']).default('passages')
+    .describe('How much of each result to return: "links" for URLs only, "passages" for URL and snippet, "full" to also fetch the page text (top 10 results).'),
+  include_domains: z.array(z.string().trim().min(1).max(253)).max(30).default([])
+    .describe('Restrict results to these domains.'),
+  exclude_domains: z.array(z.string().trim().min(1).max(253)).max(30).default([])
+    .describe('Drop results from these domains.'),
 });
 
 const ContentsSchema = z.object({
-  urls: z.array(z.string().trim().min(1).max(2048)).min(1).max(20),
+  urls: z.array(z.string().trim().min(1).max(2048)).min(1).max(20)
+    .describe('Page URLs to read. One call reads up to 20 pages and returns the readable main text of each.'),
 });
 
 const ResearchSchema = z.object({
-  query: z.string().trim().min(1).max(8000),
+  query: z.string().trim().min(1).max(8000)
+    .describe('The question to research. Open-ended questions with context work best; one investigation per job. This is all the run sees: earlier searches, jobs and the conversation are not visible to it, so state any context it needs here.'),
   mode: z.enum(RESEARCH_MODES).default(DEFAULT_RESEARCH_MODE),
   /** How long the answer should be. Independent of verbosity below. */
-  response_length: z.enum(RESPONSE_LENGTHS).default(DEFAULT_RESPONSE_LENGTH),
+  response_length: z.enum(RESPONSE_LENGTHS).default(DEFAULT_RESPONSE_LENGTH)
+    .describe("How much of the gathered evidence the written answer covers: 'short', 'long' or 'exhaustive'. instant runs always answer short."),
   /** What the caller sees while the job runs. Does not change the answer. */
-  verbosity: z.enum(RESEARCH_VERBOSITIES).default(DEFAULT_RESEARCH_VERBOSITY),
+  verbosity: z.enum(RESEARCH_VERBOSITIES).default(DEFAULT_RESEARCH_VERBOSITY)
+    .describe("What progress the run publishes while it works: 'summary' headlines, or 'detailed' with the reasoning behind them. Does not change the answer."),
 });
 
 const CreateKeySchema = z.object({
@@ -517,14 +530,28 @@ function serverVersion(): string {
 }
 
 export function createAthenaMcpServer(context: AthenaMcpDependencies): McpServer {
-    const server = new McpServer({ name: 'athena', version: serverVersion() });
+    const modeBudget = (mode: ResearchMode): string => {
+      const minutes = Math.round(resolveResearchPreset(mode).maxWallClockMs / 60_000);
+      return minutes >= 120 && minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`;
+    };
+    const modeBudgets = RESEARCH_MODES.map((mode) => `'${mode}' up to ${modeBudget(mode)}`).join(', ');
+    const startResearchSchema = ResearchSchema.extend({
+      mode: ResearchSchema.shape.mode.describe(`Research budget: ${modeBudgets}; a larger budget searches more, takes longer and costs more.`),
+      wait_for_result: z.boolean().default(false)
+        .describe('true waits for the run to finish and returns the final cited answer in this call; false returns a job_id immediately for you to follow with athena_wait_job.'),
+      timeout_ms: z.number().int().min(1_000).max(24 * 3_600_000).optional()
+        .describe("Upper bound on the wait when wait_for_result is true. Defaults to the mode's own wall-clock limit."),
+    });
+    const server = new McpServer({ name: 'athena', version: serverVersion() }, {
+      instructions: 'Athena researches questions on the live web and answers with inline citations. Use athena_search when you need ranked web results fast, athena_read_contents when you need the readable text of pages, and athena_start_research when you need a synthesized, sourced answer built from several pages. Research runs as a background job: set wait_for_result on athena_start_research to get the answer in the same call, or follow the returned job_id with athena_wait_job, which reports live progress and returns the cited answer when the run finishes. Each research job is stateless: it sees only the query you pass, not earlier searches, jobs or this conversation, so put any context it needs into the query. Jobs can be read back with athena_get_job and paused, resumed or cancelled at any time.',
+    });
     const researchContext: ResearchContext = {
       usage: context.usage,
       apiKeyId: context.apiKeyId,
       keyPlan: context.keyPlan,
       startResearchJob: context.startResearchJob,
     };
-    const jobSchema = z.object({ job_id: z.string().trim().min(1).max(128) });
+    const jobSchema = z.object({ job_id: z.string().trim().min(1).max(128).describe('Job id returned by athena_start_research.') });
 
     /**
      * Waits for a job and reports it while it runs.
@@ -579,7 +606,8 @@ export function createAthenaMcpServer(context: AthenaMcpDependencies): McpServer
     };
 
     server.registerTool('athena_search', {
-      description: 'Search the web with Athena and return ranked results with provider metadata.',
+      title: 'Search the web',
+      description: 'Search the web and return ranked results with title, URL, snippet, date and domain, from the configured providers. Use it when you need current web results fast, to pick sources to read, or to check a fact; use athena_start_research instead when the question needs a synthesized, sourced answer.',
       inputSchema: SearchSchema,
       annotations: { readOnlyHint: true, openWorldHint: true },
     }, async (input, ctx) => {
@@ -587,7 +615,8 @@ export function createAthenaMcpServer(context: AthenaMcpDependencies): McpServer
       catch (error: unknown) { return mcpFailure(error, 'SEARCH_PROVIDER_ERROR'); }
     });
     server.registerTool('athena_read_contents', {
-      description: 'Read and extract the main text from one or more web pages.',
+      title: 'Read web pages',
+      description: 'Fetch pages and return the readable main text of each, stripped of navigation and boilerplate. One call reads up to 20 URLs; use it on the sources athena_search returned, or on URLs you already have, when a snippet is not enough.',
       inputSchema: ContentsSchema,
       annotations: { readOnlyHint: true, openWorldHint: true },
     }, async (input, ctx) => {
@@ -595,11 +624,9 @@ export function createAthenaMcpServer(context: AthenaMcpDependencies): McpServer
       catch (error: unknown) { return mcpFailure(error, 'CONTENTS_PROVIDER_ERROR'); }
     });
 server.registerTool('athena_start_research', {
-      description: 'Start an Athena research job and return its job_id. Set wait_for_result to follow the run to its answer.',
-      inputSchema: ResearchSchema.extend({
-        wait_for_result: z.boolean().default(false),
-        timeout_ms: z.number().int().min(1_000).max(24 * 3_600_000).optional(),
-      }),
+      title: 'Start deep research',
+      description: 'Run a multi-step research job: it searches, reads and cross-checks sources, then writes an answer with inline citations and its source list. Use it when you need a researched, sourced answer rather than a quick lookup. Every run starts fresh from your query: earlier searches, jobs and the conversation are not visible to it. Returns the final cited answer when wait_for_result is true; otherwise returns a job_id to follow with athena_wait_job.',
+      inputSchema: startResearchSchema,
       annotations: { openWorldHint: true },
     }, async (input, ctx) => {
       try {
@@ -607,13 +634,18 @@ server.registerTool('athena_start_research', {
         if (input.wait_for_result) {
           return mcpSuccess(await waitForJob(job.id, ctx, context.apiKeyId, waitBudgetMs(job.mode, input.timeout_ms)));
         }
-        return mcpSuccess(researchAccepted(input, job, reasoningEffort));
+        return mcpSuccess({
+          ...researchAccepted(input, job, reasoningEffort),
+          next: 'Call athena_wait_job with this job_id to follow the run and get the final cited answer.',
+        });
       } catch (error: unknown) { return mcpFailure(error, 'JOB_CREATE_FAILED'); }
     });
     server.registerTool('athena_wait_job', {
-      description: 'Wait for a research job to finish, reporting live progress (round, searches, page reads, cost) while it runs.',
+      title: 'Wait for a research job',
+      description: 'Follow a research job to completion, reporting live progress (round, searches, page reads, cost) while it runs. Returns the finished job with result.answer and result.sources. Use it after athena_start_research when it returned a job_id instead of the answer.',
       inputSchema: jobSchema.extend({
-        timeout_ms: z.number().int().min(1_000).max(24 * 3_600_000).optional(),
+        timeout_ms: z.number().int().min(1_000).max(24 * 3_600_000).optional()
+          .describe("Upper bound on how long to wait. Defaults to the mode's own wall-clock limit."),
       }),
       annotations: { readOnlyHint: true, openWorldHint: true },
     }, async ({ job_id, timeout_ms }, ctx) => {
@@ -624,12 +656,14 @@ server.registerTool('athena_start_research', {
       } catch (error: unknown) { return mcpFailure(error, 'JOB_WAIT_FAILED'); }
     });
     server.registerTool('athena_list_jobs', {
-      description: 'List recent Athena research jobs available to this API key.',
-      inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(20) }),
+      title: 'List research jobs',
+      description: 'List the research jobs this key started, newest first. Use it to recover a job_id you no longer have.',
+      inputSchema: z.object({ limit: z.number().int().min(1).max(100).default(20).describe('Maximum number of jobs to return.') }),
       annotations: { readOnlyHint: true },
     }, async ({ limit }) => mcpSuccess({ jobs: listApiResearchJobs(limit, context.apiKeyId) }));
     server.registerTool('athena_get_job', {
-      description: 'Get the status, progress, or result of an Athena research job.',
+      title: 'Get a research job',
+      description: 'Read one research job by id: status, live progress, progress notes from the run, and the answer and sources once it finishes.',
       inputSchema: jobSchema,
       annotations: { readOnlyHint: true },
     }, async ({ job_id }) => {
@@ -637,7 +671,8 @@ server.registerTool('athena_start_research', {
       catch (error: unknown) { return mcpFailure(error, 'NOT_FOUND'); }
     });
     server.registerTool('athena_cancel_job', {
-      description: 'Cancel an active Athena research job.',
+      title: 'Cancel a research job',
+      description: 'Cancel a running research job so it stops searching and reports cancelled.',
       inputSchema: jobSchema,
       annotations: { destructiveHint: true },
     }, async ({ job_id }) => {
@@ -645,7 +680,8 @@ server.registerTool('athena_start_research', {
       catch (error: unknown) { return mcpFailure(error, 'NOT_FOUND'); }
     });
     server.registerTool('athena_pause_job', {
-      description: 'Pause a running Athena research job.',
+      title: 'Pause a research job',
+      description: 'Pause a running research job. Its evidence and checkpoint are kept so it can be resumed later with athena_resume_job.',
       inputSchema: jobSchema,
       /* Neither destructive nor read-only: the job keeps its evidence and can be
          resumed, but it does change job state. A client filtering on hints needs
@@ -656,7 +692,8 @@ server.registerTool('athena_start_research', {
       catch (error: unknown) { return mcpFailure(error, 'JOB_NOT_PAUSABLE'); }
     });
     server.registerTool('athena_resume_job', {
-      description: 'Resume a paused Athena research job.',
+      title: 'Resume a research job',
+      description: 'Resume a paused research job from its checkpoint so it continues where it stopped.',
       inputSchema: jobSchema,
       annotations: { openWorldHint: true },
     }, async ({ job_id }) => {

@@ -4,6 +4,8 @@ import { createApiV1Router } from '../src/api-v1.js';
 import { ApiPlatformStore } from '../src/api-platform-store.js';
 import { Meter } from '../src/application/meter.js';
 import { createResearchJob } from '../src/research-jobs.js';
+import { loadSettings, resetSettingsCache, saveSettings } from '../src/settings-store.js';
+import { resetSearchProviders } from '../src/search/index.js';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 
@@ -70,9 +72,22 @@ async function mcpCall(
   const body = parsed?.result?.content?.[0]?.text ? JSON.parse(parsed.result.content[0].text) as Record<string, never> : null;
   return {
     status: res.status,
-    payload: body as { job_id?: string; error?: { code: string; retryable: boolean } } | null,
+    payload: body as { job_id?: string; next?: string; error?: { code: string; retryable: boolean } } | null,
     isError: parsed?.result?.isError === true,
   };
+}
+
+/** A JSON-RPC call whose result the test reads whole, used for handshake
+ *  fields (like `instructions`) that are not tool content. */
+async function mcpResult(harness: Harness, method: string, params?: unknown) {
+  const res = await fetch(`${harness.url}/mcp`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: Math.floor(Math.random() * 1e9), method, ...(params === undefined ? {} : { params }) }),
+  });
+  const text = await res.text();
+  const frame = text.split('\n').find((line) => line.startsWith('data: '));
+  return (JSON.parse(frame!.slice(6)) as { result: Record<string, unknown> }).result;
 }
 
 /** The tool catalog as a client sees it after a tools/list round trip. */
@@ -84,7 +99,16 @@ async function listTools(harness: Harness) {
   });
   const text = await res.text();
   const frame = text.split('\n').find((line) => line.startsWith('data: '));
-  const parsed = JSON.parse(frame!.slice(6)) as { result: { tools: Array<{ name: string; annotations?: Record<string, boolean> }> } };
+  const parsed = JSON.parse(frame!.slice(6)) as {
+    result: {
+      tools: Array<{
+        name: string;
+        description?: string;
+        inputSchema?: { properties?: Record<string, { description?: string }> };
+        annotations?: Record<string, boolean>;
+      }>;
+    };
+  };
   return parsed.result.tools;
 }
 
@@ -184,6 +208,72 @@ describe('MCP over Streamable HTTP', () => {
       expect(res.payload?.error?.retryable).toBe(false);
     } finally {
       await h.close();
+    }
+  });
+
+  it('hands every client instructions for choosing the right tool', async () => {
+    /* Instructions ride on the initialize result and land in the model's
+       context; without them a client sees nine names and no guidance. */
+    const h = await startHarness();
+    try {
+      const result = await mcpResult(h, 'initialize', {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'mcp-integration', version: '0' },
+      });
+      const instructions = result.instructions;
+      expect(typeof instructions).toBe('string');
+      expect(instructions as string).toContain('athena_start_research');
+      expect(instructions as string).toContain('athena_wait_job');
+      /* Jobs carry no history, so the model has to be told to put context in
+         the query rather than assume earlier calls are visible. */
+      expect(instructions as string).toContain('stateless');
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('describes every tool and every parameter it accepts', async () => {
+    /* A model picks tools from these strings alone: a tool or a parameter that
+       reaches the client without a description is invisible in practice. */
+    const h = await startHarness();
+    try {
+      const tools = await listTools(h);
+      for (const tool of tools) {
+        expect(tool.description?.trim(), tool.name).toBeTruthy();
+        for (const [name, property] of Object.entries(tool.inputSchema?.properties ?? {})) {
+          expect(property.description?.trim(), `${tool.name}.${name}`).toBeTruthy();
+        }
+      }
+    } finally {
+      await h.close();
+    }
+  });
+
+  it('points a non-waiting research start at athena_wait_job', async () => {
+    /* Configures the keyless Freeserp backend for the length of the test, then
+       restores the settings, so the SEARCH_NOT_CONFIGURED case above keeps its
+       meaning wherever this test runs. */
+    const settings = loadSettings();
+    const providers = settings.searchProviders;
+    const order = settings.searchProviderOrder;
+    settings.searchProviders = { freeserp: { keys: [], keyless: true } };
+    settings.searchProviderOrder = [];
+    saveSettings(settings);
+    resetSettingsCache();
+    resetSearchProviders();
+    const h = await startHarness();
+    try {
+      const res = await mcpCall(h, 'tools/call', { name: 'athena_start_research', arguments: { query: 'q', mode: 'instant' } });
+      expect(res.isError).toBe(false);
+      expect(res.payload?.next).toContain('athena_wait_job');
+    } finally {
+      await h.close();
+      settings.searchProviders = providers;
+      settings.searchProviderOrder = order;
+      saveSettings(settings);
+      resetSettingsCache();
+      resetSearchProviders();
     }
   });
 });
